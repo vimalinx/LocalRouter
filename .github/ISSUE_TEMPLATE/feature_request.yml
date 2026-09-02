@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose a gateway, Pack, Agent or operator improvement
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What real workflow is blocked?
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      options:
+        - Native model relay
+        - Protocol Pack
+        - Credential pool or quota
+        - Workflow or transport
+        - Agent discovery or documentation
+        - Web console
+        - Packaging or installation
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Proposed public contract
+      description: Describe paths, operation IDs, inputs, outputs and ownership without secrets.

@@ -1,0 +1,56 @@
+version: 2
+
+project_name: localrouter
+
+before:
+  hooks:
+    - bun install --cwd gateway/web-src --frozen-lockfile
+    - bun run --cwd gateway/web-src typecheck
+    - bun run --cwd gateway/web-src test
+    - bun run --cwd gateway/web-src build
+
+builds:
+  - id: localrouter
+    dir: gateway
+    main: .
+    binary: localrouter
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.buildVersion={{.Version}}
+      - -X main.buildCommit={{.Commit}}
+      - -X main.buildDate={{.Date}}
+archives:
+  - id: localrouter
+    formats:
+      - tar.gz
+    wrap_in_directory: true
+    files:
+      - README.md
+      - CHANGELOG.md
+      - LICENSE
+      - NOTICE
+      - PROVENANCE.md
+      - SECURITY.md
+      - VERSION
+      - packaging/localrouter.env.example
+      - packaging/**/*
+      - tools/lr
+      - tools/protocol-pack-lifecycle.sh
+      - tools/install-localrouter.sh
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'

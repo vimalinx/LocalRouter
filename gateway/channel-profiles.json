@@ -1,0 +1,80 @@
+{
+  "schema_version": "1",
+  "profiles": [
+    {
+      "id": 1,
+      "key": "openai-compatible",
+      "name": "OpenAI compatible",
+      "base_url": "https://openai-compatible.example.invalid",
+      "request_paths": {
+        "default": true
+      },
+      "auth": {
+        "type": "header",
+        "header": "Authorization",
+        "prefix": "Bearer "
+      },
+      "model_catalog": {
+        "path": "/v1/models",
+        "arrays": [
+          {
+            "path": "data",
+            "id_field": "id"
+          }
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "key": "anthropic-messages",
+      "name": "Anthropic Messages",
+      "base_url": "https://messages-compatible.example.invalid",
+      "request_paths": {
+        "exact": [
+          "/v1/messages"
+        ]
+      },
+      "auth": {
+        "type": "header",
+        "header": "x-api-key",
+        "default_headers": {
+          "anthropic-version": "2023-06-01"
+        }
+      },
+      "model_catalog": {
+        "path": "/v1/models",
+        "arrays": [
+          {
+            "path": "data",
+            "id_field": "id"
+          }
+        ]
+      }
+    },
+    {
+      "id": 24,
+      "key": "gemini-native",
+      "name": "Google Gemini",
+      "base_url": "https://generative-language.example.invalid",
+      "request_paths": {
+        "prefixes": [
+          "/v1beta/"
+        ]
+      },
+      "auth": {
+        "type": "header",
+        "header": "x-goog-api-key"
+      },
+      "model_catalog": {
+        "path": "/v1beta/models",
+        "arrays": [
+          {
+            "path": "models",
+            "id_field": "name",
+            "trim_prefix": "models/"
+          }
+        ]
+      }
+    }
+  ]
+}

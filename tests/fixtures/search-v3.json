@@ -1,0 +1,95 @@
+{
+  "schema_version": "3",
+  "id": "search",
+  "name": "Fixture Search Service",
+  "description": "Fictional Pack used only to verify REST, SSE, model discovery, semantic operations, and credential-pool behavior.",
+  "enabled": true,
+  "base_url": "http://127.0.0.1:1",
+  "timeout_seconds": 30,
+  "auth": {
+    "type": "bearer"
+  },
+  "pool": {
+    "mode": "local",
+    "credentials_file": "protocol-pools/search.json",
+    "strategy": "least-inflight",
+    "max_attempts": 2,
+    "max_inflight_per_credential": 2,
+    "rate_limit_cooldown_seconds": 1
+  },
+  "routes": [
+    {
+      "operation_id": "search",
+      "capabilities": ["web.search"],
+      "methods": ["POST"],
+      "path": "/search",
+      "summary": "Search the fictional fixture catalogue",
+      "request_example": {
+        "query": "fixture query",
+        "count": 5
+      },
+      "retry": {
+        "mode": "always",
+        "statuses": [401, 429],
+        "transport_errors": false
+      },
+      "availability": {
+        "status": "verified",
+        "level": "mock",
+        "covers": ["schema", "auth", "upstream", "response"],
+        "reason": "The isolated fixture is exercised by protocol_e2e.sh.",
+        "verified_at": "2026-09-02T00:00:00Z"
+      }
+    },
+    {
+      "operation_id": "answer",
+      "capabilities": ["web.answer"],
+      "methods": ["POST"],
+      "path": "/answer",
+      "summary": "Stream an answer from the fictional fixture",
+      "request_example": {
+        "query": "fixture question",
+        "stream": true
+      },
+      "streaming": true,
+      "retry": {
+        "mode": "always",
+        "statuses": [401, 429],
+        "transport_errors": false
+      }
+    },
+    {
+      "operation_id": "chat.completions",
+      "capabilities": ["ai.chat", "openai.chat"],
+      "methods": ["POST"],
+      "path": "/chat/completions",
+      "summary": "Exercise a dotted semantic operation identifier",
+      "request_example": {
+        "model": "fixture-model-alpha",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 8
+      },
+      "streaming": true,
+      "retry": {
+        "mode": "always",
+        "statuses": [401, 429],
+        "transport_errors": false
+      }
+    },
+    {
+      "operation_id": "models",
+      "capabilities": ["ai.models"],
+      "methods": ["GET"],
+      "path": "/models",
+      "summary": "List current fixture models",
+      "retry": {"mode": "safe"},
+      "availability": {
+        "status": "verified",
+        "level": "mock",
+        "covers": ["schema", "auth", "upstream", "response"],
+        "reason": "The isolated fixture model catalogue is exercised by protocol_e2e.sh.",
+        "verified_at": "2026-09-02T00:00:00Z"
+      }
+    }
+  ]
+}

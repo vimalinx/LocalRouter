@@ -1,0 +1,20 @@
+{
+  "schema_version": "3",
+  "id": "quota-demo",
+  "name": "额度演示服务",
+  "description": "仅用于 LocalRouter 渲染验收的合成号池。",
+  "enabled": true,
+  "base_url": "https://example.invalid",
+  "auth": {"type": "bearer"},
+  "pool": {
+    "mode": "local",
+    "credentials_file": "protocol-pools/quota-demo.json",
+    "strategy": "least-inflight",
+    "max_attempts": 2,
+    "max_inflight_per_credential": 2
+  },
+  "readiness": {"mode": "credential"},
+  "routes": [
+    {"operation_id": "demo.call", "methods": ["POST"], "path": "/call", "summary": "合成额度渲染验收"}
+  ]
+}

@@ -1,0 +1,200 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(0.985 0.004 286);
+  --foreground: oklch(0.19 0.025 277);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.19 0.025 277);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.19 0.025 277);
+  --primary: oklch(0.51 0.22 286);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.018 286);
+  --secondary-foreground: oklch(0.30 0.07 281);
+  --muted: oklch(0.96 0.008 286);
+  --muted-foreground: oklch(0.48 0.025 274);
+  --accent: oklch(0.95 0.025 217);
+  --accent-foreground: oklch(0.28 0.07 222);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.90 0.018 286);
+  --input: oklch(0.88 0.018 286);
+  --ring: oklch(0.56 0.20 286);
+  --scrollbar-thumb: color-mix(in oklch, var(--muted-foreground) 38%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklch, var(--primary) 54%, var(--border));
+  --quota-remaining: #000;
+  --quota-empty: #fff;
+  --supplier-1: oklch(0.56 0.15 292);
+  --supplier-2: oklch(0.56 0.11 211);
+  --supplier-3: oklch(0.56 0.13 250);
+  --supplier-4: oklch(0.61 0.12 53);
+  --supplier-5: oklch(0.57 0.13 332);
+  --supplier-6: oklch(0.53 0.11 158);
+  --supplier-7: oklch(0.61 0.11 83);
+  --supplier-8: oklch(0.55 0.14 270);
+  --supplier-9: oklch(0.57 0.12 18);
+  --supplier-10: oklch(0.54 0.10 181);
+  --supplier-11: oklch(0.57 0.10 126);
+  --supplier-12: oklch(0.55 0.10 229);
+  --radius: 0.75rem;
+  color-scheme: light;
+}
+
+.dark {
+  --background: oklch(0.16 0.018 277);
+  --foreground: oklch(0.94 0.009 286);
+  --card: oklch(0.20 0.022 277);
+  --card-foreground: oklch(0.94 0.009 286);
+  --popover: oklch(0.20 0.022 277);
+  --popover-foreground: oklch(0.94 0.009 286);
+  --primary: oklch(0.68 0.18 286);
+  --primary-foreground: oklch(0.16 0.018 277);
+  --secondary: oklch(0.27 0.032 278);
+  --secondary-foreground: oklch(0.94 0.009 286);
+  --muted: oklch(0.25 0.022 277);
+  --muted-foreground: oklch(0.70 0.025 280);
+  --accent: oklch(0.27 0.045 222);
+  --accent-foreground: oklch(0.90 0.045 214);
+  --destructive: oklch(0.65 0.20 27);
+  --border: oklch(0.31 0.028 278);
+  --input: oklch(0.34 0.028 278);
+  --ring: oklch(0.68 0.18 286);
+  --quota-remaining: #fff;
+  --quota-empty: #000;
+  --supplier-1: oklch(0.72 0.13 292);
+  --supplier-2: oklch(0.72 0.10 211);
+  --supplier-3: oklch(0.72 0.12 250);
+  --supplier-4: oklch(0.75 0.11 53);
+  --supplier-5: oklch(0.73 0.12 332);
+  --supplier-6: oklch(0.70 0.10 158);
+  --supplier-7: oklch(0.75 0.10 83);
+  --supplier-8: oklch(0.71 0.13 270);
+  --supplier-9: oklch(0.72 0.11 18);
+  --supplier-10: oklch(0.71 0.09 181);
+  --supplier-11: oklch(0.73 0.09 126);
+  --supplier-12: oklch(0.71 0.09 229);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  border-color: var(--border);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  transition: background-color 160ms ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+html {
+  min-width: 320px;
+  height: 100%;
+  overflow: hidden;
+  background: var(--background);
+}
+
+body {
+  position: fixed;
+  inset: 0;
+  min-width: 320px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a {
+  touch-action: manipulation;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--primary) 24%, transparent);
+}
+
+.subtle-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in oklch, var(--border) 54%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklch, var(--border) 54%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

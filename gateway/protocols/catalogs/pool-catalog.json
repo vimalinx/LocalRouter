@@ -1,0 +1,10 @@
+{
+  "schema_version": "1",
+  "observed_at": "2026-09-02T00:00:00Z",
+  "source": "Empty public distribution. Runtime inventory is operator-owned and populated only from protected local configuration.",
+  "summary": {
+    "indexed": 0,
+    "configuration_required": 0
+  },
+  "pools": []
+}

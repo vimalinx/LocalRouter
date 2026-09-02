@@ -1,0 +1,32 @@
+# Local runtime state and evidence
+.ai/
+.workspace/
+gateway/data/
+gateway/logs/
+gateway/state-locks/
+gateway/protocol-state/
+gateway/workflow-state/
+gateway/protocol-revisions/
+gateway/protocol-drafts/
+gateway/protocol-events.jsonl*
+gateway/.env
+
+# Generated binaries and historical local backups
+gateway/localrouter*
+
+# JavaScript and build caches
+gateway/web-src/node_modules/
+gateway/web-src/coverage/
+gateway/web-src/.vite/
+dist/
+
+# Python and tool caches
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+*.swo

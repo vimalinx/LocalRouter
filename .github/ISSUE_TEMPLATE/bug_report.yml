@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible LocalRouter defect without private data
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste API keys, cookies, pool records, private upstream addresses, databases, or raw provider responses.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `localrouter version`
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal redacted steps and the exact public route or Pack operation
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include only sanitized errors and status codes
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, identities, pool contents, private paths and upstream bodies.
+          required: true

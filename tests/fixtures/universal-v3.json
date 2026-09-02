@@ -1,0 +1,93 @@
+{
+  "schema_version": "3",
+  "id": "universal",
+  "name": "Universal service fixture",
+  "description": "Exercises v3 multi-target, expressions, safe retry, capability selection, readiness, adapter, and graph workflow schema.",
+  "enabled": true,
+  "base_url": "http://127.0.0.1:19090",
+  "targets": {
+    "video": "https://video.example.invalid",
+    "adapter": "http://127.0.0.1:19091",
+    "binary-service": "tcp://127.0.0.1:19092"
+  },
+  "timeout_seconds": 30,
+  "auth": {
+    "type": "hmac-sha256",
+    "secret_file": "protocol-secrets/universal",
+    "hmac": {
+      "header": "X-Signature",
+      "timestamp_header": "X-Timestamp",
+      "encoding": "hex",
+      "message_template": "{{method}}\n{{path}}\n{{query}}\n{{body_sha256}}\n{{timestamp}}"
+    }
+  },
+  "pool": {
+    "mode": "local",
+    "credentials_file": "protocol-pools/universal.json",
+    "strategy": "least-inflight",
+    "max_attempts": 2,
+    "inflight_lease_seconds": 120
+  },
+  "readiness": {
+    "mode": "probe",
+    "target": "video",
+    "method": "GET",
+    "path": "/health",
+    "success_statuses": [200],
+    "expression": "body.ready == true",
+    "require_verified_operations": true
+  },
+  "routes": [
+    {
+      "operation_id": "video.create",
+      "methods": ["POST"],
+      "path": "/videos",
+      "target": "video",
+      "summary": "Create a video",
+      "request_transform": {
+        "json": {"set_expr": {"duration": "body.seconds * 1000"}},
+        "header_expr": {"X-Callback": "string(body.callback_url)"}
+      },
+      "retry": {"mode": "idempotent", "max_attempts": 2, "idempotency_header": "Idempotency-Key", "unknown_outcome_status": 520},
+      "availability": {"status": "observed"},
+      "pool_selector": "metadata.video == \"true\""
+    },
+    {
+      "operation_id": "binary.invoke",
+      "methods": ["POST"],
+      "path": "/binary",
+      "target": "binary-service",
+      "transport": "adapter",
+      "summary": "Invoke a binary service through a loopback adapter",
+      "adapter": {"type": "http-envelope", "target": "adapter", "path": "/invoke"},
+      "retry": {"mode": "never"}
+    }
+  ],
+  "workflows": [
+    {
+      "id": "video.generate",
+      "name": "Generate video",
+      "initial_step": "create",
+      "max_poll_attempts": 1000,
+      "steps": [
+        {
+          "id": "create",
+          "operation": "video.create",
+          "body_expr": "input",
+          "transitions": [
+            {"when": "status >= 200 && status < 300", "to": "callback"},
+            {"terminal": "failed"}
+          ]
+        },
+        {
+          "id": "callback",
+          "kind": "callback",
+          "transitions": [
+            {"when": "response.status == \"done\"", "terminal": "succeeded", "result_expr": "response.result"},
+            {"terminal": "failed"}
+          ]
+        }
+      ]
+    }
+  ]
+}

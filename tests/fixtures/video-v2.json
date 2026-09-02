@@ -1,0 +1,80 @@
+{
+  "schema_version": "3",
+  "id": "video",
+  "name": "Fixture Video Workflow",
+  "description": "Exercises config-defined transforms, local credential pooling, affinity, and asynchronous workflow state.",
+  "enabled": true,
+  "base_url": "http://127.0.0.1:1",
+  "timeout_seconds": 30,
+  "auth": {
+    "type": "bearer"
+  },
+  "pool": {
+    "mode": "local",
+    "credentials_file": "protocol-pools/video.json",
+    "strategy": "round-robin",
+    "max_attempts": 2,
+    "max_inflight_per_credential": 1,
+    "rate_limit_cooldown_seconds": 1
+  },
+  "routes": [
+    {
+      "operation_id": "jobs.create",
+      "capabilities": ["video.generate"],
+      "methods": ["POST"],
+      "path": "/jobs",
+      "upstream_path": "/native/jobs",
+      "summary": "Create a video job",
+      "retry": {
+        "mode": "idempotent",
+        "max_attempts": 2,
+        "statuses": [429],
+        "idempotency_header": "Idempotency-Key"
+      },
+      "request_transform": {
+        "json": {
+          "rename": [{"from": "prompt", "to": "input.prompt"}],
+          "set": {"task_type": "video"},
+          "remove": ["private"]
+        }
+      },
+      "response_transform": {
+        "rename": [{"from": "data.task_id", "to": "job_id"}],
+        "remove": ["data", "internal"]
+      },
+      "affinity": {
+        "response_json_path": "data.task_id",
+        "ttl_seconds": 3600
+      }
+    },
+    {
+      "operation_id": "jobs.get",
+      "capabilities": ["video.status"],
+      "methods": ["GET"],
+      "path": "/jobs/{id}",
+      "upstream_path": "/native/jobs/{id}",
+      "summary": "Read a video job",
+      "affinity": {
+        "request_path_param": "id",
+        "ttl_seconds": 3600
+      }
+    }
+  ],
+  "workflows": [
+    {
+      "id": "video.generate",
+      "name": "Generate video",
+      "create_operation": "jobs.create",
+      "poll_operation": "jobs.get",
+      "resource_id_path": "job_id",
+      "status_path": "status",
+      "result_path": "result.url",
+      "pending_values": ["pending"],
+      "running_values": ["running"],
+      "success_values": ["done"],
+      "failure_values": ["failed"],
+      "poll_interval_ms": 250,
+      "max_poll_attempts": 10
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: gateway/go.mod
+          cache-dependency-path: gateway/go.sum
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --cwd gateway/web-src --frozen-lockfile
+      - run: bun run --cwd gateway/web-src typecheck
+      - run: bun run --cwd gateway/web-src test
+      - run: bun run --cwd gateway/web-src build
+      - run: ./tests/verify.sh
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        working-directory: gateway
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - run: go run github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.5.1 scan source --lockfile gateway/web-src/bun.lock --format table --verbosity warn

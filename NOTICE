@@ -1,0 +1,16 @@
+LocalRouter
+
+Early versions of LocalRouter were derived from QuantumNous New API:
+https://github.com/QuantumNous/new-api
+Inspected revision: 918427d8ab41f6adaa4113d0496f1f8621855b70
+
+The current LocalRouter runtime has no source, module, submodule, or runtime
+dependency on New API. The independent runtime rewrite was performed after the
+upstream source had been inspected and is not represented as clean-room work.
+The original project and contributors retain copyright in their work.
+
+CLIProxyAPI was inspected as an architectural reference at revision
+f0de1d008fe8881dcb7431cf97b147295874c2b2 and is not included or linked.
+
+LocalRouter is distributed under the GNU Affero General Public License version
+3. See LICENSE, PROVENANCE.md, and THIRD-PARTY-LICENSES.md.

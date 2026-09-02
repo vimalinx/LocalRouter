@@ -1,0 +1,7 @@
+{
+  "schema_version": "1",
+  "credentials": [
+    {"id": "fixture-one", "secret": "fixture-only-one", "quota": {"total": 100, "remaining": 72, "used": 28, "unit": "credits", "status": "confirmed", "checked_at": "2026-08-30T13:00:00Z"}},
+    {"id": "fixture-two", "secret": "fixture-only-two", "quota": {"total": 100, "remaining": 48, "used": 52, "unit": "credits", "status": "confirmed", "checked_at": "2026-08-30T13:00:00Z"}}
+  ]
+}
