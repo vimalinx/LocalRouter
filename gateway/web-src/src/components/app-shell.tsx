@@ -50,7 +50,7 @@ export function AppShell(props: {
   onMobileOpenChange: (open: boolean) => void
   onThemeToggle: () => void
   onRefresh: () => void
-  onLock: () => void
+  onLock?: () => void
 }) {
   const protocolsWorkspace = props.activeSection === 'protocols'
 
@@ -173,10 +173,12 @@ export function AppShell(props: {
             >
               {props.dark ? <Sun aria-hidden='true' /> : <Moon aria-hidden='true' />}
             </Button>
-            <Button variant='outline' size='sm' onClick={props.onLock}>
-              <LockKeyhole aria-hidden='true' />
-              <span className='hidden sm:inline'>锁定</span>
-            </Button>
+            {props.onLock ? (
+              <Button variant='outline' size='sm' onClick={props.onLock}>
+                <LockKeyhole aria-hidden='true' />
+                <span className='hidden sm:inline'>锁定</span>
+              </Button>
+            ) : null}
           </div>
         </header>
 

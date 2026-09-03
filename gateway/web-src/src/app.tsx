@@ -99,7 +99,7 @@ async function loadConsole(adminToken: string): Promise<ConsoleData> {
 
 export default function App() {
   const queryClient = useQueryClient()
-  const [adminToken, setAdminToken] = useState('')
+  const [adminToken, setAdminToken] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<SectionId>(currentSection)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [dark, setDark] = useState(() => {
@@ -114,10 +114,14 @@ export default function App() {
     retry: 1,
   })
 
+  const adminAuthEnabled = publicStatus.data?.admin_auth_enabled ?? true
+  const consoleAccessReady = Boolean(publicStatus.data) && (!adminAuthEnabled || adminToken !== null)
+  const requestAdminToken = adminToken || ''
+
   const consoleData = useQuery({
     queryKey: ['console-data'],
-    queryFn: () => loadConsole(adminToken),
-    enabled: Boolean(adminToken),
+    queryFn: () => loadConsole(requestAdminToken),
+    enabled: consoleAccessReady,
     staleTime: 10_000,
     retry: false,
   })
@@ -142,7 +146,7 @@ export default function App() {
   }
 
   function lock() {
-    setAdminToken('')
+    setAdminToken(null)
     setMobileOpen(false)
     queryClient.removeQueries({ queryKey: ['console-data'] })
     toast.success('控制台已锁定，管理密钥已从页面内存清除')
@@ -164,7 +168,7 @@ export default function App() {
   }
 
   async function changeAdminToken(token: string) {
-    await adminRequest<{ changed: boolean }>('/local/api/admin-token', adminToken, {
+    await adminRequest<{ changed: boolean }>('/local/api/admin-token', requestAdminToken, {
       method: 'PUT',
       body: JSON.stringify({ token }),
     })
@@ -172,7 +176,29 @@ export default function App() {
     toast.success('控制台登录密钥已更新并立即生效')
   }
 
-  if (!adminToken) {
+  async function changeAdminAuth(enabled: boolean, token?: string) {
+    await adminRequest<{ enabled: boolean; changed: boolean }>('/local/api/admin-auth', requestAdminToken, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, ...(token ? { token } : {}) }),
+    })
+    setAdminToken(enabled ? token || adminToken : '')
+    await publicStatus.refetch()
+    queryClient.setQueryData<ConsoleData>(['console-data'], (current) => current ? {
+      ...current,
+      summary: { ...current.summary, admin_auth_enabled: enabled },
+    } : current)
+    toast.success(enabled ? '控制台密码保护已开启' : '控制台密码保护已关闭')
+  }
+
+  if (publicStatus.isPending) {
+    return (
+      <main className='grid h-svh place-items-center p-6'>
+        <LoadingState label='正在读取本机控制台设置…' />
+      </main>
+    )
+  }
+
+  if (adminAuthEnabled && adminToken === null) {
     return (
       <>
         <UnlockView
@@ -212,12 +238,12 @@ export default function App() {
     const data = consoleData.data
     switch (activeSection) {
       case 'protocols':
-        content = <ProtocolsPage protocols={data.protocols} adminToken={adminToken} onChanged={async () => { await consoleData.refetch() }} />
+        content = <ProtocolsPage protocols={data.protocols} adminToken={requestAdminToken} onChanged={async () => { await consoleData.refetch() }} />
         break
       case 'channels':
         content = (
           <ChannelsPage
-            adminToken={adminToken}
+            adminToken={requestAdminToken}
             channels={data.channels}
             providers={data.providers}
             onChanged={async () => {
@@ -227,7 +253,7 @@ export default function App() {
         )
         break
       case 'control':
-        content = <ControlPlanePage adminToken={adminToken} drafts={data.drafts} revisions={data.revisions} protocols={data.protocols} onChanged={async () => { await consoleData.refetch() }} />
+        content = <ControlPlanePage adminToken={requestAdminToken} drafts={data.drafts} revisions={data.revisions} protocols={data.protocols} onChanged={async () => { await consoleData.refetch() }} />
         break
       case 'jobs':
         content = <JobsPage jobs={data.jobs} events={data.events} />
@@ -235,7 +261,7 @@ export default function App() {
       case 'tokens':
         content = (
           <TokensPage
-            adminToken={adminToken}
+            adminToken={requestAdminToken}
             tokens={data.tokens}
             policies={data.policies}
             maintenanceAccess={data.maintenanceAccess}
@@ -257,6 +283,7 @@ export default function App() {
             analytics={data.analytics}
             protocols={data.protocols}
             onChangeAdminToken={changeAdminToken}
+            onChangeAdminAuth={changeAdminAuth}
           />
         )
     }
@@ -280,7 +307,7 @@ export default function App() {
         onMobileOpenChange={setMobileOpen}
         onThemeToggle={() => setDark((current) => !current)}
         onRefresh={refresh}
-        onLock={lock}
+        onLock={adminAuthEnabled ? lock : undefined}
       >
         {content}
       </AppShell>

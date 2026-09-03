@@ -7,4 +7,5 @@
 - Before a paid or side-effecting call, explicitly choose the Pack, operation, and dynamic inputs, then run `lr preflight`. A nonzero preflight exit is blocking. Consume structured `code`, `retryable`, `next_action`, and `alternatives`; never blindly replay an unknown side-effecting outcome.
 - Invoke an authorized real or paid `lr call` once, capture its raw response and exit status, then summarize that captured value offline. A `jq`, pipe, or display failure does not authorize another upstream request.
 - API Token locators name mode-600 files; they are not Token values. Never print, export, or paste Token contents, and never read the administrator credential for consumer work. For Pack, auth, pool, workflow, guide, or release changes, load the globally installed `localrouter-protocol-pack` Skill and use its reviewed exact-digest lifecycle.
+- The human console may advertise password-free loopback access by default. This does not authorize an Agent to mutate `/local/api`; Agent maintenance still requires explicit delegation through the documented `/manage/mcp` lane.
 <!-- LOCALROUTER:END managed-block global-consumer-contract -->

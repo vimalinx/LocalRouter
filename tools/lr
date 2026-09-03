@@ -64,6 +64,11 @@ administrator-backed operator lane and require explicit user delegation for the
 named change. Neither lane permits credential values in output. Do not replace
 either lane by editing files, SQLite, live Packs, or restarting the service.
 
+The browser console and /local/api use password-free loopback access by default.
+An operator can enable password protection and choose a custom password in
+Run Overview. This does not remove the separate administrator credential used
+by the delegated /manage/mcp operator lane.
+
 operation_id is a semantic selector for lr/Agent/MCP commands, not an HTTP URL.
 Where a command already takes <pack>, <operation> may be either the bare
 operation_id or the published pack-qualified operation_key.
@@ -204,6 +209,11 @@ command_status() {
   discovery_json="$(discovery)"
   jq -n --argjson health "$health_json" --argjson contract "$discovery_json" '{
     health: $health,
+    console: {
+      url: "/",
+      auth_enabled: ($contract.maintenance.console_auth.enabled // false),
+      default_auth_enabled: ($contract.maintenance.console_auth.default_enabled // false)
+    },
     compatibility_packs: [$contract.compatibility_packs[]? | {
       id, kind, status, ready, mounts,
       operations: (.routes | length),

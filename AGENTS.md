@@ -14,6 +14,8 @@ For an authorized real or paid call, invoke `lr call` exactly once and capture i
 
 Consumer API Tokens are long-lived and unlimited by default, but remain call-only. This never bypasses Pack pool concurrency, lease expiry, cooldown, health, or quota eligibility. Maintenance is separate and uses the administrator credential by default. Optional Agent maintenance is disabled by default; an Agent may call `/manage/mcp` only when discovery reports it enabled and the human supplied a distinct maintenance-only Token with `localrouter.maintain`. Agents must not request or read the administrator credential.
 
+The human browser console and `/local/api` use password-free loopback access by default and may be protected with a custom password from Run Overview. This convenience does not authorize Agent mutation: Agents still use the explicit `/manage/mcp` maintenance lane and must not treat an open console as delegated authority.
+
 Keep installed secrets below `$XDG_DATA_HOME/localrouter/` with mode `0600`; isolated tests may override `LOCAL_GATEWAY_DATA_DIR`. Never put credentials, cookies, pool contents, or private upstream addresses in source, guides, logs, test output, or `.ai` project-visible notes.
 
 Preserve external ownership: external gateways retain their credential pools unless a Pack explicitly selects `pool.mode=local`. Registration, CAPTCHA, human OAuth consent, payment, and anti-bot challenges remain outside the request path.

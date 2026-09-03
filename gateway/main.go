@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -50,12 +51,14 @@ type runtimeConfig struct {
 	ProtocolDir         string
 	ChannelProfilesPath string
 	DatabasePath        string
+	AdminAuthFile       string
 	AdminTokenFile      string
 	APITokenFile        string
 }
 
 type localRuntime struct {
 	config          runtimeConfig
+	adminAuth       *adminAuthStore
 	adminToken      *adminTokenStore
 	apiToken        string
 	rootUser        localUser
@@ -71,6 +74,66 @@ type localRuntime struct {
 type adminTokenStore struct {
 	mu    sync.RWMutex
 	token string
+}
+
+type adminAuthDocument struct {
+	SchemaVersion string `json:"schema_version"`
+	Enabled       bool   `json:"enabled"`
+}
+
+type adminAuthStore struct {
+	mu      sync.RWMutex
+	path    string
+	enabled bool
+}
+
+func newAdminAuthStore(path string) (*adminAuthStore, error) {
+	store := &adminAuthStore{path: path}
+	exists, err := inspectPrivateRegularFile(path, "administrator authentication setting")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return store, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read administrator authentication setting: %w", err)
+	}
+	var document adminAuthDocument
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&document); err != nil || document.SchemaVersion != "1" {
+		return nil, errors.New("administrator authentication setting is invalid")
+	}
+	store.enabled = document.Enabled
+	return store, nil
+}
+
+func (store *adminAuthStore) isEnabled() bool {
+	if store == nil {
+		return false
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return store.enabled
+}
+
+func (store *adminAuthStore) setEnabled(enabled bool) error {
+	if store == nil {
+		return errors.New("administrator authentication setting is unavailable")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	document, err := json.Marshal(adminAuthDocument{SchemaVersion: "1", Enabled: enabled})
+	if err != nil {
+		return err
+	}
+	if err := writeSecretAtomic(store.path, string(document)); err != nil {
+		return fmt.Errorf("persist administrator authentication setting: %w", err)
+	}
+	store.enabled = enabled
+	return nil
 }
 
 func newAdminTokenStore(token string) *adminTokenStore {
@@ -90,6 +153,16 @@ func (store *adminTokenStore) replacePersisted(current string, replacement strin
 	if len(current) != len(store.token) || subtle.ConstantTimeCompare([]byte(current), []byte(store.token)) != 1 {
 		return errors.New("admin token changed before this request completed")
 	}
+	if err := writeSecretAtomic(path, replacement); err != nil {
+		return err
+	}
+	store.token = replacement
+	return nil
+}
+
+func (store *adminTokenStore) replacePersistedWithoutCurrent(replacement string, path string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	if err := writeSecretAtomic(path, replacement); err != nil {
 		return err
 	}
@@ -253,6 +326,7 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		ProtocolDir:         protocolDir,
 		ChannelProfilesPath: channelProfilesPath,
 		DatabasePath:        filepath.Join(dataDir, "localrouter.db"),
+		AdminAuthFile:       filepath.Join(dataDir, "admin-auth.json"),
 		AdminTokenFile:      filepath.Join(dataDir, "admin-token"),
 		APITokenFile:        filepath.Join(dataDir, "api-token"),
 	}, nil
@@ -288,6 +362,10 @@ func initializeRuntime(config runtimeConfig) (localRuntime, error) {
 		return localRuntime{}, fmt.Errorf("initialize local operator: %w", err)
 	}
 	adminToken, err := readOrCreateSecret(config.AdminTokenFile, "lr-admin-")
+	if err != nil {
+		return localRuntime{}, err
+	}
+	adminAuth, err := newAdminAuthStore(config.AdminAuthFile)
 	if err != nil {
 		return localRuntime{}, err
 	}
@@ -328,7 +406,7 @@ func initializeRuntime(config runtimeConfig) (localRuntime, error) {
 	transport.IdleConnTimeout = 90 * time.Second
 	complete = true
 	return localRuntime{
-		config: config, adminToken: newAdminTokenStore(adminToken), apiToken: apiToken,
+		config: config, adminAuth: adminAuth, adminToken: newAdminTokenStore(adminToken), apiToken: apiToken,
 		rootUser: rootUser, store: store, relayClient: &http.Client{Transport: transport},
 		balancer: newLocalRelayBalancer(), protocols: protocols, policies: policies, events: events, channelProfiles: channelProfiles,
 	}, nil
@@ -520,19 +598,20 @@ func registerConsoleRoutes(engine *gin.Engine, runtime localRuntime) {
 	})
 	engine.GET("/local/status", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"success":          true,
-			"mode":             "local-self-use",
-			"listen":           net.JoinHostPort(runtime.config.Host, strconv.Itoa(runtime.config.Port)),
-			"admin_token_file": "$XDG_DATA_HOME/localrouter/admin-token",
-			"api_token_file":   "$XDG_DATA_HOME/localrouter/api-token",
-			"database_path":    "$XDG_DATA_HOME/localrouter/localrouter.db",
-			"protocol_dir":     "$XDG_CONFIG_HOME/localrouter/protocols",
-			"channel_profiles": "$XDG_CONFIG_HOME/localrouter/channel-profiles.json",
-			"state_dir":        "$XDG_STATE_HOME/localrouter",
-			"cache_dir":        "$XDG_CACHE_HOME/localrouter",
-			"path_layout":      "xdg-v1",
-			"engine":           "localrouter-native",
-			"oauth":            "external-maintainer",
+			"success":            true,
+			"mode":               "local-self-use",
+			"listen":             net.JoinHostPort(runtime.config.Host, strconv.Itoa(runtime.config.Port)),
+			"admin_auth_enabled": runtime.adminAuth.isEnabled(),
+			"admin_token_file":   "$XDG_DATA_HOME/localrouter/admin-token",
+			"api_token_file":     "$XDG_DATA_HOME/localrouter/api-token",
+			"database_path":      "$XDG_DATA_HOME/localrouter/localrouter.db",
+			"protocol_dir":       "$XDG_CONFIG_HOME/localrouter/protocols",
+			"channel_profiles":   "$XDG_CONFIG_HOME/localrouter/channel-profiles.json",
+			"state_dir":          "$XDG_STATE_HOME/localrouter",
+			"cache_dir":          "$XDG_CACHE_HOME/localrouter",
+			"path_layout":        "xdg-v1",
+			"engine":             "localrouter-native",
+			"oauth":              "external-maintainer",
 		})
 	})
 	engine.GET("/", func(c *gin.Context) {
@@ -543,10 +622,11 @@ func registerConsoleRoutes(engine *gin.Engine, runtime localRuntime) {
 
 func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 	admin := engine.Group("/local/api")
-	admin.Use(localAdminAuth(runtime.adminToken, runtime.rootUser))
+	admin.Use(localAdminAuth(runtime.adminAuth, runtime.adminToken, runtime.rootUser))
 	{
 		admin.GET("/summary", localSummary(runtime))
 		admin.GET("/analytics", localAnalyticsHandler(runtime))
+		admin.PUT("/admin-auth", handleAdminAuthChange(runtime))
 		admin.PUT("/admin-token", handleAdminTokenChange(runtime))
 		admin.GET("/providers", listProviders(runtime))
 		admin.GET("/models", handleAdminModels(runtime))
@@ -597,8 +677,13 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 	}
 }
 
-func localAdminAuth(expected *adminTokenStore, root localUser) gin.HandlerFunc {
+func localAdminAuth(setting *adminAuthStore, expected *adminTokenStore, root localUser) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !setting.isEnabled() {
+			setLocalAdministrator(c, root)
+			c.Next()
+			return
+		}
 		provided := c.GetHeader(adminTokenHeader)
 		if expected == nil || !expected.matches(provided) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -607,12 +692,51 @@ func localAdminAuth(expected *adminTokenStore, root localUser) gin.HandlerFunc {
 			})
 			return
 		}
-		c.Set("id", root.ID)
-		c.Set("username", root.Username)
-		c.Set("role", root.Role)
-		c.Set("group", "default")
-		c.Set("user_group", "default")
+		setLocalAdministrator(c, root)
 		c.Next()
+	}
+}
+
+func setLocalAdministrator(c *gin.Context, root localUser) {
+	c.Set("id", root.ID)
+	c.Set("username", root.Username)
+	c.Set("role", root.Role)
+	c.Set("group", "default")
+	c.Set("user_group", "default")
+}
+
+func handleAdminAuthChange(runtime localRuntime) gin.HandlerFunc {
+	type changeRequest struct {
+		Enabled *bool  `json:"enabled"`
+		Token   string `json:"token"`
+	}
+	return func(c *gin.Context) {
+		var request changeRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "enabled is required"})
+			return
+		}
+		if request.Enabled == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "enabled is required"})
+			return
+		}
+		enabled := *request.Enabled
+		wasEnabled := runtime.adminAuth.isEnabled()
+		if enabled && !wasEnabled {
+			if err := validateAdminToken(request.Token); err != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "message": err.Error()})
+				return
+			}
+			if err := runtime.adminToken.replacePersistedWithoutCurrent(request.Token, runtime.config.AdminTokenFile); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "failed to persist admin token"})
+				return
+			}
+		}
+		if err := runtime.adminAuth.setEnabled(enabled); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "failed to persist administrator authentication setting"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"enabled": enabled, "changed": enabled != wasEnabled}})
 	}
 }
 
@@ -630,8 +754,14 @@ func handleAdminTokenChange(runtime localRuntime) gin.HandlerFunc {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "message": err.Error()})
 			return
 		}
-		if err := runtime.adminToken.replacePersisted(c.GetHeader(adminTokenHeader), request.Token, runtime.config.AdminTokenFile); err != nil {
-			if !runtime.adminToken.matches(c.GetHeader(adminTokenHeader)) {
+		var err error
+		if runtime.adminAuth.isEnabled() {
+			err = runtime.adminToken.replacePersisted(c.GetHeader(adminTokenHeader), request.Token, runtime.config.AdminTokenFile)
+		} else {
+			err = runtime.adminToken.replacePersistedWithoutCurrent(request.Token, runtime.config.AdminTokenFile)
+		}
+		if err != nil {
+			if runtime.adminAuth.isEnabled() && !runtime.adminToken.matches(c.GetHeader(adminTokenHeader)) {
 				c.JSON(http.StatusConflict, gin.H{"success": false, "message": "admin token changed; unlock again and retry"})
 				return
 			}
@@ -650,22 +780,23 @@ func localSummary(runtime localRuntime) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"data": gin.H{
-				"channels":         channelCount,
-				"tokens":           tokenCount,
-				"listen":           net.JoinHostPort(runtime.config.Host, strconv.Itoa(runtime.config.Port)),
-				"admin_token_file": runtime.config.AdminTokenFile,
-				"api_token_file":   runtime.config.APITokenFile,
-				"database_path":    runtime.config.DatabasePath,
-				"config_dir":       runtime.config.ConfigDir,
-				"state_dir":        runtime.config.StateDir,
-				"cache_dir":        runtime.config.CacheDir,
-				"protocol_dir":     runtime.config.ProtocolDir,
-				"channel_profiles": runtime.config.ChannelProfilesPath,
-				"engine":           "localrouter-native",
-				"protocols":        protocolTotal,
-				"protocols_ready":  protocolReady,
-				"billing":          "disabled",
-				"oauth":            "external-maintainer",
+				"channels":           channelCount,
+				"tokens":             tokenCount,
+				"listen":             net.JoinHostPort(runtime.config.Host, strconv.Itoa(runtime.config.Port)),
+				"admin_auth_enabled": runtime.adminAuth.isEnabled(),
+				"admin_token_file":   runtime.config.AdminTokenFile,
+				"api_token_file":     runtime.config.APITokenFile,
+				"database_path":      runtime.config.DatabasePath,
+				"config_dir":         runtime.config.ConfigDir,
+				"state_dir":          runtime.config.StateDir,
+				"cache_dir":          runtime.config.CacheDir,
+				"protocol_dir":       runtime.config.ProtocolDir,
+				"channel_profiles":   runtime.config.ChannelProfilesPath,
+				"engine":             "localrouter-native",
+				"protocols":          protocolTotal,
+				"protocols_ready":    protocolReady,
+				"billing":            "disabled",
+				"oauth":              "external-maintainer",
 			},
 		})
 	}

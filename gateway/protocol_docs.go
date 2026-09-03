@@ -280,9 +280,13 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 			"maintenance": gin.H{
 				"console": "/#control", "grant_console": "/#tokens", "mcp": "/manage/mcp",
 				"drafts": "/local/api/protocol-drafts", "history": "/local/api/protocols/history",
+				"console_auth": gin.H{
+					"enabled": runtime.adminAuth.isEnabled(), "default_enabled": false,
+					"enable_or_disable": "/local/api/admin-auth", "change_token": "/local/api/admin-token",
+				},
 				"auth": gin.H{
 					"default":       "administrator",
-					"administrator": gin.H{"type": "header", "header": adminTokenHeader},
+					"administrator": gin.H{"type": "header", "header": adminTokenHeader, "required_for_maintenance_mcp": true},
 					"agent_token": gin.H{
 						"enabled": agentMaintenanceEnabled, "type": "bearer", "header": "Authorization",
 						"required_capability": localRouterMaintainCapability, "service_access": false,
@@ -292,7 +296,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"lifecycle":    []string{"draft", "edit", "validate", "review-impact", "plan", "apply", "verify", "rollback"},
 				"editing":      "Semantic MCP tools own paths, JSON/YAML formatting, atomic writes and exact digests.",
 				"failure":      "Drafts are preserved and local post-apply verification failures automatically restore the previous revision.",
-				"operator_api": gin.H{"path": "/local/api", "auth": gin.H{"type": "header", "header": "X-Local-Admin"}},
+				"operator_api": gin.H{"path": "/local/api", "auth": gin.H{"type": "header", "header": "X-Local-Admin", "required": runtime.adminAuth.isEnabled()}},
 			},
 			"compatibility_packs": compatibilityPacks,
 			"protocols":           registry.views(),

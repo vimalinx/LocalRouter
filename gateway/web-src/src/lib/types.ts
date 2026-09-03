@@ -2,6 +2,7 @@ export type PublicStatus = {
   success: boolean
   mode: string
   listen: string
+  admin_auth_enabled: boolean
   admin_token_file: string
   api_token_file: string
   database_path: string
@@ -18,6 +19,7 @@ export type Summary = {
   channels: number
   tokens: number
   listen: string
+  admin_auth_enabled: boolean
   admin_token_file: string
   api_token_file: string
   database_path: string

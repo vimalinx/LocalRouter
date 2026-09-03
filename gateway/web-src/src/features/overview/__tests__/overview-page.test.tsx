@@ -9,6 +9,7 @@ const summary: Summary = {
   channels: 1,
   tokens: 2,
   listen: '127.0.0.1:8317',
+  admin_auth_enabled: false,
   admin_token_file: 'data/admin-token',
   api_token_file: 'data/api-token',
   database_path: 'data/local.db',
@@ -82,7 +83,7 @@ const analytics: Analytics = {
 describe('OverviewPage', () => {
   it('shows model and service API activity without mixing pool value into spend', async () => {
     const user = userEvent.setup()
-    render(<OverviewPage summary={summary} analytics={analytics} protocols={[protocol]} onChangeAdminToken={vi.fn()} />)
+    render(<OverviewPage summary={summary} analytics={analytics} protocols={[protocol]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
 
     expect(screen.getByRole('heading', { name: '运行概览' })).toBeInTheDocument()
     expect(screen.getByText('10 模型 · 2 服务 API')).toBeInTheDocument()
@@ -106,7 +107,7 @@ describe('OverviewPage', () => {
       services: [],
       models: [],
     }
-    render(<OverviewPage summary={{ ...summary, channels: 0, protocols: 0 }} analytics={empty} protocols={[]} onChangeAdminToken={vi.fn()} />)
+    render(<OverviewPage summary={{ ...summary, channels: 0, protocols: 0 }} analytics={empty} protocols={[]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
     expect(screen.getByText('还没有可统计的服务。')).toBeInTheDocument()
     expect(screen.getByText('还没有模型调用记录。')).toBeInTheDocument()
     expect(screen.getByText('未接入')).toBeInTheDocument()

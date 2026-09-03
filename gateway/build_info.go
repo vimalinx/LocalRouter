@@ -33,6 +33,7 @@ func handleLocalCommand(arguments []string) (bool, error) {
 			"data_dir":         config.DataDir,
 			"state_dir":        config.StateDir,
 			"cache_dir":        config.CacheDir,
+			"admin_auth_file":  config.AdminAuthFile,
 			"admin_token_file": config.AdminTokenFile,
 			"api_token_file":   config.APITokenFile,
 			"database_path":    config.DatabasePath,

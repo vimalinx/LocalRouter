@@ -10,12 +10,13 @@ Treat the loopback listener as consumer authority and a reviewed Pack draft as t
 ## Start from the live contract
 
 1. Request `http://127.0.0.1:8317/.well-known/localrouter.json`.
-2. Follow its links. Before mutation choose an enabled maintenance Agent Token, explicit delegation for one `lr manage-*` change, or read-only discovery. Keep credentials private and use the port as authority.
+2. Follow its links. Before mutation choose an enabled maintenance Agent Token, explicit delegation for one `lr manage-*` change, or read-only discovery. Keep credentials private.
+   Password-free loopback console access is not Agent mutation authority; Agents still use `/manage/mcp`.
 3. Classify the work before reading more detail:
    - **Use only:** call the already documented operation and do not edit the Pack.
-   - **Compatibility Pack:** standard OpenAI, Anthropic, or Gemini routing uses lightweight Channel Profile + Channels on `/v1` or `/v1beta`.
+   - **Compatibility Pack:** standard OpenAI, Anthropic, or Gemini routing uses Channel Profile + Channels on `/v1` or `/v1beta`.
    - **Pack change:** use the semantic tools at `maintenance.mcp` only through the authorized maintenance lane; LocalRouter owns draft paths, JSON/YAML formatting, validation, exact digests, installation, and local rollback.
-   - **Runtime change:** Go, WebUI, schema, or handler behavior requires a binary/UI build and restart in addition to any Pack release.
+   - **Runtime change:** Go, WebUI, schema, or handlers require a build and restart plus any Pack release.
 4. Determine who owns registration, credential refresh, health, request-time selection, quota measurement, and upstream OAuth. Do not silently move ownership into LocalRouter.
 
 With a Pack argument, `lr` accepts bare `operation_id` or Pack-qualified `operation_key`; never turn dotted selectors into paths.

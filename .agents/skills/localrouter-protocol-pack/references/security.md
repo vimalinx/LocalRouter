@@ -5,7 +5,7 @@ Read this reference for authentication, targets, adapters, forwarded headers, un
 ## Trust boundaries
 
 - LocalRouter listens only on a loopback IP. Do not expose its admin plane on a non-loopback address.
-- Public API Tokens authorize consumer surfaces only. The separate administrator credential authorizes drafts, pool state, release, and rollback. Optional Agent maintenance Tokens are disabled by default; when enabled they are maintenance-only and cannot call consumer surfaces.
+- Public API Tokens authorize consumer surfaces only. The human console and `/local/api` use password-free loopback access by default and may be switched to the administrator credential by the operator. `/manage/mcp` still requires that separate administrator credential or an explicitly enabled maintenance-only Agent Token. A password-free console is never implicit Agent mutation authority.
 - Provider targets are operator-owned Pack constants. Client input must never become a target URL, DNS name, socket path, OAuth token URL, adapter path, or WASM module path. `target_selector` accepts credential metadata only as a lookup key into a Pack-owned map of fixed target names; an unmapped value is ineligible rather than interpreted as an address.
 - Human OAuth consent, CAPTCHA, account registration, anti-bot handling, and payment occur outside the request path.
 
@@ -36,4 +36,4 @@ Read this reference for authentication, targets, adapters, forwarded headers, un
 
 ## Security acceptance
 
-Verify loopback binding, admin/API token separation, target immutability, path allowlists, file owner/modes, symlink rejection, sanitized management output, bounded payload behavior, no secret leakage, and safe unknown outcomes. A successful upstream response does not replace this review.
+Verify loopback binding, the advertised console-auth switch and its default-off state, `/manage/mcp` administrator/API token separation, target immutability, path allowlists, file owner/modes, symlink rejection, sanitized management output, bounded payload behavior, no secret leakage, and safe unknown outcomes. A successful upstream response does not replace this review.

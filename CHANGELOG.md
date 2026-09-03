@@ -4,6 +4,21 @@ All notable LocalRouter changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once a stable `1.0.0` contract is
 published.
 
+## 0.1.0-alpha.4 - 2026-09-03
+
+- Made the loopback Web console and `/local/api/*` password-free by default,
+  while keeping password protection available as an explicit operator choice.
+- Added an in-console flow to enable protection with a custom password, rotate
+  it without restart, or return to the default password-free mode.
+- Persisted the console-auth switch in a private mode-600 XDG data file and
+  published its state through `/local/status`, discovery, summaries, and
+  `lr status` without exposing credential values.
+- Kept `/manage/mcp` on its separate administrator or explicitly enabled
+  maintenance-only Agent lane; an open human console never grants Agent
+  mutation authority.
+- Extended Go, Web, smoke, isolated-install, global Skill/AGENTS, browser, and
+  release-artifact acceptance for both the protected and password-free flows.
+
 ## 0.1.0-alpha.3 - 2026-09-03
 
 - Added one-shot `lr tree`, explicit compatibility/Protocol Pack discovery,

@@ -6,7 +6,7 @@
 
 - 只允许 `127.0.0.0/8` 或 `::1` 等回环地址；
 - 自动创建单一本机管理员和可撤销的默认 API 密钥；
-- 用 `X-Local-Admin` 保护本地管理 API；
+- 本地管理 API 默认仅靠 loopback 边界免密使用，并可选用 `X-Local-Admin` 密码保护；
 - 保留 OpenAI、Anthropic 与 Gemini 协议入口；
 - 每条模型渠道可独立配置供应商请求 Profile：固定、移除或补充转发安全请求头，控制 User-Agent 和查询串编码；上游鉴权在 Profile 之后注入且不可被覆盖；
 - 不注册用户注册、登录、OAuth、支付、订阅和公开管理站点路由；
@@ -31,20 +31,21 @@ make -C gateway web
 
 首次启动会生成：
 
-- `$XDG_DATA_HOME/localrouter/admin-token`：解锁控制台以及调用 `/local/api/*`；
+- `$XDG_DATA_HOME/localrouter/admin-token`：控制台密码保护开启时解锁 `/local/api/*`，并始终用于人工维护 MCP；
+- `$XDG_DATA_HOME/localrouter/admin-auth.json`：控制台密码保护开关，默认关闭；
 - `$XDG_DATA_HOME/localrouter/api-token`：AI 客户端访问 `/v1/*`、`/p/*`、`/w/*` 或 `/mcp`；
 - `$XDG_DATA_HOME/localrouter/localrouter.db`：渠道、令牌和日志；
 - `$XDG_CONFIG_HOME/localrouter/protocols`：由二进制首次初始化、之后由用户维护的 Pack；
 - `$XDG_STATE_HOME/localrouter`：事件、工作流、调度状态、草稿和发布历史。
 
-不要在终端打印这些文件。浏览器控制台只提示默认相对位置，密钥只保存在当前标签页内存，不写 LocalStorage。
+不要在终端打印这些文件。默认打开浏览器控制台会直接进入；启用密码保护后，密码只保存在当前标签页内存，不写 LocalStorage。
 
-首次解锁后可在“运行概览 → 更改登录密钥”设置自己的控制台密钥。新值必须为 16–512 个可打印 ASCII 字符；服务端会原子替换 XDG 数据目录中的 `admin-token`、保持 `0600` 并立即更新鉴权，当前标签页不需要重新登录，其他使用旧密钥的标签页会失效。管理密钥与客户端 API Token 相互独立。
+控制台密码保护默认关闭。可在“运行概览 → 控制台密码保护”中开启并设置 16–512 个可打印 ASCII 字符的自定义密码，也可随时关闭恢复免密。服务端原子替换 `admin-token`、持久化 `admin-auth.json`、保持 `0600` 并立即更新鉴权，不需要重启；控制台密码与客户端 API Token 相互独立。
 
 ## 接入已有的本机上游
 
 1. 先在外部服务内完成登录、账号池和刷新配置，并确认它的固定回环端点可用。
-2. 打开 `http://127.0.0.1:8317/`，使用 `$XDG_DATA_HOME/localrouter/admin-token` 解锁。
+2. 打开 `http://127.0.0.1:8317/`；默认直接进入，若操作者开启了密码保护则输入自定义密码。
 3. 新建与上游线协议匹配的私有渠道。
 4. Base URL 填上游的固定本机地址；模型列表和密钥以该上游实际合同为准。
 5. 点击渠道测试，再让客户端把 Base URL 指向 LocalRouter。
@@ -59,7 +60,7 @@ make -C gateway web
 - Anthropic：`/v1/messages`；
 - Gemini：`/v1beta/models/*`；
 - 本地状态：`/healthz`、`/local/status`；
-- 本地管理：`/local/api/*`，需要 `X-Local-Admin`；`PUT /local/api/admin-token` 可安全轮换控制台登录密钥且不回显新值。
+- 本地管理：`/local/api/*` 默认在 loopback 上免密；`PUT /local/api/admin-auth` 开关密码保护，`PUT /local/api/admin-token` 安全轮换自定义密码且不回显新值。开启后请求需要 `X-Local-Admin`。
 - 自定义协议：`/p/<protocol>/*`，使用本地 API 令牌；模板与 Agent 指南位于 `/docs`。
 - 异步工作流：`/w/<protocol>/<workflow>` 创建本地 Job，`/w/<protocol>/<workflow>/<job>` 按受控节奏推进轮询或取消。
 - MCP：`POST /mcp` 提供无状态 JSON-RPC `initialize`、`tools/list`、`tools/call`，工具从已发布且就绪的 Pack 生成。

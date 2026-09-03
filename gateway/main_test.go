@@ -127,8 +127,9 @@ func TestLocalCORSOnlyAllowsLoopbackOrigins(t *testing.T) {
 func TestLocalAdminAuth(t *testing.T) {
 	engine := gin.New()
 	store := newAdminTokenStore("expected")
+	auth := &adminAuthStore{enabled: true}
 	tokenPath := filepath.Join(t.TempDir(), "admin-token")
-	engine.GET("/protected", localAdminAuth(store, localUser{
+	engine.GET("/protected", localAdminAuth(auth, store, localUser{
 		ID:       7,
 		Username: "local",
 		Role:     localRootRole,
@@ -159,6 +160,24 @@ func TestLocalAdminAuth(t *testing.T) {
 	newRequest.Header.Set(adminTokenHeader, "replacement")
 	engine.ServeHTTP(newToken, newRequest)
 	assert.Equal(t, http.StatusOK, newToken.Code)
+
+	auth.enabled = false
+	withoutAuthentication := httptest.NewRecorder()
+	engine.ServeHTTP(withoutAuthentication, httptest.NewRequest(http.MethodGet, "/protected", nil))
+	assert.Equal(t, http.StatusOK, withoutAuthentication.Code)
+}
+
+func TestAdminAuthSettingDefaultsOffAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "admin-auth.json")
+	store, err := newAdminAuthStore(path)
+	require.NoError(t, err)
+	assert.False(t, store.isEnabled())
+
+	require.NoError(t, store.setEnabled(true))
+	reloaded, err := newAdminAuthStore(path)
+	require.NoError(t, err)
+	assert.True(t, reloaded.isEnabled())
+	require.NoError(t, requirePrivateRegularFile(path, "administrator authentication setting"))
 }
 
 func TestAdminTokenChangePersistsAndRotatesImmediately(t *testing.T) {
@@ -167,13 +186,14 @@ func TestAdminTokenChangePersistsAndRotatesImmediately(t *testing.T) {
 	store := newAdminTokenStore("old-admin-token-value")
 	runtime := localRuntime{
 		config:     runtimeConfig{AdminTokenFile: tokenPath},
+		adminAuth:  &adminAuthStore{enabled: true},
 		adminToken: store,
 		rootUser:   localUser{ID: 7, Username: "local", Role: localRootRole},
 	}
 
 	engine := gin.New()
 	group := engine.Group("/local/api")
-	group.Use(localAdminAuth(store, runtime.rootUser))
+	group.Use(localAdminAuth(runtime.adminAuth, store, runtime.rootUser))
 	group.PUT("/admin-token", handleAdminTokenChange(runtime))
 
 	change := httptest.NewRecorder()
@@ -204,6 +224,54 @@ func TestAdminTokenChangePersistsAndRotatesImmediately(t *testing.T) {
 	newRequest.Header.Set(adminTokenHeader, "my-custom-admin-token-2026")
 	engine.ServeHTTP(newToken, newRequest)
 	assert.Equal(t, http.StatusOK, newToken.Code)
+}
+
+func TestAdminAuthCanBeEnabledWithCustomTokenAndDisabled(t *testing.T) {
+	root := t.TempDir()
+	tokenPath := filepath.Join(root, "admin-token")
+	authPath := filepath.Join(root, "admin-auth.json")
+	require.NoError(t, os.WriteFile(tokenPath, []byte("generated-but-not-required\n"), 0o600))
+	auth, err := newAdminAuthStore(authPath)
+	require.NoError(t, err)
+	runtime := localRuntime{
+		config:     runtimeConfig{AdminAuthFile: authPath, AdminTokenFile: tokenPath},
+		adminAuth:  auth,
+		adminToken: newAdminTokenStore("generated-but-not-required"),
+		rootUser:   localUser{ID: 7, Username: "local", Role: localRootRole},
+	}
+
+	engine := gin.New()
+	group := engine.Group("/local/api")
+	group.Use(localAdminAuth(runtime.adminAuth, runtime.adminToken, runtime.rootUser))
+	group.GET("/summary", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	group.PUT("/admin-auth", handleAdminAuthChange(runtime))
+
+	openResponse := httptest.NewRecorder()
+	engine.ServeHTTP(openResponse, httptest.NewRequest(http.MethodGet, "/local/api/summary", nil))
+	assert.Equal(t, http.StatusNoContent, openResponse.Code)
+
+	enableResponse := performJSON(engine, http.MethodPut, "/local/api/admin-auth", `{"enabled":true,"token":"my-custom-console-password"}`)
+	require.Equal(t, http.StatusOK, enableResponse.Code, enableResponse.Body.String())
+	assert.True(t, auth.isEnabled())
+	storedToken, err := os.ReadFile(tokenPath)
+	require.NoError(t, err)
+	assert.Equal(t, "my-custom-console-password\n", string(storedToken))
+
+	lockedResponse := httptest.NewRecorder()
+	engine.ServeHTTP(lockedResponse, httptest.NewRequest(http.MethodGet, "/local/api/summary", nil))
+	assert.Equal(t, http.StatusUnauthorized, lockedResponse.Code)
+
+	disableRequest := httptest.NewRequest(http.MethodPut, "/local/api/admin-auth", strings.NewReader(`{"enabled":false}`))
+	disableRequest.Header.Set("Content-Type", "application/json")
+	disableRequest.Header.Set(adminTokenHeader, "my-custom-console-password")
+	disableResponse := httptest.NewRecorder()
+	engine.ServeHTTP(disableResponse, disableRequest)
+	require.Equal(t, http.StatusOK, disableResponse.Code, disableResponse.Body.String())
+	assert.False(t, auth.isEnabled())
+
+	reopenedResponse := httptest.NewRecorder()
+	engine.ServeHTTP(reopenedResponse, httptest.NewRequest(http.MethodGet, "/local/api/summary", nil))
+	assert.Equal(t, http.StatusNoContent, reopenedResponse.Code)
 }
 
 func TestAdminTokenValidation(t *testing.T) {

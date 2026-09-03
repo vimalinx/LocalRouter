@@ -90,6 +90,8 @@ for _ in $(seq 1 100); do
 done
 curl --noproxy '*' --fail --silent "http://127.0.0.1:$gateway_port/healthz" | jq -e '.ok and .engine == "localrouter-native"' >/dev/null
 curl --noproxy '*' --fail --silent "http://127.0.0.1:$gateway_port/.well-known/localrouter.json" | jq -e '.scope == "loopback" and (.protocols | length == 0)' >/dev/null
+curl --noproxy '*' --fail --silent "http://127.0.0.1:$gateway_port/local/status" | jq -e '.admin_auth_enabled == false' >/dev/null
+curl --noproxy '*' --fail --silent "http://127.0.0.1:$gateway_port/local/api/summary" | jq -e '.success == true and .data.admin_auth_enabled == false' >/dev/null
 
 test -z "$(find "$config_home/localrouter/protocols" -maxdepth 1 -type f -name '*.json' -print -quit)"
 test -f "$config_home/localrouter/protocols/schema/protocol-pack-v3.schema.json"
@@ -107,7 +109,7 @@ test "$(stat -c '%a' "$data_home/localrouter/api-token")" = "600"
 
 paths_json="$(HOME="$test_home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" XDG_STATE_HOME="$state_home" XDG_CACHE_HOME="$cache_home" "$prefix/bin/localrouter" paths)"
 jq -e --arg config "$config_home/localrouter" --arg data "$data_home/localrouter" --arg state "$state_home/localrouter" --arg cache "$cache_home/localrouter" \
-  '.config_dir == $config and .channel_profiles == ($config + "/channel-profiles.json") and .data_dir == $data and .state_dir == $state and .cache_dir == $cache' <<<"$paths_json" >/dev/null
+  '.config_dir == $config and .channel_profiles == ($config + "/channel-profiles.json") and .data_dir == $data and .state_dir == $state and .cache_dir == $cache and .admin_auth_file == ($data + "/admin-auth.json")' <<<"$paths_json" >/dev/null
 
 HOME="$test_home" \
 XDG_DATA_HOME="$data_home" \

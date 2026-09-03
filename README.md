@@ -56,25 +56,26 @@ cd LocalRouter
 | XDG 目录 | 默认位置 | 内容 |
 |---|---|---|
 | 配置 | `~/.config/localrouter` | `config.env`、模型渠道 Profile、可编辑 Protocol Packs |
-| 数据 | `~/.local/share/localrouter` | SQLite、管理 Key、API Key、Provider 凭据与池定位器 |
+| 数据 | `~/.local/share/localrouter` | SQLite、可选控制台密码、管理 Key、API Key、Provider 凭据与池定位器 |
 | 状态 | `~/.local/state/localrouter` | 调用事件、工作流、调度状态、草稿和发布历史 |
 | 缓存 | `~/.cache/localrouter` | 可删除的临时缓存 |
 
 私有目录使用 `0700`，Key、数据库和状态文件使用 `0600`。运行
 `localrouter paths` 可以查看当前机器解析后的路径，但不会显示任何 Key。
 
-## 自定义控制台登录密钥
+## 可选的控制台密码保护
 
-第一次使用自动生成的 `~/.local/share/localrouter/admin-token` 解锁控制台。进入“运行概览”，点击“更改登录密钥”即可设置自己的密钥：
+控制台默认只监听 loopback，并以免密模式直接进入，不需要查找或输入密钥。需要防止同一用户会话中的其他本机进程访问管理 API 时，可在“运行概览 → 控制台密码保护”中开启，并当场设置自己的密码：
 
 - 长度为 16–512 个可打印 ASCII 字符；
 - 允许中间空格，不允许首尾空白；
-- 服务端原子写回 XDG 数据目录中的 `admin-token` 并保持 `0600`；
+- 服务端原子写回 XDG 数据目录中的 `admin-token`，把开关写入 `admin-auth.json`，两者都保持 `0600`；
 - 新密钥立即生效，不需要重启；
 - 当前标签页自动切换到新密钥，其他旧标签页会失效；
-- 密钥不会出现在 API 响应、日志或 LocalStorage 中。
+- 密码不会出现在 API 响应、日志或 LocalStorage 中；
+- 可随时关闭密码保护，恢复默认免密模式，无需重启。
 
-管理密钥和客户端 API Token 是两套独立凭据。更改登录密钥不会影响已经发给应用或 Agent 的 API Token。
+控制台密码保护与人工维护 MCP 共用本机管理员凭据，但要求它的入口不同：`/local/api/*` 是否要求该凭据由控制台开关决定，`/manage/mcp` 的人工维护入口始终要求它，服务调用则始终使用另一套 API Token。更改控制台密码不会影响已经发给应用或 Agent 的 API Token。
 
 ## 能做什么
 
@@ -268,7 +269,7 @@ lr manage-call localrouter_draft_review '{"draft_id":"agent-change"}'
 | `LOCALROUTER_MAINTENANCE_MCP_URL` | 维护 MCP，默认 `http://127.0.0.1:8317/manage/mcp` |
 | `LOCALROUTER_API_TOKEN_FILE` | 默认 `$XDG_DATA_HOME/localrouter/api-token` |
 | `LOCALROUTER_MAINTAINER_TOKEN_FILE` | 可选；显式指定已授权 Agent 的维护专用 Token locator；无默认值 |
-| `LOCALROUTER_ADMIN_TOKEN_FILE` | 默认 `$XDG_DATA_HOME/localrouter/admin-token`；供控制台和人工 `lr manage-*` 使用，不交给 Agent |
+| `LOCALROUTER_ADMIN_TOKEN_FILE` | 默认 `$XDG_DATA_HOME/localrouter/admin-token`；控制台密码保护开启时用于 `/local/api/*`，并始终供人工 `lr manage-*` 使用；不交给消费型 Agent |
 
 `lr` 会拒绝非回环 Base URL、符号链接 Token 文件、错误所有者以及非 `0600` 权限，避免环境变量被篡改后把 Token 发往外部地址。
 

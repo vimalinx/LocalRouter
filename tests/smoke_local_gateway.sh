@@ -48,9 +48,21 @@ done
 
 jq -e '.ok == true and .mode == "local-self-use" and .oauth == false' "$smoke_root/health.json" >/dev/null
 curl --fail --silent --show-error "http://127.0.0.1:${smoke_port}/local/status" >"$smoke_root/status.json"
-jq -e '.success == true and .oauth == "external-maintainer"' "$smoke_root/status.json" >/dev/null
+jq -e '.success == true and .oauth == "external-maintainer" and .admin_auth_enabled == false' "$smoke_root/status.json" >/dev/null
 curl --fail --silent --show-error "http://127.0.0.1:${smoke_port}/" >"$smoke_root/index.html"
 grep -q 'LocalRouter' "$smoke_root/index.html"
+
+curl --fail --silent --show-error "http://127.0.0.1:${smoke_port}/local/api/summary" >"$smoke_root/summary.json"
+jq -e '.success == true and .data.admin_auth_enabled == false and .data.billing == "disabled" and .data.oauth == "external-maintainer"' "$smoke_root/summary.json" >/dev/null
+
+initial_admin_token="fixture-custom-console-password"
+jq -n --arg token "$initial_admin_token" '{enabled:true,token:$token}' >"$smoke_root/admin-auth-enable.json"
+curl --fail --silent --show-error --header 'Content-Type: application/json' \
+  --request PUT \
+  --data-binary @"$smoke_root/admin-auth-enable.json" \
+  "http://127.0.0.1:${smoke_port}/local/api/admin-auth" >"$smoke_root/admin-auth-enable-response.json"
+jq -e '.success == true and .data.enabled == true and .data.changed == true' "$smoke_root/admin-auth-enable-response.json" >/dev/null
+test "$(tr -d '\n' <"$smoke_root/data/admin-token")" = "$initial_admin_token"
 
 unauthorized_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${smoke_port}/local/api/summary")"
 test "$unauthorized_status" = "401"
@@ -59,7 +71,7 @@ sed 's/^/X-Local-Admin: /' "$smoke_root/data/admin-token" >"$smoke_root/admin-he
 chmod 0600 "$smoke_root/admin-header"
 curl --fail --silent --show-error --header @"$smoke_root/admin-header" \
   "http://127.0.0.1:${smoke_port}/local/api/summary" >"$smoke_root/summary.json"
-jq -e '.success == true and .data.billing == "disabled" and .data.oauth == "external-maintainer"' "$smoke_root/summary.json" >/dev/null
+jq -e '.success == true and .data.admin_auth_enabled == true' "$smoke_root/summary.json" >/dev/null
 
 rotated_admin_token="fixture-custom-admin-token-rotate"
 jq -n --arg token "$rotated_admin_token" '{token:$token}' >"$smoke_root/admin-token-change.json"
@@ -80,6 +92,14 @@ chmod 0600 "$smoke_root/admin-header"
 curl --fail --silent --show-error --header @"$smoke_root/admin-header" \
   "http://127.0.0.1:${smoke_port}/local/api/summary" >"$smoke_root/rotated-summary.json"
 jq -e '.success == true' "$smoke_root/rotated-summary.json" >/dev/null
+
+curl --fail --silent --show-error --header @"$smoke_root/admin-header" \
+  --header 'Content-Type: application/json' \
+  --request PUT \
+  --data '{"enabled":false}' \
+  "http://127.0.0.1:${smoke_port}/local/api/admin-auth" >"$smoke_root/admin-auth-disable-response.json"
+jq -e '.success == true and .data.enabled == false and .data.changed == true' "$smoke_root/admin-auth-disable-response.json" >/dev/null
+curl --fail --silent --show-error "http://127.0.0.1:${smoke_port}/local/api/summary" | jq -e '.data.admin_auth_enabled == false' >/dev/null
 
 sed 's/^/Authorization: Bearer /' "$smoke_root/data/api-token" >"$smoke_root/api-header"
 chmod 0600 "$smoke_root/api-header"
@@ -121,6 +141,7 @@ done
 
 test "$(stat -c '%a' "$smoke_root/data")" = "700"
 test "$(stat -c '%a' "$smoke_root/data/admin-token")" = "600"
+test "$(stat -c '%a' "$smoke_root/data/admin-auth.json")" = "600"
 test "$(stat -c '%a' "$smoke_root/data/api-token")" = "600"
 test "$(stat -c '%a' "$smoke_root/data/localrouter.db")" = "600"
 

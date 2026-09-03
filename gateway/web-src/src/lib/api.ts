@@ -26,7 +26,7 @@ export async function adminRequest<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json')
-  headers.set('X-Local-Admin', adminToken)
+  if (adminToken) headers.set('X-Local-Admin', adminToken)
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }

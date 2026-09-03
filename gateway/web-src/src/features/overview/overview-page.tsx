@@ -153,6 +153,7 @@ export function OverviewPage(props: {
   analytics: Analytics
   protocols: ProtocolView[]
   onChangeAdminToken: (token: string) => Promise<void>
+  onChangeAdminAuth: (enabled: boolean, token?: string) => Promise<void>
 }) {
   const [trendMetric, setTrendMetric] = useState<TrendMetric>('requests')
   const origin = window.location.origin
@@ -268,10 +269,20 @@ export function OverviewPage(props: {
           </div>
           <div className='flex items-center justify-between gap-3 py-4'>
             <div className='min-w-0'>
-              <p className='flex items-center gap-2 text-xs font-medium'><KeyRound aria-hidden='true' className='size-3.5 text-primary' />控制台登录密钥</p>
-              <p className='mt-1 text-[11px] text-muted-foreground'>仅写入本机受保护文件</p>
+              <p className='flex items-center gap-2 text-xs font-medium'>
+                <KeyRound aria-hidden='true' className='size-3.5 text-primary' />
+                控制台密码保护
+                <Badge variant={props.summary.admin_auth_enabled ? 'success' : 'secondary'}>
+                  {props.summary.admin_auth_enabled ? '已开启' : '默认关闭'}
+                </Badge>
+              </p>
+              <p className='mt-1 text-[11px] text-muted-foreground'>仅监听 loopback；开启后使用自定义密码</p>
             </div>
-            <AdminTokenDialog onChange={props.onChangeAdminToken} />
+            <AdminTokenDialog
+              enabled={props.summary.admin_auth_enabled}
+              onChange={props.onChangeAdminToken}
+              onSetEnabled={props.onChangeAdminAuth}
+            />
           </div>
           <p className='py-3 text-[11px] leading-5 text-muted-foreground'>号池参考余额是当前可用资源估值，不属于历史消耗；只有可安全换算为“每次请求”的服务价格才计入成本。</p>
         </aside>

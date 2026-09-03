@@ -19,6 +19,7 @@ describe('UnlockView', () => {
           success: true,
           mode: 'local-self-use',
           listen: '127.0.0.1:8317',
+          admin_auth_enabled: true,
           admin_token_file: '/private-host/LocalRouter/data/admin-token',
           api_token_file: '/private-host/LocalRouter/data/api-token',
           database_path: '/private-host/LocalRouter/data/localrouter.db',

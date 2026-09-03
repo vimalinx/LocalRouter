@@ -9,7 +9,7 @@ Mark each row pass, fail, or not covered. Do not collapse the rows into one “w
 | Contract | Stable operation references, required path/query parameters, and workflow references |
 | Draft impact | Every changed file, Pack section, operation, pool mode, and `pool_id` was reviewed before plan |
 | Security | Loopback binding, path allowlist, protected credential modes, sanitized docs/state |
-| Authorization surfaces | Service Tokens are call-only; administrator credential remains separate; optional Agent maintenance defaults off and accepts only a maintenance-only `localrouter.maintain` Token |
+| Authorization surfaces | Console `/local/api` auth defaults off on loopback and can be enabled with a custom password; `/manage/mcp` still requires the separate administrator lane; Service Tokens are call-only; optional Agent maintenance defaults off and accepts only a maintenance-only `localrouter.maintain` Token |
 | Transform | Mock proves exact upstream path, query, headers, request body, and public response |
 | Authentication | Exact signature/token behavior, cache/refresh boundary, and no secret disclosure |
 | Retry safety | No unsafe replay; idempotency key remains stable; unknown outcome is explicit |
