@@ -251,6 +251,11 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"workflow": "/w/{pack}/{workflow}", "docs": "/docs/agent.json",
 				"selection_mode": "agent", "merged": false,
 			},
+			"agent_identity": gin.H{
+				"binding": "service-token", "registration": "operator-issued", "console": "/#tokens",
+				"required_fields": []string{"agent_code", "agent_name", "workspace"},
+				"rule":            "every non-system service Token is bound to one registered Agent identity; usage and quotas are attributed by Token ID",
+			},
 			"invocation": gin.H{
 				"operation_key":       "stable Pack and operation selector: <pack>.<operation_id>",
 				"operation_id":        "semantic selector for Agent APIs, lr and MCP; never an HTTP path",

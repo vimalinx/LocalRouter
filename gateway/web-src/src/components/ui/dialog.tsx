@@ -13,11 +13,11 @@ function DialogContent(
 ) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className='fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-[2px] data-[state=closed]:animate-out data-[state=open]:animate-in' />
+      <DialogPrimitive.Overlay className='fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-[2px] data-[state=closed]:animate-out data-[state=open]:animate-in' />
       <DialogPrimitive.Content
         {...props}
         className={cn(
-          'fixed left-1/2 top-1/2 z-50 grid max-h-[90svh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border bg-background p-6 shadow-xl outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'fixed left-1/2 top-1/2 z-[60] grid max-h-[90svh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border bg-background p-6 shadow-xl outline-none focus-visible:ring-2 focus-visible:ring-ring',
           props.className
         )}
       >

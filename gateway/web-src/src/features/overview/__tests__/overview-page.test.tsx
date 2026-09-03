@@ -91,7 +91,7 @@ describe('OverviewPage', () => {
     expect(screen.getAllByText('Search API').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('$25.00')).toBeInTheDocument()
     expect(screen.getByText('$0.10 部分')).toBeInTheDocument()
-    expect(screen.getByText(/号池参考余额是当前可用资源估值/)).toBeInTheDocument()
+    expect(screen.getByText('按 Agent 汇总')).toBeInTheDocument()
     expect(screen.getByLabelText('供应商图例')).toHaveTextContent('OpenAI compatible')
     expect(screen.getByLabelText('供应商图例')).toHaveTextContent('Search API')
 
@@ -109,7 +109,16 @@ describe('OverviewPage', () => {
     }
     render(<OverviewPage summary={{ ...summary, channels: 0, protocols: 0 }} analytics={empty} protocols={[]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
     expect(screen.getByText('还没有可统计的服务。')).toBeInTheDocument()
-    expect(screen.getByText('还没有模型调用记录。')).toBeInTheDocument()
+    expect(screen.getAllByText('还没有模型调用记录。')).toHaveLength(2)
     expect(screen.getByText('未接入')).toBeInTheDocument()
+  })
+
+  it('labels unavailable service cost as missing pricing', () => {
+    const missingPricing = {
+      ...analytics,
+      services: [{ ...analytics.services[1], cost_usd: 0, cost_status: 'unavailable' as const }],
+    }
+    render(<OverviewPage summary={summary} analytics={missingPricing} protocols={[protocol]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
+    expect(screen.getByText('未接入价格')).toBeVisible()
   })
 })

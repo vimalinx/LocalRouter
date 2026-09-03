@@ -6,16 +6,15 @@ import { Toaster, toast } from 'sonner'
 import { AppShell, type SectionId } from '@/components/app-shell'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
-import { ChannelsPage } from '@/features/channels/channels-page'
-import { ControlPlanePage } from '@/features/control/control-plane-page'
 import { UnlockView } from '@/features/auth/unlock-view'
 import { LogsPage } from '@/features/logs/logs-page'
 import { JobsPage } from '@/features/jobs/jobs-page'
 import { OverviewPage } from '@/features/overview/overview-page'
-import { ProtocolsPage } from '@/features/protocols/protocols-page'
+import { ServicesPage } from '@/features/services/services-page'
 import { TokensPage } from '@/features/tokens/tokens-page'
 import { adminRequest, normalizeItems, publicRequest } from '@/lib/api'
 import type {
+  AgentUsage,
 	Analytics,
   Channel,
   LocalToken,
@@ -36,9 +35,7 @@ import type {
 const validSections = new Set<SectionId>([
   'overview',
   'protocols',
-  'control',
   'jobs',
-  'channels',
   'tokens',
   'logs',
 ])
@@ -57,15 +54,17 @@ type ConsoleData = {
   revisions: ProtocolRevision[]
   jobs: WorkflowJob[]
   events: ProtocolEvent[]
+  agentUsage: AgentUsage[]
 }
 
 function currentSection(): SectionId {
-  const section = window.location.hash.slice(1) as SectionId
+  const raw = window.location.hash.slice(1)
+  const section = (raw === 'channels' || raw === 'control' ? 'protocols' : raw) as SectionId
   return validSections.has(section) ? section : 'overview'
 }
 
 async function loadConsole(adminToken: string): Promise<ConsoleData> {
-  const [summary, analytics, protocols, providers, channels, tokens, logs, policies, maintenanceAccess, drafts, revisions, jobs, events] = await Promise.all([
+  const [summary, analytics, protocols, providers, channels, tokens, logs, policies, maintenanceAccess, drafts, revisions, jobs, events, agentUsage] = await Promise.all([
     adminRequest<Summary>('/local/api/summary', adminToken),
     adminRequest<Analytics>('/local/api/analytics', adminToken),
     adminRequest<ProtocolView[]>('/local/api/protocols', adminToken),
@@ -79,6 +78,7 @@ async function loadConsole(adminToken: string): Promise<ConsoleData> {
     adminRequest<ProtocolRevision[]>('/local/api/protocols/history', adminToken),
     adminRequest<WorkflowJob[]>('/local/api/workflows/jobs', adminToken),
     adminRequest<ProtocolEvent[]>('/local/api/protocol-events?limit=100', adminToken),
+    adminRequest<AgentUsage[]>('/local/api/agent-usage', adminToken),
   ])
   return {
     summary,
@@ -94,6 +94,7 @@ async function loadConsole(adminToken: string): Promise<ConsoleData> {
     revisions,
     jobs,
     events,
+    agentUsage,
   }
 }
 
@@ -238,22 +239,20 @@ export default function App() {
     const data = consoleData.data
     switch (activeSection) {
       case 'protocols':
-        content = <ProtocolsPage protocols={data.protocols} adminToken={requestAdminToken} onChanged={async () => { await consoleData.refetch() }} />
-        break
-      case 'channels':
         content = (
-          <ChannelsPage
+          <ServicesPage
             adminToken={requestAdminToken}
+            protocols={data.protocols}
             channels={data.channels}
             providers={data.providers}
+            drafts={data.drafts}
+            revisions={data.revisions}
+            initialTab={window.location.hash === '#channels' ? 'models' : 'services'}
             onChanged={async () => {
               await consoleData.refetch()
             }}
           />
         )
-        break
-      case 'control':
-        content = <ControlPlanePage adminToken={requestAdminToken} drafts={data.drafts} revisions={data.revisions} protocols={data.protocols} onChanged={async () => { await consoleData.refetch() }} />
         break
       case 'jobs':
         content = <JobsPage jobs={data.jobs} events={data.events} />
@@ -263,6 +262,7 @@ export default function App() {
           <TokensPage
             adminToken={requestAdminToken}
             tokens={data.tokens}
+            usage={data.agentUsage}
             policies={data.policies}
             maintenanceAccess={data.maintenanceAccess}
             apiTokenFile={data.summary.api_token_file}
@@ -282,6 +282,7 @@ export default function App() {
             summary={data.summary}
             analytics={data.analytics}
             protocols={data.protocols}
+            agentUsage={data.agentUsage}
             onChangeAdminToken={changeAdminToken}
             onChangeAdminAuth={changeAdminAuth}
           />

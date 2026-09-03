@@ -9,6 +9,7 @@
 - 本地管理 API 默认仅靠 loopback 边界免密使用，并可选用 `X-Local-Admin` 密码保护；
 - 保留 OpenAI、Anthropic 与 Gemini 协议入口；
 - 每条模型渠道可独立配置供应商请求 Profile：固定、移除或补充转发安全请求头，控制 User-Agent 和查询串编码；上游鉴权在 Profile 之后注入且不可被覆盖；
+- 控制台把模型渠道和 Protocol Pack 号池合并到同一工作区，并将 Pack/operation 的即时启停状态保存在私有 `service-controls.json`；该运行态覆盖不改发布定义或 digest；
 - 不注册用户注册、登录、OAuth、支付、订阅和公开管理站点路由；
 - 不包含用户平台、支付、订阅、注册或 Provider OAuth 后台任务；
 - 从 `protocols/*.json` 加载经过验证的 Protocol Pack v1/v2：REST/SSE、multipart/文件字节透传、路径/查询/JSON 转换、本地或外部号池、资源粘性和异步 Workflow，并把生成的运行事实与 `protocols/<id>/guides/*.md` 中的 Agent 指南合并发布到 `/docs`。
@@ -73,6 +74,7 @@ make -C gateway web
 - Pack 生命周期：Agent 使用 `/manage/mcp` 或上级 `lr manage-*`；LocalRouter 负责路径、格式、原子安装、线上摘要复验和本地失败自动回滚。`/local/api/protocols/*` 继续作为人工控制台使用的管理 API。
 - 端口草稿：维护工具支持隔离创建、语义修改、校验和计划；精确 digest 发布失败时保留草稿，并返回结构化阶段、错误码和回滚结果。
 - Token 策略：`/local/api/token-policies/*` 限制入口、Pack、operation、model、每分钟/每日请求、并发与到期时间。
+- Agent 注册与计量：非系统 Token 必须绑定唯一 `agent_code`、名称和工作区；`GET /local/api/agent-usage` 按 Token ID 合并模型日志与 Protocol Pack 事件，返回调用、Token、成本状态和额度使用。`GET /agent/whoami` 返回当前 Token 的脱敏 Agent 身份。
 - 任务与审计：`/local/api/workflows/jobs` 和 `/local/api/protocol-events` 只返回脱敏状态；客户端只能列出和操作自己 Token 创建的新 Job。
 
 客户端应通过其 secret-file、环境文件或系统凭据能力读取

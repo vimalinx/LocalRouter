@@ -58,6 +58,14 @@ type protocolRegistry struct {
 	policies       *tokenPolicyStore
 	events         *protocolEventStore
 	verifyInstall  func(root, digest string) error
+	activationPath string
+	activations    protocolActivationDocument
+}
+
+type protocolActivationDocument struct {
+	SchemaVersion string                     `json:"schema_version"`
+	Services      map[string]bool            `json:"services,omitempty"`
+	Operations    map[string]map[string]bool `json:"operations,omitempty"`
 }
 
 type protocolDefinition struct {
@@ -145,6 +153,7 @@ type protocolDynamicInput struct {
 // Pack, so a Pack can never publish a misleading call URL.
 type protocolPublicRoute struct {
 	protocolRoute
+	Enabled            bool                            `json:"enabled"`
 	OperationKey       string                          `json:"operation_key"`
 	OperationIDRole    string                          `json:"operation_id_role"`
 	OperationIDIsURL   bool                            `json:"operation_id_is_url"`
@@ -217,6 +226,7 @@ func publishProtocolRoute(packID, mount string, routes []protocolRoute, route pr
 	}
 	published := protocolPublicRoute{
 		protocolRoute:    route,
+		Enabled:          true,
 		OperationKey:     packID + "." + route.OperationID,
 		OperationIDRole:  "semantic-selector",
 		OperationIDIsURL: false,
@@ -290,11 +300,114 @@ func newProtocolRegistryWithState(dir, dataDir, stateDir string) (*protocolRegis
 		},
 		readinessCache: make(map[string]protocolReadinessRuntime),
 		oauthTokens:    make(map[string]protocolOAuthToken),
+		activationPath: filepath.Join(dataDir, "service-controls.json"),
+		activations: protocolActivationDocument{
+			SchemaVersion: "1",
+			Services:      make(map[string]bool),
+			Operations:    make(map[string]map[string]bool),
+		},
+	}
+	if err := registry.loadActivations(); err != nil {
+		return nil, err
 	}
 	if err := registry.reload(); err != nil {
 		return nil, err
 	}
 	return registry, nil
+}
+
+func (registry *protocolRegistry) loadActivations() error {
+	if registry.activationPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(registry.activationPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read service controls: %w", err)
+	}
+	var document protocolActivationDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		return fmt.Errorf("decode service controls: %w", err)
+	}
+	if document.SchemaVersion != "1" {
+		return fmt.Errorf("unsupported service controls schema_version %q", document.SchemaVersion)
+	}
+	if document.Services == nil {
+		document.Services = make(map[string]bool)
+	}
+	if document.Operations == nil {
+		document.Operations = make(map[string]map[string]bool)
+	}
+	registry.activations = document
+	return nil
+}
+
+func (registry *protocolRegistry) saveActivationsLocked() error {
+	if registry.activationPath == "" {
+		return nil
+	}
+	data, err := json.MarshalIndent(registry.activations, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeSecretAtomic(registry.activationPath, string(data))
+}
+
+func (registry *protocolRegistry) serviceEnabled(definition protocolDefinition) bool {
+	if !definition.Enabled {
+		return false
+	}
+	registry.mu.RLock()
+	enabled, configured := registry.activations.Services[definition.ID]
+	registry.mu.RUnlock()
+	return !configured || enabled
+}
+
+func (registry *protocolRegistry) operationEnabled(protocolID, operationID string) bool {
+	registry.mu.RLock()
+	operations := registry.activations.Operations[protocolID]
+	enabled, configured := operations[operationID]
+	registry.mu.RUnlock()
+	return !configured || enabled
+}
+
+func (registry *protocolRegistry) setActivation(protocolID, operationID string, enabled bool) error {
+	registry.mu.Lock()
+	previous := registry.activations
+	previous.Services = cloneBoolMap(registry.activations.Services)
+	previous.Operations = cloneNestedBoolMap(registry.activations.Operations)
+	if operationID == "" {
+		registry.activations.Services[protocolID] = enabled
+	} else {
+		if registry.activations.Operations[protocolID] == nil {
+			registry.activations.Operations[protocolID] = make(map[string]bool)
+		}
+		registry.activations.Operations[protocolID][operationID] = enabled
+	}
+	err := registry.saveActivationsLocked()
+	if err != nil {
+		registry.activations = previous
+	}
+	registry.mu.Unlock()
+	return err
+}
+
+func cloneBoolMap(source map[string]bool) map[string]bool {
+	result := make(map[string]bool, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func cloneNestedBoolMap(source map[string]map[string]bool) map[string]map[string]bool {
+	result := make(map[string]map[string]bool, len(source))
+	for key, value := range source {
+		result[key] = cloneBoolMap(value)
+	}
+	return result
 }
 
 func (registry *protocolRegistry) reload() error {
@@ -642,13 +755,17 @@ func (registry *protocolRegistry) views() []protocolView {
 	for _, definition := range definitions {
 		ready, status := registry.readiness(definition)
 		mount := "/p/" + definition.ID
+		publicRoutes := publishProtocolRoutes(definition.ID, mount, definition.Routes)
+		for index := range publicRoutes {
+			publicRoutes[index].Enabled = registry.operationEnabled(definition.ID, publicRoutes[index].OperationID)
+		}
 		views = append(views, protocolView{
 			ID: definition.ID, PackKey: "protocol:" + definition.ID, Kind: "protocol",
 			Name: definition.Name, Description: definition.Description,
-			Mount: mount, OpenAIBaseURL: protocolOpenAIBaseURL(definition.ID, definition.Routes), Enabled: definition.Enabled, Ready: ready,
+			Mount: mount, OpenAIBaseURL: protocolOpenAIBaseURL(definition.ID, definition.Routes), Enabled: registry.serviceEnabled(definition), Ready: ready,
 			WorkflowMount: "/w/" + definition.ID,
 			Status:        status, StatusLabel: protocolStatusLabel(status), Routes: definition.Routes,
-			PublicRoutes: publishProtocolRoutes(definition.ID, mount, definition.Routes),
+			PublicRoutes: publicRoutes,
 			Guides:       guideSummaries[definition.ID], Docs: protocolDocLinksFor(definition.ID),
 			Pool: registry.poolView(definition), Workflows: definition.Workflows,
 			Pricing: definition.Pricing,
@@ -689,7 +806,7 @@ func protocolStatusLabel(status string) string {
 }
 
 func (registry *protocolRegistry) readiness(definition protocolDefinition) (bool, string) {
-	if !definition.Enabled {
+	if !registry.serviceEnabled(definition) {
 		return false, "disabled"
 	}
 	credentialReady := definition.Auth.Type == "none"
@@ -926,6 +1043,11 @@ func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 	if !ready {
 		view, _ := registry.viewFor(definition.ID)
 		registry.writeReadinessError(c, view, matched.Route.OperationID, status)
+		return
+	}
+	if !registry.operationEnabled(definition.ID, matched.Route.OperationID) {
+		view, _ := registry.viewFor(definition.ID)
+		registry.writeReadinessError(c, view, matched.Route.OperationID, "disabled")
 		return
 	}
 	if available, availabilityStatus := routeAvailabilityReady(matched.Route.Availability, time.Now().UTC()); !available {
@@ -1270,6 +1392,47 @@ func (registry *protocolRegistry) copyProtocolResponseHeaders(c *gin.Context, de
 
 func (registry *protocolRegistry) handleAdminList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": registry.adminViews()})
+}
+
+func (registry *protocolRegistry) handleAdminActivation(c *gin.Context) {
+	definition, ok := registry.get(c.Param("id"))
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "unknown protocol"})
+		return
+	}
+	operationID := c.Param("operation")
+	if operationID != "" {
+		found := false
+		for _, route := range definition.Routes {
+			if route.OperationID == operationID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "unknown operation"})
+			return
+		}
+	}
+	var request struct {
+		Enabled *bool `json:"enabled"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(c.Request.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || request.Enabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "enabled must be a boolean"})
+		return
+	}
+	if *request.Enabled && !definition.Enabled {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "the Protocol Pack is disabled by its published definition"})
+		return
+	}
+	if err := registry.setActivation(definition.ID, operationID, *request.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist service activation"})
+		return
+	}
+	view, _ := registry.viewFor(definition.ID)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": view})
 }
 
 func (registry *protocolRegistry) handleAdminReload(c *gin.Context) {

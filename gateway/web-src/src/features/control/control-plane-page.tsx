@@ -27,7 +27,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -58,6 +57,12 @@ type ConfirmAction =
   | { kind: 'delete-file'; draftId: string; path: string }
   | { kind: 'rollback'; revision: ProtocolRevision }
   | { kind: 'reset-pool'; protocol: ProtocolView }
+
+type EditorIntent =
+  | { kind: 'create'; id: string }
+  | { kind: 'edit'; draft: ProtocolDraft }
+
+const AI_REMINDER_STORAGE_KEY = 'localrouter.protocol-editor.ai-reminder-dismissed'
 
 const sectionLabels: Record<string, string> = {
   definition: '协议定义',
@@ -128,8 +133,8 @@ export function ControlPlanePage(props: {
   revisions: ProtocolRevision[]
   protocols: ProtocolView[]
   onChanged: () => Promise<void>
+  embedded?: boolean
 }) {
-  const [createOpen, setCreateOpen] = useState(false)
   const [draftId, setDraftId] = useState('')
   const [busy, setBusy] = useState('')
   const [planned, setPlanned] = useState<{ draft: string; digest: string } | null>(null)
@@ -139,6 +144,8 @@ export function ControlPlanePage(props: {
   const [fileContent, setFileContent] = useState('')
   const [savedContent, setSavedContent] = useState('')
   const [newFilePath, setNewFilePath] = useState('')
+  const [editorIntent, setEditorIntent] = useState<EditorIntent | null>(null)
+  const [dismissAiReminder, setDismissAiReminder] = useState(false)
 
   const managedDraft = props.drafts.find((draft) => draft.id === managedDraftId)
   const localPools = props.protocols.filter((protocol) => protocol.pool_runtime?.ownership === 'local')
@@ -152,17 +159,21 @@ export function ControlPlanePage(props: {
     return result
   }, [props.drafts])
 
-  async function createDraft(event: FormEvent) {
-    event.preventDefault()
-    const id = draftId.trim()
-    if (!id) return
+  function reminderDismissed() {
+    try {
+      return typeof window.localStorage?.getItem === 'function' && window.localStorage.getItem(AI_REMINDER_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  }
+
+  async function createDraftById(id: string) {
     setBusy('create')
     try {
       await adminRequest('/local/api/protocol-drafts', props.adminToken, {
         method: 'POST',
         body: JSON.stringify({ id }),
       })
-      setCreateOpen(false)
       setDraftId('')
       await props.onChanged()
       toast.success(`草稿 ${id} 已从当前发布版创建`)
@@ -171,6 +182,17 @@ export function ControlPlanePage(props: {
     } finally {
       setBusy('')
     }
+  }
+
+  function createDraft(event: FormEvent) {
+    event.preventDefault()
+    const id = draftId.trim()
+    if (!id) return
+    if (!reminderDismissed()) {
+      setEditorIntent({ kind: 'create', id })
+      return
+    }
+    void createDraftById(id)
   }
 
   async function validate(draft: ProtocolDraft) {
@@ -248,7 +270,7 @@ export function ControlPlanePage(props: {
     }
   }
 
-  function openDraft(draft: ProtocolDraft) {
+  function openDraftNow(draft: ProtocolDraft) {
     setManagedDraftId(draft.id)
     const preferred = draft.impact.files.find((file) => file.change !== 'removed' && isTextFile(file.path))?.path
       || draft.files.find(isTextFile)
@@ -259,6 +281,30 @@ export function ControlPlanePage(props: {
       setFileContent('')
       setSavedContent('')
     }
+  }
+
+  function openDraft(draft: ProtocolDraft) {
+    if (!reminderDismissed()) {
+      setEditorIntent({ kind: 'edit', draft })
+      return
+    }
+    openDraftNow(draft)
+  }
+
+  function continueEditorIntent() {
+    const intent = editorIntent
+    if (!intent) return
+    if (dismissAiReminder) {
+      try {
+        if (typeof window.localStorage?.setItem === 'function') window.localStorage.setItem(AI_REMINDER_STORAGE_KEY, '1')
+      } catch {
+        // Storage may be disabled; editing remains available for this session.
+      }
+    }
+    setEditorIntent(null)
+    setDismissAiReminder(false)
+    if (intent.kind === 'create') void createDraftById(intent.id)
+    else openDraftNow(intent.draft)
   }
 
   function beginNewFile() {
@@ -341,20 +387,17 @@ export function ControlPlanePage(props: {
           : ''
 
   return (
-    <div className='space-y-6'>
+    <div className={props.embedded ? 'space-y-5' : 'space-y-6'}>
       <header className='flex min-h-10 flex-wrap items-center gap-2 border-b pb-2'>
         <div>
-          <h1 className='text-lg font-semibold tracking-tight'>Agent 工作台</h1>
+          <h1 className='text-lg font-semibold tracking-tight'>协议发布台</h1>
           <p className='text-[11px] text-muted-foreground'>接入 · 变更 · 人工复核 · 号池 · 发布</p>
         </div>
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogTrigger asChild><Button className='ml-auto' size='sm'><Plus />新建草稿</Button></DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle>新建 Pack 草稿</DialogTitle><DialogDescription>从当前发布版创建隔离副本，Agent 与人工在副本内协作。</DialogDescription></DialogHeader>
-            <form id='create-draft' onSubmit={createDraft} className='grid gap-2'><Label htmlFor='draft-id'>草稿 ID</Label><Input id='draft-id' pattern='[a-z][a-z0-9-]{1,31}' placeholder='agent-change' value={draftId} onChange={(event) => setDraftId(event.target.value)} /></form>
-            <DialogFooter><Button variant='outline' onClick={() => setCreateOpen(false)}>取消</Button><Button form='create-draft' type='submit' disabled={busy === 'create'}>创建</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <form onSubmit={createDraft} className='ml-auto flex min-w-0 items-end gap-1.5'>
+          <Label className='sr-only' htmlFor='draft-id'>草稿 ID</Label>
+          <Input className='h-8 w-40 text-xs' id='draft-id' pattern='[a-z][a-z0-9-]{1,31}' placeholder='草稿 ID' value={draftId} onChange={(event) => setDraftId(event.target.value)} />
+          <Button type='submit' size='sm' disabled={busy === 'create' || !draftId.trim()}><Plus />{busy === 'create' ? '创建中' : '创建草稿'}</Button>
+        </form>
       </header>
 
       <section className='border-y' aria-labelledby='agent-entry-title'>
@@ -417,6 +460,19 @@ export function ControlPlanePage(props: {
       </Sheet>
 
       <Dialog open={Boolean(confirm)} onOpenChange={(open) => !open && setConfirm(null)}><DialogContent><DialogHeader><DialogTitle>{confirmTitle}</DialogTitle><DialogDescription>{confirmDescription}</DialogDescription></DialogHeader><DialogFooter><Button variant='outline' onClick={() => setConfirm(null)}>取消</Button><Button variant={confirm?.kind === 'reset-pool' ? 'default' : 'destructive'} onClick={confirmAction}>{confirm?.kind === 'reset-pool' ? <RefreshCcw /> : confirm?.kind === 'rollback' ? <Undo2 /> : <Trash2 />}确认</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={Boolean(editorIntent)} onOpenChange={(open) => { if (!open) { setEditorIntent(null); setDismissAiReminder(false) } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>推荐使用 AI Agent</DialogTitle>
+            <DialogDescription>协议结构、认证、号池和发布链路关联较多，推荐让 AI Agent 创建和校验。</DialogDescription>
+          </DialogHeader>
+          <label className='flex cursor-pointer items-center gap-2 text-xs text-muted-foreground'>
+            <input className='size-4 accent-primary' type='checkbox' checked={dismissAiReminder} onChange={(event) => setDismissAiReminder(event.target.checked)} />
+            永久不再提示
+          </label>
+          <DialogFooter><Button variant='outline' onClick={() => setEditorIntent(null)}>取消</Button><Button onClick={continueEditorIntent}>继续人工编辑</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -50,13 +50,15 @@ describe('AppShell mobile navigation', () => {
       </AppShell>
     )
 
-    expect(screen.getByRole('link', { name: /服务与号池/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /服务与渠道/ })).toHaveAttribute(
       'aria-current',
       'page'
     )
     expect(screen.getByRole('link', { name: /运行概览/ })).not.toHaveAttribute('aria-current')
     expect(screen.getByText('AGPL-3.0')).toBeVisible()
     expect(screen.queryByRole('link', { name: /历史来源/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /协议发布/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /^模型渠道$/ })).not.toBeInTheDocument()
     expect(document.querySelector('#main-content')).toHaveClass('overflow-hidden')
   })
 

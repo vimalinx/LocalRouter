@@ -128,7 +128,12 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 		"object": "localrouter.agent.contract", "schema_version": agentContractSchemaVersion,
 		"contract_digest": registry.currentDigest(),
 		"authentication":  gin.H{"type": "bearer", "header": "Authorization", "token_purpose": "service-call-only"},
-		"flow":            []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
+		"identity": gin.H{
+			"binding": "service-token", "registration": "operator-issued", "console": "/#tokens",
+			"required_fields": []string{"agent_code", "agent_name", "workspace"},
+			"whoami":          "/agent/whoami", "secret_values_returned": false,
+		},
+		"flow": []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
 		"selection": gin.H{
 			"mode": "agent", "merged": false,
 			"rule": "every Pack operation remains independently addressable; LocalRouter never collapses providers or silently chooses one",
@@ -223,6 +228,10 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 		if runtime.store != nil && tokenID > 0 {
 			if token, err := runtime.store.tokenByID(runtime.rootUser.ID, tokenID, false); err == nil {
 				response["token_name"] = token.Name
+				response["agent_code"] = token.AgentCode
+				response["agent_name"] = token.AgentName
+				response["workspace"] = token.Workspace
+				response["runtime"] = token.Runtime
 				response["created_at"] = token.CreatedTime
 				response["expires_at"] = token.ExpiredTime
 			}
@@ -552,9 +561,12 @@ func (registry *protocolRegistry) describeOperation(packID, operationID string) 
 
 func (registry *protocolRegistry) describeOperationFromView(view protocolView, route protocolRoute) agentOperationDescriptor {
 	available, availabilityStatus := routeAvailabilityReady(route.Availability, time.Now().UTC())
-	ready := view.Ready && available
+	operationEnabled := registry.operationEnabled(view.ID, route.OperationID)
+	ready := view.Ready && operationEnabled && available
 	status := view.Status
-	if view.Ready && !available {
+	if view.Ready && !operationEnabled {
+		status = "disabled"
+	} else if view.Ready && !available {
 		status = availabilityStatus
 	}
 	reason, nextAction, _, _, _ := agentReadinessAdvice(view, status)

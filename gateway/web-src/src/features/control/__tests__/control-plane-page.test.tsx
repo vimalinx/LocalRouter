@@ -39,20 +39,32 @@ const protocol: ProtocolView = {
   pool_runtime: { ownership: 'local', status: 'ready', total: 2, ready: 1, cooling: 1, disabled: 0, expired: 0, busy: 0, balance_low: 0, balance_tracked: false, balance_empty: 0, quota: { status: 'unknown', tracked_accounts: 0, confirmed_accounts: 0, unknown_accounts: 2, stale_accounts: 0 }, in_flight: 0, accounts: [] },
 }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('ControlPlanePage', () => {
   it('unifies Agent entry, detailed draft impact, and human pool operations', async () => {
+    const localStorageValues = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => localStorageValues.get(key) ?? null,
+      setItem: (key: string, value: string) => localStorageValues.set(key, value),
+    })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"id":"video"}', { status: 200 })))
     const user = userEvent.setup()
     render(<ControlPlanePage adminToken='admin' drafts={[draft]} revisions={[]} protocols={[protocol]} onChanged={vi.fn().mockResolvedValue(undefined)} />)
 
-    expect(screen.getByRole('heading', { name: 'Agent 工作台' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '协议发布台' })).toBeVisible()
     expect(screen.getByText('/.well-known/localrouter.json')).toBeVisible()
     expect(screen.getByRole('cell', { name: 'video' })).toBeVisible()
     expect(screen.getByRole('button', { name: /清除异常状态/ })).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: /管理/ }))
+    const reminder = screen.getByRole('dialog', { name: '推荐使用 AI Agent' })
+    expect(within(reminder).getByText('永久不再提示')).toBeVisible()
+    await user.click(within(reminder).getByRole('checkbox'))
+    await user.click(within(reminder).getByRole('button', { name: '继续人工编辑' }))
+    expect(window.localStorage.getItem('localrouter.protocol-editor.ai-reminder-dismissed')).toBe('1')
     const sheet = screen.getByRole('dialog')
     expect(within(sheet).getByRole('heading', { name: '草稿 · agent-change' })).toBeVisible()
     expect(within(sheet).getByText('接口与转换')).toBeVisible()

@@ -11,6 +11,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 
 import { EmptyState } from '@/components/empty-state'
+import { ActivationToggle } from '@/components/activation-toggle'
 import { SectionHeader } from '@/components/section-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -97,6 +98,7 @@ export function ChannelsPage(props: {
   channels: Channel[]
   providers: Provider[]
   onChanged: () => Promise<void>
+	 embedded?: boolean
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [draft, setDraft] = useState<ChannelDraft>(() => newDraft(props.providers))
@@ -216,8 +218,32 @@ export function ChannelsPage(props: {
     }
   }
 
+  async function toggleChannel(channel: Channel) {
+    setTestingId(channel.id)
+    try {
+      await adminRequest('/local/api/channels', props.adminToken, {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...channel,
+          key: '',
+          group: 'default',
+          status: channel.status === 1 ? 2 : 1,
+          weight: channel.weight || 100,
+          priority: channel.priority || 0,
+          auto_ban: channel.auto_ban || 1,
+        }),
+      })
+      await props.onChanged()
+      toast.success(`${channel.name} 已${channel.status === 1 ? '停用' : '启用'}`)
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : '渠道状态保存失败')
+    } finally {
+      setTestingId(null)
+    }
+  }
+
   return (
-    <div className='space-y-6'>
+    <div className={props.embedded ? 'space-y-4' : 'space-y-6'}>
       <SectionHeader
         title='模型渠道'
         actions={
@@ -389,6 +415,12 @@ export function ChannelsPage(props: {
                     {channel.status === 1 ? '启用' : '停用'}
                   </Badge>
                   <div className='flex gap-2 md:justify-end'>
+                    <ActivationToggle
+                      checked={channel.status === 1}
+                      busy={testingId === channel.id}
+                      label={`${channel.status === 1 ? '停用' : '启用'}模型渠道 ${channel.name}`}
+                      onChange={() => toggleChannel(channel)}
+                    />
                     <Button variant='ghost' size='icon' aria-label={`编辑渠道 ${channel.name}`} onClick={() => openEditDialog(channel)}>
                       <Pencil aria-hidden='true' />
                     </Button>
@@ -419,7 +451,7 @@ export function ChannelsPage(props: {
           <EmptyState
             icon={RadioTower}
             title='尚未添加模型渠道'
-            description='Protocol Packs 不依赖模型渠道。'
+            description='在这里添加和管理模型渠道。'
           />
         )}
       </section>

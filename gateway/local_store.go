@@ -35,6 +35,10 @@ type localToken struct {
 	Key            string `json:"key,omitempty"`
 	Status         int    `json:"status"`
 	Name           string `json:"name"`
+	AgentCode      string `json:"agent_code"`
+	AgentName      string `json:"agent_name"`
+	Workspace      string `json:"workspace"`
+	Runtime        string `json:"runtime"`
 	CreatedTime    int64  `json:"created_time"`
 	AccessedTime   int64  `json:"accessed_time"`
 	ExpiredTime    int64  `json:"expired_time"`
@@ -210,6 +214,22 @@ func (store *localStore) initialize() error {
 	if err := store.ensureColumn("channels", "upstream_profile", `TEXT NOT NULL DEFAULT '{}'`); err != nil {
 		return err
 	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "agent_code", definition: `TEXT NOT NULL DEFAULT ''`},
+		{name: "agent_name", definition: `TEXT NOT NULL DEFAULT ''`},
+		{name: "workspace", definition: `TEXT NOT NULL DEFAULT ''`},
+		{name: "runtime", definition: `TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := store.ensureColumn("tokens", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	if _, err := store.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tokens_agent_code ON tokens(agent_code) WHERE agent_code <> '' AND deleted_at IS NULL`); err != nil {
+		return fmt.Errorf("initialize Agent registry index: %w", err)
+	}
 	return nil
 }
 
@@ -278,14 +298,14 @@ func (store *localStore) ensureDefaultToken(userID int, visibleToken string) err
 	err := store.db.QueryRow(`SELECT id FROM tokens WHERE user_id = ? AND name = ? AND deleted_at IS NULL`, userID, localTokenName).Scan(&id)
 	now := time.Now().Unix()
 	if errors.Is(err, sql.ErrNoRows) {
-		_, err = store.db.Exec(`INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, "group") VALUES (?, ?, ?, ?, ?, ?, -1, 0, 1, 'default')`,
+		_, err = store.db.Exec(`INSERT INTO tokens (user_id, key, status, name, agent_code, agent_name, workspace, runtime, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, "group") VALUES (?, ?, ?, ?, 'localrouter-system', 'LocalRouter system', 'operator', 'bootstrap', ?, ?, -1, 0, 1, 'default')`,
 			userID, key, localStatusEnabled, localTokenName, now, now)
 		return err
 	}
 	if err != nil {
 		return err
 	}
-	_, err = store.db.Exec(`UPDATE tokens SET key = ?, status = ?, expired_time = -1, unlimited_quota = 1, "group" = 'default', deleted_at = NULL WHERE id = ?`, key, localStatusEnabled, id)
+	_, err = store.db.Exec(`UPDATE tokens SET key = ?, status = ?, agent_code = 'localrouter-system', agent_name = 'LocalRouter system', workspace = 'operator', runtime = 'bootstrap', expired_time = -1, unlimited_quota = 1, "group" = 'default', deleted_at = NULL WHERE id = ?`, key, localStatusEnabled, id)
 	return err
 }
 
@@ -296,14 +316,17 @@ func (store *localStore) validateToken(key string) (*localToken, error) {
 	}
 	var token localToken
 	var unlimited int
-	err := store.db.QueryRow(`SELECT id, user_id, key, status, COALESCE(name, ''), COALESCE(created_time, 0), COALESCE(accessed_time, 0), COALESCE(expired_time, -1), COALESCE(unlimited_quota, 1), COALESCE("group", 'default') FROM tokens WHERE key = ? AND deleted_at IS NULL`, key).
-		Scan(&token.ID, &token.UserID, &token.Key, &token.Status, &token.Name, &token.CreatedTime, &token.AccessedTime, &token.ExpiredTime, &unlimited, &token.Group)
+	err := store.db.QueryRow(`SELECT id, user_id, key, status, COALESCE(name, ''), COALESCE(agent_code, ''), COALESCE(agent_name, ''), COALESCE(workspace, ''), COALESCE(runtime, ''), COALESCE(created_time, 0), COALESCE(accessed_time, 0), COALESCE(expired_time, -1), COALESCE(unlimited_quota, 1), COALESCE("group", 'default') FROM tokens WHERE key = ? AND deleted_at IS NULL`, key).
+		Scan(&token.ID, &token.UserID, &token.Key, &token.Status, &token.Name, &token.AgentCode, &token.AgentName, &token.Workspace, &token.Runtime, &token.CreatedTime, &token.AccessedTime, &token.ExpiredTime, &unlimited, &token.Group)
 	if err != nil {
 		return nil, err
 	}
 	token.UnlimitedQuota = unlimited != 0
 	if token.Status != localStatusEnabled || (token.ExpiredTime >= 0 && token.ExpiredTime <= time.Now().Unix()) {
 		return nil, errors.New("token is disabled or expired")
+	}
+	if token.Name != localTokenName && (strings.TrimSpace(token.AgentCode) == "" || strings.TrimSpace(token.Workspace) == "") {
+		return nil, errors.New("Agent registration is required for this token")
 	}
 	_, _ = store.db.Exec(`UPDATE tokens SET accessed_time = ? WHERE id = ?`, time.Now().Unix(), token.ID)
 	return &token, nil
@@ -474,7 +497,7 @@ func (store *localStore) listTokens(userID, page, pageSize int) ([]localToken, i
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, err := store.db.Query(`SELECT id, user_id, key, COALESCE(status, 1), COALESCE(name, ''), COALESCE(created_time, 0), COALESCE(accessed_time, 0), COALESCE(expired_time, -1), COALESCE(unlimited_quota, 1), COALESCE("group", 'default') FROM tokens WHERE user_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?`, userID, pageSize, (page-1)*pageSize)
+	rows, err := store.db.Query(`SELECT id, user_id, key, COALESCE(status, 1), COALESCE(name, ''), COALESCE(agent_code, ''), COALESCE(agent_name, ''), COALESCE(workspace, ''), COALESCE(runtime, ''), COALESCE(created_time, 0), COALESCE(accessed_time, 0), COALESCE(expired_time, -1), COALESCE(unlimited_quota, 1), COALESCE("group", 'default') FROM tokens WHERE user_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?`, userID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -483,7 +506,7 @@ func (store *localStore) listTokens(userID, page, pageSize int) ([]localToken, i
 	for rows.Next() {
 		var token localToken
 		var unlimited int
-		if err := rows.Scan(&token.ID, &token.UserID, &token.Key, &token.Status, &token.Name, &token.CreatedTime, &token.AccessedTime, &token.ExpiredTime, &unlimited, &token.Group); err != nil {
+		if err := rows.Scan(&token.ID, &token.UserID, &token.Key, &token.Status, &token.Name, &token.AgentCode, &token.AgentName, &token.Workspace, &token.Runtime, &token.CreatedTime, &token.AccessedTime, &token.ExpiredTime, &unlimited, &token.Group); err != nil {
 			return nil, 0, err
 		}
 		token.UnlimitedQuota = unlimited != 0
@@ -503,8 +526,8 @@ func maskToken(key string) string {
 func (store *localStore) tokenByID(userID, tokenID int, reveal bool) (localToken, error) {
 	var token localToken
 	var unlimited int
-	err := store.db.QueryRow(`SELECT id, user_id, key, COALESCE(status, 1), COALESCE(name, ''), COALESCE(created_time, 0), COALESCE(accessed_time, 0), COALESCE(expired_time, -1), COALESCE(unlimited_quota, 1), COALESCE("group", 'default') FROM tokens WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, tokenID, userID).
-		Scan(&token.ID, &token.UserID, &token.Key, &token.Status, &token.Name, &token.CreatedTime, &token.AccessedTime, &token.ExpiredTime, &unlimited, &token.Group)
+	err := store.db.QueryRow(`SELECT id, user_id, key, COALESCE(status, 1), COALESCE(name, ''), COALESCE(agent_code, ''), COALESCE(agent_name, ''), COALESCE(workspace, ''), COALESCE(runtime, ''), COALESCE(created_time, 0), COALESCE(accessed_time, 0), COALESCE(expired_time, -1), COALESCE(unlimited_quota, 1), COALESCE("group", 'default') FROM tokens WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, tokenID, userID).
+		Scan(&token.ID, &token.UserID, &token.Key, &token.Status, &token.Name, &token.AgentCode, &token.AgentName, &token.Workspace, &token.Runtime, &token.CreatedTime, &token.AccessedTime, &token.ExpiredTime, &unlimited, &token.Group)
 	token.UnlimitedQuota = unlimited != 0
 	if err == nil && !reveal {
 		token.Key = maskToken(token.Key)
@@ -512,16 +535,17 @@ func (store *localStore) tokenByID(userID, tokenID int, reveal bool) (localToken
 	return token, err
 }
 
-func (store *localStore) createToken(userID int, name string, expiredTime int64) (int64, error) {
+func (store *localStore) createToken(userID int, token localToken) (int64, error) {
 	secret, err := randomSecret(32, "")
 	if err != nil {
 		return 0, err
 	}
-	if expiredTime == 0 {
-		expiredTime = -1
+	if token.ExpiredTime == 0 {
+		token.ExpiredTime = -1
 	}
 	now := time.Now().Unix()
-	result, err := store.db.Exec(`INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, "group") VALUES (?, ?, 1, ?, ?, ?, ?, 0, 1, 'default')`, userID, secret, name, now, now, expiredTime)
+	result, err := store.db.Exec(`INSERT INTO tokens (user_id, key, status, name, agent_code, agent_name, workspace, runtime, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, "group") VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?, 0, 1, 'default')`,
+		userID, secret, token.Name, token.AgentCode, token.AgentName, token.Workspace, token.Runtime, now, token.ExpiredTime)
 	if err != nil {
 		return 0, err
 	}
@@ -529,7 +553,23 @@ func (store *localStore) createToken(userID int, name string, expiredTime int64)
 }
 
 func (store *localStore) updateToken(userID int, token localToken) error {
-	result, err := store.db.Exec(`UPDATE tokens SET status = ?, name = ?, expired_time = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, token.Status, token.Name, token.ExpiredTime, token.ID, userID)
+	result, err := store.db.Exec(`UPDATE tokens SET status = ?, name = ?, agent_code = ?, agent_name = ?, workspace = ?, runtime = ?, expired_time = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+		token.Status, token.Name, token.AgentCode, token.AgentName, token.Workspace, token.Runtime, token.ExpiredTime, token.ID, userID)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (store *localStore) updateTokenKey(userID, tokenID int, key string) error {
+	result, err := store.db.Exec(`UPDATE tokens SET key = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, normalizeStoredToken(key), tokenID, userID)
 	if err != nil {
 		return err
 	}

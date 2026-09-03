@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -11,6 +13,34 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func validateAgentRegistration(token *localToken) error {
+	token.AgentCode = strings.TrimSpace(token.AgentCode)
+	token.AgentName = strings.TrimSpace(token.AgentName)
+	token.Workspace = strings.TrimSpace(token.Workspace)
+	token.Runtime = strings.TrimSpace(token.Runtime)
+	if len(token.AgentCode) < 2 || len(token.AgentCode) > 48 {
+		return errors.New("agent_code must contain 2 to 48 characters")
+	}
+	if token.AgentCode == "localrouter-system" {
+		return errors.New("agent_code localrouter-system is reserved")
+	}
+	for _, character := range []byte(token.AgentCode) {
+		if !(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') && !(character >= '0' && character <= '9') && character != '-' && character != '_' && character != '.' {
+			return errors.New("agent_code may contain only letters, numbers, dot, underscore, or hyphen")
+		}
+	}
+	if token.AgentName == "" || len([]rune(token.AgentName)) > 80 {
+		return errors.New("agent_name must contain 1 to 80 characters")
+	}
+	if token.Workspace == "" || len(token.Workspace) > 512 || strings.ContainsAny(token.Workspace, "\r\n\x00") {
+		return errors.New("workspace must contain 1 to 512 safe characters")
+	}
+	if len(token.Runtime) > 64 || strings.ContainsAny(token.Runtime, "\r\n\x00") {
+		return errors.New("runtime must contain at most 64 safe characters")
+	}
+	return nil
+}
 
 type localProvider struct {
 	ID          int    `json:"id"`
@@ -337,9 +367,21 @@ func handleAddToken(runtime localRuntime) gin.HandlerFunc {
 			localFailure(c, http.StatusUnprocessableEntity, "token name must contain 1 to 64 characters")
 			return
 		}
-		id, err := runtime.store.createToken(runtime.rootUser.ID, token.Name, token.ExpiredTime)
+		if token.Name == localTokenName {
+			localFailure(c, http.StatusConflict, "token name is reserved for the system token")
+			return
+		}
+		if err := validateAgentRegistration(&token); err != nil {
+			localFailure(c, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		id, err := runtime.store.createToken(runtime.rootUser.ID, token)
 		if err != nil {
-			localFailure(c, http.StatusInternalServerError, "cannot issue token")
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				localFailure(c, http.StatusConflict, "agent_code is already registered")
+				return
+			}
+			localFailure(c, http.StatusInternalServerError, "cannot issue Agent token")
 			return
 		}
 		localSuccess(c, gin.H{"id": id})
@@ -358,10 +400,31 @@ func handleUpdateToken(runtime localRuntime) gin.HandlerFunc {
 			localFailure(c, http.StatusUnprocessableEntity, "token name is required")
 			return
 		}
+		stored, err := runtime.store.tokenByID(runtime.rootUser.ID, token.ID, false)
+		if err != nil {
+			localFailure(c, http.StatusNotFound, "token not found")
+			return
+		}
+		if stored.Name != localTokenName && token.Name == localTokenName {
+			localFailure(c, http.StatusConflict, "token name is reserved for the system token")
+			return
+		}
+		if stored.Name != localTokenName {
+			if err := validateAgentRegistration(&token); err != nil {
+				localFailure(c, http.StatusUnprocessableEntity, err.Error())
+				return
+			}
+		} else {
+			token.AgentCode, token.AgentName, token.Workspace, token.Runtime = stored.AgentCode, stored.AgentName, stored.Workspace, stored.Runtime
+		}
 		if token.Status == 0 {
 			token.Status = localStatusEnabled
 		}
 		if err := runtime.store.updateToken(runtime.rootUser.ID, token); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				localFailure(c, http.StatusConflict, "agent_code is already registered")
+				return
+			}
 			localFailure(c, http.StatusInternalServerError, "cannot update token")
 			return
 		}
@@ -406,6 +469,48 @@ func handleRevealToken(runtime localRuntime) gin.HandlerFunc {
 			return
 		}
 		localSuccess(c, gin.H{"key": "sk-" + normalizeStoredToken(token.Key)})
+	}
+}
+
+func handleUpdateTokenKey(runtime localRuntime) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			localFailure(c, http.StatusBadRequest, "invalid token id")
+			return
+		}
+		token, err := runtime.store.tokenByID(runtime.rootUser.ID, id, false)
+		if err != nil {
+			localFailure(c, http.StatusNotFound, "token not found")
+			return
+		}
+		if token.Name == localTokenName {
+			localFailure(c, http.StatusConflict, "the bootstrap token key cannot be changed here")
+			return
+		}
+		var request struct {
+			Key string `json:"key"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(c.Request.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			localFailure(c, http.StatusBadRequest, "invalid token key document")
+			return
+		}
+		request.Key = strings.TrimSpace(request.Key)
+		if err := validateAdminToken(request.Key); err != nil {
+			localFailure(c, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if err := runtime.store.updateTokenKey(runtime.rootUser.ID, id, request.Key); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				localFailure(c, http.StatusConflict, "token key is already in use")
+				return
+			}
+			localFailure(c, http.StatusInternalServerError, "cannot update token key")
+			return
+		}
+		localSuccess(c, gin.H{"updated": true})
 	}
 }
 

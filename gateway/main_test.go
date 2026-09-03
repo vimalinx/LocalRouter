@@ -71,6 +71,26 @@ func TestReadOrCreateSecretCreatesPrivateRegularFile(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
+func TestUpdateTokenKeyInvalidatesPreviousSecret(t *testing.T) {
+	t.Parallel()
+	store, err := openLocalStore(filepath.Join(t.TempDir(), "localrouter.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	root, err := store.ensureRootUser()
+	require.NoError(t, err)
+	id, err := store.createToken(root.ID, localToken{Name: "maintenance", AgentCode: "maintainer", AgentName: "Maintainer", Workspace: "operator", Runtime: "maintenance", ExpiredTime: -1})
+	require.NoError(t, err)
+	before, err := store.tokenByID(root.ID, int(id), true)
+	require.NoError(t, err)
+
+	require.NoError(t, store.updateTokenKey(root.ID, int(id), "sk-0123456789abcdef0123456789abcdef"))
+	_, err = store.validateToken(before.Key)
+	require.Error(t, err)
+	updated, err := store.validateToken("sk-0123456789abcdef0123456789abcdef")
+	require.NoError(t, err)
+	assert.Equal(t, int(id), updated.ID)
+}
+
 func TestNormalizeLoopbackHost(t *testing.T) {
 	t.Parallel()
 
@@ -292,7 +312,7 @@ func TestLocalTokenCreationUsesUnlimitedDefaultGroup(t *testing.T) {
 	engine.POST("/token", handleAddToken(runtime))
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(`{"name":"client","group":"paid","unlimited_quota":false}`))
+	request := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(`{"name":"client","agent_code":"agent-007","agent_name":"Build Agent","workspace":"/workspace/project","runtime":"codex","group":"paid","unlimited_quota":false}`))
 	request.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(recorder, request)
 
@@ -303,6 +323,8 @@ func TestLocalTokenCreationUsesUnlimitedDefaultGroup(t *testing.T) {
 	assert.Equal(t, "default", tokens[0].Group)
 	assert.True(t, tokens[0].UnlimitedQuota)
 	assert.Equal(t, int64(-1), tokens[0].ExpiredTime)
+	assert.Equal(t, "agent-007", tokens[0].AgentCode)
+	assert.Equal(t, "/workspace/project", tokens[0].Workspace)
 }
 
 func TestLocalAPITokenAuthorizationAcceptsIssuedRootToken(t *testing.T) {

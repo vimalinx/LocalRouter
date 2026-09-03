@@ -3,12 +3,10 @@ import {
   Activity,
   BookOpen,
   Boxes,
-  GitBranch,
   KeyRound,
   LockKeyhole,
   Menu,
   Moon,
-  RadioTower,
   RefreshCw,
   ScrollText,
   Workflow,
@@ -23,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
-export type SectionId = 'overview' | 'protocols' | 'control' | 'jobs' | 'channels' | 'tokens' | 'logs'
+export type SectionId = 'overview' | 'protocols' | 'jobs' | 'tokens' | 'logs'
 
 const navigation: Array<{
   id: SectionId
@@ -31,11 +29,9 @@ const navigation: Array<{
   icon: LucideIcon
 }> = [
   { id: 'overview', label: '运行概览', icon: Activity },
-  { id: 'protocols', label: '服务与号池', icon: Boxes },
-  { id: 'control', label: 'Agent 工作台', icon: GitBranch },
+  { id: 'protocols', label: '服务与渠道', icon: Boxes },
   { id: 'jobs', label: '任务与事件', icon: Workflow },
-  { id: 'channels', label: '模型渠道', icon: RadioTower },
-  { id: 'tokens', label: 'API 令牌', icon: KeyRound },
+  { id: 'tokens', label: 'Agent 工作台', icon: KeyRound },
   { id: 'logs', label: '请求日志', icon: ScrollText },
 ]
 

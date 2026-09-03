@@ -376,7 +376,7 @@ func TestMaintenanceUsesAdminByDefaultAndOptionalDedicatedAgentToken(t *testing.
 	t.Cleanup(func() { require.NoError(t, dataStore.Close()) })
 	root, err := dataStore.ensureRootUser()
 	require.NoError(t, err)
-	_, err = dataStore.db.Exec(`INSERT INTO tokens (id, user_id, key, status, name, created_time, expired_time, unlimited_quota, "group") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, 7, root.ID, "maintenance-key", localStatusEnabled, "agent-maintainer", time.Now().Unix(), -1, 1, "default")
+	_, err = dataStore.db.Exec(`INSERT INTO tokens (id, user_id, key, status, name, agent_code, agent_name, workspace, runtime, created_time, expired_time, unlimited_quota, "group") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 7, root.ID, "maintenance-key", localStatusEnabled, "agent-maintainer", "maintainer-007", "Maintenance Agent", "/workspace/maintenance", "codex", time.Now().Unix(), -1, 1, "default")
 	require.NoError(t, err)
 	runtime := localRuntime{adminToken: newAdminTokenStore("admin-secret"), rootUser: root, store: dataStore, policies: policyStore}
 	engine := gin.New()

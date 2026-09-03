@@ -190,6 +190,55 @@ Use the generated operation contract before calling search.
 	assert.Equal(t, "/docs", docAlias.Header().Get("Location"))
 }
 
+func TestProtocolActivationPersistsWithoutChangingPackDefinition(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	protocolDir := t.TempDir()
+	dataDir := t.TempDir()
+	writeProtocolDefinition(t, protocolDir, protocolDefinition{
+		SchemaVersion: protocolSchemaVersion,
+		ID:            "switchable",
+		Name:          "Switchable",
+		Description:   "Runtime activation test",
+		Enabled:       true,
+		BaseURL:       upstream.URL,
+		Auth:          protocolAuth{Type: "none"},
+		Routes:        []protocolRoute{{OperationID: "run", Methods: []string{http.MethodPost}, Path: "/run", Summary: "Run"}},
+	})
+
+	registry, err := newProtocolRegistry(protocolDir, dataDir)
+	require.NoError(t, err)
+	require.NoError(t, registry.setActivation("switchable", "run", false))
+	view, ok := registry.viewFor("switchable")
+	require.True(t, ok)
+	assert.True(t, view.Enabled)
+	require.Len(t, view.PublicRoutes, 1)
+	assert.False(t, view.PublicRoutes[0].Enabled)
+	descriptor, found := registry.describeOperation("switchable", "run")
+	require.True(t, found)
+	assert.False(t, descriptor.Ready)
+	assert.Equal(t, "disabled", descriptor.Status)
+
+	reloaded, err := newProtocolRegistry(protocolDir, dataDir)
+	require.NoError(t, err)
+	view, ok = reloaded.viewFor("switchable")
+	require.True(t, ok)
+	assert.False(t, view.PublicRoutes[0].Enabled)
+	require.NoError(t, reloaded.setActivation("switchable", "", false))
+	view, _ = reloaded.viewFor("switchable")
+	assert.False(t, view.Enabled)
+	assert.False(t, view.Ready)
+	assert.Equal(t, "disabled", view.Status)
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "service-controls.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"switchable": false`)
+}
+
 func TestProtocolTemplateStreamsSSE(t *testing.T) {
 	t.Parallel()
 

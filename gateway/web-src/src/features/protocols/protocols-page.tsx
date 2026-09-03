@@ -1,9 +1,9 @@
 import {
   ArrowUpRight,
   Boxes,
-  ChevronDown,
   ChevronRight,
   CircleGauge,
+  GitBranch,
   PanelRightOpen,
   RefreshCcw,
   Search,
@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 
 import { EmptyState } from '@/components/empty-state'
+import { ActivationToggle } from '@/components/activation-toggle'
 import { ProtocolStatusBadge } from '@/components/status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -52,6 +53,7 @@ type ExternalPoolSnapshot = {
   sticky_resources?: number
 }
 type DetailTarget = { kind: 'protocol' } | { kind: 'account'; ref: string }
+type ServiceTab = 'accounts' | 'services'
 
 const PAGE_SIZE = 50
 
@@ -96,6 +98,8 @@ function quotaReferenceSummary(value?: ProtocolQuotaReferenceValue) {
 }
 
 function quotaStatusLabel(status?: PoolRuntime['quota']['status']) {
+  if (status === 'untracked') return '额度未配置'
+  if (status === 'unknown') return '上游未返回'
   if (status === 'confirmed') return '已确认'
   if (status === 'estimated') return '估算'
   if (status === 'remaining-only') return '仅余量'
@@ -147,7 +151,7 @@ function pricingToneClass(status: ProtocolPricingEntry['status']) {
 
 function pricingSummary(protocol: ProtocolView) {
   const entries = protocol.pricing?.entries || []
-  if (!entries.length) return null
+  if (!entries.length) return '未接入价格'
   const pending = entries.filter((entry) => entry.status === 'unknown' || entry.status === 'unpublished').length
   if (!pending) return `定价 ×${entries.length} 已确认`
   return pending === entries.length ? `定价 ×${entries.length} 未知/未公开` : `定价 ×${entries.length} · ${pending} 项待补`
@@ -165,7 +169,7 @@ function pricingUnitText(unit?: string) {
 }
 
 function pricingValueText(entry: ProtocolPricingEntry) {
-  if (entry.amount === undefined) return `价格${pricingStatusLabel(entry.status)}`
+  if (entry.amount === undefined) return '未接入价格'
   if (entry.amount === 0) return `免费 / ${pricingUnitText(entry.unit)}`
   return `${pricingAmountText(entry)} / ${pricingUnitText(entry.unit)}`
 }
@@ -188,7 +192,9 @@ function primaryPricingEntry(protocol: ProtocolView) {
 
 function PricingCompact(props: { protocol: ProtocolView }) {
   const entry = primaryPricingEntry(props.protocol)
-  if (!entry) return null
+  if (!entry) {
+    return <span className='mt-0.5 block truncate text-[10px] font-medium text-muted-foreground'>未接入价格</span>
+  }
   const item = entry.label || entry.id
   const value = pricingValueText(entry)
   return (
@@ -201,53 +207,84 @@ function PricingCompact(props: { protocol: ProtocolView }) {
   )
 }
 
-function PricingOverview(props: { protocol: ProtocolView }) {
+function ServicePricingTable(props: {
+  protocol: ProtocolView
+  busyId: string
+  canManage: boolean
+  onToggle: (operationId: string, enabled: boolean) => void
+}) {
   const entries = props.protocol.pricing?.entries || []
-  if (!entries.length) return null
+  const routes = props.protocol.routes
+  const routeIds = new Set(routes.map((route) => route.operation_id))
+  const pricingByOperation = new Map(entries.filter((entry) => entry.scope === 'operation').map((entry) => [entry.id, entry]))
+  const standaloneEntries = entries.filter((entry) => !routeIds.has(entry.id))
   const pending = entries.filter((entry) => entry.status === 'unknown' || entry.status === 'unpublished').length
   return (
-    <section className='border-b' aria-labelledby={`pricing-overview-${props.protocol.id}`}>
+    <section aria-labelledby={`service-pricing-${props.protocol.id}`}>
       <div className='flex min-h-10 flex-wrap items-center gap-2 border-b px-3 py-2 sm:px-4'>
-        <h3 id={`pricing-overview-${props.protocol.id}`} className='text-xs font-semibold'>定价</h3>
-        <span className='text-[10px] tabular-nums text-muted-foreground'>{entries.length} 项</span>
-        {pending ? <span className='text-[10px] text-amber-700/80 dark:text-amber-300/80'>{pending} 项未知/未公开</span> : <span className='text-[10px] text-emerald-700/80 dark:text-emerald-300/80'>全部已确认</span>}
+        <h3 id={`service-pricing-${props.protocol.id}`} className='text-xs font-semibold'>子服务与计价</h3>
+        <span className='text-[10px] tabular-nums text-muted-foreground'>{routes.length} 个子服务 · {entries.length} 项价格</span>
+        {pending ? <span className='text-[10px] text-amber-700/80 dark:text-amber-300/80'>{pending} 项待补</span> : null}
       </div>
       <Table aria-label={`${props.protocol.name} 定价`}>
         <TableHeader>
           <TableRow className='hover:bg-transparent'>
-            <TableHead className='h-8'>计费项</TableHead>
+            <TableHead className='h-8'>子服务</TableHead>
+            <TableHead className='hidden h-8 md:table-cell'>接口</TableHead>
             <TableHead className='h-8'>价格</TableHead>
-            <TableHead className='h-8 w-24'>状态</TableHead>
-            <TableHead className='hidden h-8 w-32 sm:table-cell'>核对 / 来源</TableHead>
+            <TableHead className='hidden h-8 w-36 sm:table-cell'>状态 / 来源</TableHead>
+            <TableHead className='h-8 w-20 text-right'>启用</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {entries.map((entry) => (
-            <TableRow key={entry.id}>
+          {routes.map((route) => {
+            const entry = pricingByOperation.get(route.operation_id)
+            const enabled = route.enabled !== false
+            return (
+              <TableRow key={`route:${route.operation_id}`}>
+                <TableCell className='min-w-40 py-2'>
+                  <span className='block text-xs font-medium'>{entry?.label || route.summary || route.operation_id}</span>
+                  <code className='mt-0.5 block text-[10px] text-muted-foreground'>{route.operation_id}</code>
+                </TableCell>
+                <TableCell className='hidden min-w-44 py-2 md:table-cell'>
+                  <code className='text-[10px] text-muted-foreground'>{route.methods.join(' / ')} · {route.path}</code>
+                </TableCell>
+                <TableCell className='min-w-40 py-2'>
+                  <span className='block text-xs font-medium tabular-nums'>{entry ? pricingValueText(entry) : '未接入价格'}</span>
+                  {entry?.free_tier ? <span className='mt-0.5 block text-[10px] leading-4 text-muted-foreground'>免费层：{entry.free_tier}</span> : null}
+                </TableCell>
+                <TableCell className='hidden py-2 sm:table-cell'>
+                  {entry ? <>
+                    <span className={`block text-[10px] ${pricingToneClass(entry.status)}`}>{pricingStatusLabel(entry.status)}</span>
+                    <a className='inline-flex items-center gap-1 text-[10px] text-muted-foreground underline decoration-border underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring' href={entry.source_url} target='_blank' rel='noreferrer' aria-label={`打开 ${entry.label || entry.id} 定价来源`}>
+                      {entry.source_type} · {entry.checked_at}<ArrowUpRight aria-hidden='true' className='size-3' />
+                    </a>
+                  </> : <span className='text-[10px] text-muted-foreground'>—</span>}
+                </TableCell>
+                <TableCell className='py-2 text-right'>
+                  <ActivationToggle compact checked={enabled} busy={props.busyId === `${props.protocol.id}:${route.operation_id}`} disabled={!props.canManage || !props.protocol.enabled} label={`${enabled ? '停用' : '启用'}子服务 ${route.operation_id}`} onChange={() => props.onToggle(route.operation_id, !enabled)} />
+                </TableCell>
+              </TableRow>
+            )
+          })}
+          {standaloneEntries.map((entry) => (
+            <TableRow key={`pricing:${entry.id}`}>
               <TableCell className='min-w-40 py-2'>
-                <code className='block text-[11px] font-medium'>{entry.label || entry.id}</code>
-                <span className='mt-0.5 block text-[10px] text-muted-foreground'>{entry.scope}</span>
+                <span className='block text-xs font-medium'>{entry.label || entry.id}</span>
+                <code className='mt-0.5 block text-[10px] text-muted-foreground'>{entry.id}</code>
               </TableCell>
-              <TableCell className='min-w-48 py-2'>
+              <TableCell className='hidden py-2 md:table-cell'><Badge variant='outline'>{entry.scope}</Badge></TableCell>
+              <TableCell className='min-w-40 py-2'>
                 <span className='block text-xs font-medium tabular-nums'>{pricingValueText(entry)}</span>
-                {entry.free_tier ? <span className='mt-0.5 block max-w-md text-[10px] leading-4 text-muted-foreground'>免费层：{entry.free_tier}</span> : null}
-              </TableCell>
-              <TableCell className='py-2'>
-                <span className={`text-[10px] ${pricingToneClass(entry.status)}`}>{pricingStatusLabel(entry.status)}</span>
+                {entry.free_tier ? <span className='mt-0.5 block text-[10px] leading-4 text-muted-foreground'>免费层：{entry.free_tier}</span> : null}
               </TableCell>
               <TableCell className='hidden py-2 sm:table-cell'>
-                <span className='block text-[10px] tabular-nums text-muted-foreground'>{entry.checked_at}</span>
-                <a
-                  className='inline-flex items-center gap-1 text-[10px] underline decoration-border underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
-                  href={entry.source_url}
-                  target='_blank'
-                  rel='noreferrer'
-                  aria-label={`打开 ${entry.label || entry.id} 定价来源`}
-                >
-                  {entry.source_type}
-                  <ArrowUpRight aria-hidden='true' className='size-3' />
+                <span className={`block text-[10px] ${pricingToneClass(entry.status)}`}>{pricingStatusLabel(entry.status)}</span>
+                <a className='inline-flex items-center gap-1 text-[10px] text-muted-foreground underline decoration-border underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring' href={entry.source_url} target='_blank' rel='noreferrer' aria-label={`打开 ${entry.label || entry.id} 定价来源`}>
+                  {entry.source_type} · {entry.checked_at}<ArrowUpRight aria-hidden='true' className='size-3' />
                 </a>
               </TableCell>
+              <TableCell className='py-2 text-right text-xs text-muted-foreground'>—</TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -259,7 +296,7 @@ function PricingOverview(props: { protocol: ProtocolView }) {
 function poolHealth(protocol: ProtocolView) {
   const runtime = protocol.pool_runtime
   if (!runtime) return { healthy: protocol.ready ? 1 : 0, invalid: protocol.ready ? 0 : 1, total: 1 }
-  if (runtime.total === 0 && runtime.ownership !== 'local') {
+  if (runtime.total === 0) {
     return { healthy: protocol.ready ? 1 : 0, invalid: protocol.ready ? 0 : 1, total: 1 }
   }
   const healthy = runtime.ready + runtime.busy
@@ -269,20 +306,19 @@ function poolHealth(protocol: ProtocolView) {
 function HealthDonut(props: { protocol: ProtocolView; compact?: boolean }) {
   const health = poolHealth(props.protocol)
   const healthyPercent = percent(health.healthy, health.total)
-  const quotaConnected = Boolean(props.protocol.pool_runtime?.quota?.tracked_accounts)
   const size = props.compact ? 'size-10' : 'size-12'
   return (
     <span
       role='img'
-      aria-label={`${props.protocol.name} 健康 ${health.healthy}，失效 ${health.invalid}，额度${quotaConnected ? '已接入' : '未接入'}`}
+      aria-label={`${props.protocol.name} 健康 ${health.healthy}，失效 ${health.invalid}`}
       className={cn('relative inline-flex shrink-0 items-center justify-center', size)}
-      title={`健康 ${health.healthy} · 失效 ${health.invalid} · 额度${quotaConnected ? '已接入' : '未接入'}`}
+      title={`健康 ${health.healthy} · 失效 ${health.invalid}`}
     >
       <svg aria-hidden='true' viewBox='0 0 36 36' className='size-full -rotate-90'>
-        <circle cx='18' cy='18' r='14' pathLength='100' fill='none' className={quotaConnected ? 'stroke-rose-300 dark:stroke-rose-900' : 'stroke-slate-300 dark:stroke-slate-700'} strokeWidth='5' />
-        {quotaConnected ? <circle cx='18' cy='18' r='14' pathLength='100' fill='none' className='stroke-emerald-300 dark:stroke-emerald-700' strokeWidth='5' strokeLinecap='butt' strokeDasharray={`${healthyPercent} 100`} /> : null}
+        <circle cx='18' cy='18' r='14' pathLength='100' fill='none' className='stroke-rose-300 dark:stroke-rose-900' strokeWidth='5' />
+        {healthyPercent > 0 ? <circle cx='18' cy='18' r='14' pathLength='100' fill='none' className='stroke-emerald-300 dark:stroke-emerald-700' strokeWidth='5' strokeLinecap='butt' strokeDasharray={`${healthyPercent} 100`} /> : null}
       </svg>
-      <span className='absolute text-[9px] font-semibold tabular-nums text-muted-foreground'>{quotaConnected ? `${healthyPercent}%` : '—'}</span>
+      <span className={cn('absolute text-[9px] font-semibold tabular-nums', healthyPercent === 0 ? 'text-rose-700 dark:text-rose-300' : healthyPercent === 100 ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground')}>{healthyPercent}%</span>
     </span>
   )
 }
@@ -295,6 +331,7 @@ function QuotaProgress(props: { protocol: ProtocolView; compact?: boolean }) {
   const remainingPercent = hasPercent ? Math.max(0, Math.min(100, 100 - usedPercent)) : 0
   const estimated = quota?.status === 'estimated'
   const tracked = Boolean(quota?.tracked_accounts)
+  const statusLabel = quotaStatusLabel(quota?.status)
   const referenceSummary = quotaReferenceSummary(quota?.reference_value)
   const compactReferenceLabel = quota?.reference_value?.total !== undefined
     ? `总值 ${referenceMoney(quota.reference_value.total, quota.reference_value.currency)}`
@@ -307,7 +344,7 @@ function QuotaProgress(props: { protocol: ProtocolView; compact?: boolean }) {
     ? `${estimated ? '估算' : ''}余量 ${Math.round(remainingPercent)}%`
     : tracked && quota?.remaining !== undefined
       ? `余量 ${quotaValue(quota.remaining, quota.unit)}`
-      : quotaStatusLabel(quota?.status)
+      : statusLabel
   const details = quota
     ? `${quotaStatusLabel(quota.status)} · 已登记 ${quota.tracked_accounts}/${runtime?.total || 0}${quota.stale_accounts ? ` · 过期 ${quota.stale_accounts}` : ''}${referenceSummary ? ` · ${referenceSummary}` : ''}`
     : '上游未提供额度遥测'
@@ -318,12 +355,18 @@ function QuotaProgress(props: { protocol: ProtocolView; compact?: boolean }) {
         {!props.compact && hasPercent && quota?.remaining !== undefined ? <span className='shrink-0 tabular-nums'>余 {quotaValue(quota.remaining, quota.unit)}</span> : null}
       </div>
       <div
-        role={hasPercent ? 'progressbar' : undefined}
-        aria-label={hasPercent ? `${props.protocol.name} 剩余额度${estimated ? '（估算）' : ''}` : undefined}
+        role={hasPercent ? 'progressbar' : 'status'}
+        aria-label={hasPercent ? `${props.protocol.name} 剩余额度${estimated ? '（估算）' : ''}` : `${props.protocol.name} ${statusLabel}`}
         aria-valuemin={hasPercent ? 0 : undefined}
         aria-valuemax={hasPercent ? 100 : undefined}
         aria-valuenow={hasPercent ? Math.round(remainingPercent) : undefined}
-        className={cn('mt-0.5 h-1.5 overflow-hidden rounded-full', hasPercent ? 'border bg-[var(--quota-empty)]' : 'border border-dashed bg-muted')}
+        className={cn(
+          'mt-0.5 h-1.5 overflow-hidden rounded-full border',
+          hasPercent ? 'bg-[var(--quota-empty)]'
+            : !tracked ? 'border-amber-300 bg-amber-200/70 dark:border-amber-800 dark:bg-amber-950/70'
+              : quota?.status === 'stale' || quota?.status === 'mixed-unit' ? 'border-amber-300 bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50'
+                : 'border-sky-300 bg-sky-100 dark:border-sky-800 dark:bg-sky-950/50'
+        )}
       >
         {hasPercent ? <div className='h-full rounded-full bg-[var(--quota-remaining)]' style={{ width: `${remainingPercent}%` }} /> : null}
       </div>
@@ -355,12 +398,14 @@ export function ProtocolsPage(props: {
   protocols: ProtocolView[]
   adminToken?: string
   onChanged?: () => Promise<void>
+  embedded?: boolean
+  onOpenEditor?: () => void
 }) {
   const [selectedId, setSelectedId] = useState(() => props.protocols[0]?.id || '')
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE)
-  const [accountsExpanded, setAccountsExpanded] = useState(false)
+  const [activeServiceTab, setActiveServiceTab] = useState<ServiceTab>('accounts')
   const [busyId, setBusyId] = useState('')
   const [externalPools, setExternalPools] = useState<Record<string, ExternalPoolSnapshot>>({})
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null)
@@ -401,15 +446,15 @@ export function ProtocolsPage(props: {
     setQuery('')
     setStatusFilter('all')
     setVisibleLimit(PAGE_SIZE)
-    setAccountsExpanded(false)
+    setActiveServiceTab('accounts')
     setDetailTarget(null)
-    if (protocol.pool_runtime?.ownership === 'upstream' && props.adminToken && !externalPools[protocol.id]) {
+    if (protocol.pool_runtime?.ownership === 'upstream' && props.adminToken !== undefined && !externalPools[protocol.id]) {
       void checkBackend(protocol, true)
     }
   }
 
   async function resetAccount(protocol: ProtocolView, credentialRef: string) {
-    if (!props.adminToken) return
+    if (props.adminToken === undefined) return
     setBusyId(protocol.id)
     try {
       await adminRequest(`/local/api/protocols/${protocol.id}/pool/reset`, props.adminToken, {
@@ -426,7 +471,7 @@ export function ProtocolsPage(props: {
   }
 
   async function checkBackend(protocol: ProtocolView, silent = false) {
-    if (!props.adminToken) return
+    if (props.adminToken === undefined) return
     setBusyId(protocol.id)
     try {
       const result = await adminRequest<{ ready: boolean; pool?: ExternalPoolSnapshot }>(
@@ -450,6 +495,26 @@ export function ProtocolsPage(props: {
     }
   }
 
+  async function setActivation(protocol: ProtocolView, enabled: boolean, operationId?: string) {
+    if (props.adminToken === undefined) return
+    const busyKey = operationId ? `${protocol.id}:${operationId}` : protocol.id
+    setBusyId(busyKey)
+    try {
+      const endpoint = operationId
+        ? `/local/api/protocols/${encodeURIComponent(protocol.id)}/operations/${encodeURIComponent(operationId)}/activation`
+        : `/local/api/protocols/${encodeURIComponent(protocol.id)}/activation`
+      await adminRequest(endpoint, props.adminToken, {
+        method: 'PUT', body: JSON.stringify({ enabled }),
+      })
+      await props.onChanged?.()
+      toast.success(`${operationId || protocol.name} 已${enabled ? '启用' : '停用'}`)
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : '运行状态保存失败')
+    } finally {
+      setBusyId('')
+    }
+  }
+
   if (!selectedProtocol) {
     return (
       <section className='border-y'>
@@ -464,10 +529,17 @@ export function ProtocolsPage(props: {
   const canReset = selectedAccount
     ? selectedAccount.status === 'cooldown' || selectedAccount.status_label === '调度停用'
     : false
+  const serviceTabId = (tab: ServiceTab) => `service-${selectedProtocol.id}-${tab}-tab`
+  const servicePanelId = (tab: ServiceTab) => `service-${selectedProtocol.id}-${tab}-panel`
+
+  function switchServiceTab(tab: ServiceTab, moveFocus = false) {
+    setActiveServiceTab(tab)
+    if (moveFocus) document.getElementById(serviceTabId(tab))?.focus()
+  }
 
   return (
     <div className='flex h-full min-h-0 flex-col gap-2 overflow-hidden'>
-      <header className='flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b pb-2'>
+      {!props.embedded ? <header className='flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b pb-2'>
         <h1 className='text-lg font-semibold tracking-tight'>服务与号池</h1>
         <span className='text-xs text-muted-foreground'>{props.protocols.length} 个服务</span>
         <Button asChild className='ml-auto' variant='ghost' size='sm'>
@@ -476,7 +548,7 @@ export function ProtocolsPage(props: {
             <ArrowUpRight aria-hidden='true' />
           </a>
         </Button>
-      </header>
+      </header> : null}
 
       <div className='flex min-h-0 flex-1 flex-col overflow-hidden border-y lg:grid lg:grid-cols-[19rem_minmax(0,1fr)]'>
         <aside className='flex min-h-0 shrink-0 flex-col border-b lg:h-auto lg:shrink lg:border-b-0 lg:border-r' aria-label='服务列表'>
@@ -527,6 +599,14 @@ export function ProtocolsPage(props: {
               )
             })}
           </nav>
+          {props.onOpenEditor ? (
+            <div className='shrink-0 border-t p-2'>
+              <Button className='w-full justify-start' variant='ghost' size='sm' onClick={props.onOpenEditor}>
+                <GitBranch aria-hidden='true' />
+                协议编辑
+              </Button>
+            </div>
+          ) : null}
         </aside>
 
         <section
@@ -548,6 +628,13 @@ export function ProtocolsPage(props: {
                 {localPool ? <span>{selectedProtocol.pool?.strategy || 'fixed'}</span> : null}
               </div>
             </div>
+            <ActivationToggle
+              checked={selectedProtocol.enabled}
+              busy={busyId === selectedProtocol.id}
+              disabled={props.adminToken === undefined}
+              label={`${selectedProtocol.enabled ? '停用' : '启用'}服务 ${selectedProtocol.name}`}
+              onChange={() => setActivation(selectedProtocol, !selectedProtocol.enabled)}
+            />
             <Button variant='ghost' size='icon' aria-label={`查看 ${selectedProtocol.name} 详情`} onClick={() => setDetailTarget({ kind: 'protocol' })}>
               <PanelRightOpen aria-hidden='true' />
             </Button>
@@ -583,26 +670,66 @@ export function ProtocolsPage(props: {
             </>
           ) : null}
 
-          <PricingOverview protocol={selectedProtocol} />
+          <div
+            role='tablist'
+            aria-label={`${selectedProtocol.name} 服务数据`}
+            className='flex min-h-11 items-end gap-1 border-b px-3 sm:px-4'
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                event.preventDefault()
+                switchServiceTab(activeServiceTab === 'accounts' ? 'services' : 'accounts', true)
+              } else if (event.key === 'Home' || event.key === 'End') {
+                event.preventDefault()
+                switchServiceTab(event.key === 'Home' ? 'accounts' : 'services', true)
+              }
+            }}
+          >
+            <button
+              id={serviceTabId('accounts')}
+              type='button'
+              role='tab'
+              aria-selected={activeServiceTab === 'accounts'}
+              aria-controls={servicePanelId('accounts')}
+              tabIndex={activeServiceTab === 'accounts' ? 0 : -1}
+              className={cn(
+                'relative flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                activeServiceTab === 'accounts' && 'text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary'
+              )}
+              onClick={() => switchServiceTab('accounts')}
+            >
+              <UsersRound aria-hidden='true' className='size-4' />
+              账号明细
+              <span className='tabular-nums text-[10px] text-muted-foreground'>{localPool ? accounts.length : 1}</span>
+            </button>
+            <button
+              id={serviceTabId('services')}
+              type='button'
+              role='tab'
+              aria-selected={activeServiceTab === 'services'}
+              aria-controls={servicePanelId('services')}
+              tabIndex={activeServiceTab === 'services' ? 0 : -1}
+              className={cn(
+                'relative flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                activeServiceTab === 'services' && 'text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary'
+              )}
+              onClick={() => switchServiceTab('services')}
+            >
+              <Boxes aria-hidden='true' className='size-4' />
+              服务
+              <span className='tabular-nums text-[10px] text-muted-foreground'>{selectedProtocol.routes.length}</span>
+            </button>
+          </div>
 
-          {localPool ? (
-            <>
-              <button
-                type='button'
-                aria-expanded={accountsExpanded}
-                aria-controls={`pool-accounts-${selectedProtocol.id}`}
-                className='flex min-h-12 w-full cursor-pointer items-center gap-2 border-b px-3 text-left outline-none transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-4'
-                onClick={() => setAccountsExpanded((current) => !current)}
-              >
-                <UsersRound aria-hidden='true' className='size-4 text-primary' />
-                <span className='text-xs font-semibold'>账号明细</span>
-                <span className='text-[10px] tabular-nums text-muted-foreground'>{accounts.length} 个账号</span>
-                <ChevronDown aria-hidden='true' className={cn('ml-auto size-4 text-muted-foreground transition-transform', accountsExpanded && 'rotate-180')} />
-                <span className='sr-only'>{accountsExpanded ? '收起' : '展开'} {selectedProtocol.name} 号池账号</span>
-              </button>
-
-              {accountsExpanded ? (
-                <div id={`pool-accounts-${selectedProtocol.id}`}>
+          {activeServiceTab === 'accounts' ? (
+            <div
+              id={servicePanelId('accounts')}
+              role='tabpanel'
+              aria-labelledby={serviceTabId('accounts')}
+              tabIndex={0}
+              className='outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+            >
+              {localPool ? (
+                <>
                   <div className='flex flex-wrap items-center gap-2 border-b px-3 py-1.5 sm:px-4'>
                     <div className='relative min-w-[13rem] flex-1 sm:max-w-sm'>
                       <Search aria-hidden='true' className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
@@ -695,24 +822,39 @@ export function ProtocolsPage(props: {
                       description={accounts.length ? '调整搜索词或状态筛选。' : '该服务当前没有可调度账号。'}
                     />
                   )}
+                </>
+              ) : (
+                <div className='divide-y'>
+                  <button
+                    type='button'
+                    className='flex min-h-16 w-full cursor-pointer items-center gap-3 px-4 text-left outline-none transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+                    onClick={() => setDetailTarget({ kind: 'protocol' })}
+                  >
+                    <Server aria-hidden='true' className='size-4 text-primary' />
+                    <span className='min-w-0 flex-1'>
+                      <span className='block text-sm font-medium'>{externalPool?.service || selectedProtocol.name}</span>
+                      <code className='block truncate text-[10px] text-muted-foreground'>{externalPool?.mode || selectedProtocol.mount}</code>
+                    </span>
+                    <Badge variant={selectedProtocol.ready ? 'success' : 'destructive'}>{selectedProtocol.ready ? '已连接' : '不可用'}</Badge>
+                    <ChevronRight aria-hidden='true' className='size-4 text-muted-foreground' />
+                  </button>
                 </div>
-              ) : null}
-            </>
+              )}
+            </div>
           ) : (
-            <div className='divide-y'>
-              <button
-                type='button'
-                className='flex min-h-16 w-full cursor-pointer items-center gap-3 px-4 text-left outline-none transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
-                onClick={() => setDetailTarget({ kind: 'protocol' })}
-              >
-                <Server aria-hidden='true' className='size-4 text-primary' />
-                <span className='min-w-0 flex-1'>
-                  <span className='block text-sm font-medium'>{externalPool?.service || selectedProtocol.name}</span>
-                  <code className='block truncate text-[10px] text-muted-foreground'>{externalPool?.mode || selectedProtocol.mount}</code>
-                </span>
-                <Badge variant={selectedProtocol.ready ? 'success' : 'destructive'}>{selectedProtocol.ready ? '已连接' : '不可用'}</Badge>
-                <ChevronRight aria-hidden='true' className='size-4 text-muted-foreground' />
-              </button>
+            <div
+              id={servicePanelId('services')}
+              role='tabpanel'
+              aria-labelledby={serviceTabId('services')}
+              tabIndex={0}
+              className='outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+            >
+              <ServicePricingTable
+                protocol={selectedProtocol}
+                busyId={busyId}
+                canManage={props.adminToken !== undefined}
+                onToggle={(operationId, enabled) => setActivation(selectedProtocol, enabled, operationId)}
+              />
             </div>
           )}
         </section>
@@ -792,7 +934,7 @@ export function ProtocolsPage(props: {
                         </div>
                         <p className='mt-1 text-xs tabular-nums'>
                           {entry.label ? `${entry.label} · ` : ''}
-                          {entry.amount !== undefined ? `${pricingAmountText(entry)} / ${entry.unit}` : (entry.unit || '计费单位未公开')}
+                          {entry.amount !== undefined ? `${pricingAmountText(entry)} / ${entry.unit}` : '未接入价格'}
                         </p>
                         {entry.free_tier ? <p className='mt-1 text-[11px] text-muted-foreground'>免费层：{entry.free_tier}</p> : null}
                         {entry.note ? <p className='mt-1 text-[11px] text-muted-foreground'>{entry.note}</p> : null}

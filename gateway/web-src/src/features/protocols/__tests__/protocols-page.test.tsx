@@ -1,9 +1,15 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { ProtocolsPage } from '@/features/protocols/protocols-page'
+import { adminRequest } from '@/lib/api'
 import type { ProtocolView } from '@/lib/types'
+
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return { ...actual, adminRequest: vi.fn() }
+})
 
 function protocol(overrides: Partial<ProtocolView>): ProtocolView {
   return {
@@ -59,14 +65,24 @@ function protocol(overrides: Partial<ProtocolView>): ProtocolView {
 }
 
 describe('ProtocolsPage master-detail pool console', () => {
-  it('shows dense health and quota summaries before expanding account details', async () => {
+  it('places the protocol editor entry in the service sidebar', async () => {
+    const user = userEvent.setup()
+    const onOpenEditor = vi.fn()
+    render(<ProtocolsPage protocols={[protocol({})]} onOpenEditor={onOpenEditor} />)
+
+    const sidebar = screen.getByRole('complementary', { name: '服务列表' })
+    await user.click(within(sidebar).getByRole('button', { name: '协议编辑' }))
+    expect(onOpenEditor).toHaveBeenCalledOnce()
+  })
+
+  it('shows account details and child services as sibling tabs while preserving pricing', async () => {
     const user = userEvent.setup()
     render(<ProtocolsPage protocols={[protocol({})]} />)
 
     expect(screen.getByRole('heading', { name: 'Video Jobs' })).toBeVisible()
     expect(screen.getByRole('navigation', { name: 'Protocol Pack' })).toHaveAttribute('tabindex', '0')
     expect(screen.getByRole('region', { name: 'Video Jobs' })).toHaveAttribute('tabindex', '0')
-    expect(screen.getAllByRole('img', { name: 'Video Jobs 健康 1，失效 1，额度已接入' })).toHaveLength(2)
+    expect(screen.getAllByRole('img', { name: 'Video Jobs 健康 1，失效 1' })).toHaveLength(2)
     const quotaBars = screen.getAllByRole('progressbar', { name: 'Video Jobs 剩余额度' })
     expect(quotaBars).toHaveLength(2)
     expect(quotaBars[0]).toHaveAttribute('aria-valuenow', '60')
@@ -76,18 +92,46 @@ describe('ProtocolsPage master-detail pool console', () => {
     expect(screen.getByText('总值 0.2 USD')).toBeVisible()
     expect(screen.getByText('余 12 credits')).toBeVisible()
     expect(screen.getByText('参考总值 0.2 USD · 余值 0.12 USD')).toBeVisible()
-    expect(screen.queryByRole('button', { name: '账号 01 · abc123' })).not.toBeInTheDocument()
-    expect(screen.queryByText('jobs.create')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /展开 Video Jobs 号池账号/ }))
+    const tablist = screen.getByRole('tablist', { name: 'Video Jobs 服务数据' })
+    const accountsTab = within(tablist).getByRole('tab', { name: /账号明细/ })
+    const servicesTab = within(tablist).getByRole('tab', { name: /^服务/ })
+    expect(accountsTab).toHaveAttribute('aria-selected', 'true')
+    expect(servicesTab).toHaveAttribute('aria-selected', 'false')
+    expect(screen.getByRole('tabpanel', { name: /账号明细/ })).toBeVisible()
     expect(screen.getByRole('button', { name: '账号 01 · abc123' })).toBeVisible()
+    expect(screen.queryByRole('switch', { name: '停用子服务 jobs.create' })).not.toBeInTheDocument()
     expect(screen.getByText('7 credits · 0.07 USD')).toBeVisible()
+
+    accountsTab.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(servicesTab).toHaveAttribute('aria-selected', 'true')
+    expect(servicesTab).toHaveFocus()
+    const servicePanel = screen.getByRole('tabpanel', { name: /^服务/ })
+    expect(servicePanel).toBeVisible()
+    expect(screen.getByRole('switch', { name: '停用子服务 jobs.create' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(servicePanel).getByText('未接入价格')).toBeVisible()
+
+    await user.click(accountsTab)
 
     await user.click(screen.getByRole('button', { name: '查看 Video Jobs 详情' }))
     const drawer = screen.getByRole('dialog')
     expect(within(drawer).getByText('jobs.create')).toBeVisible()
     expect(within(drawer).getByText('2 后端')).toBeVisible()
     expect(within(drawer).getByRole('link', { name: /接口文档/ })).toBeVisible()
+  })
+
+  it('updates service and child-service activation through compact switches', async () => {
+    const user = userEvent.setup()
+    vi.mocked(adminRequest).mockResolvedValue({} as never)
+    const onChanged = vi.fn().mockResolvedValue(undefined)
+    render(<ProtocolsPage protocols={[protocol({})]} adminToken='test-admin' onChanged={onChanged} />)
+
+    await user.click(screen.getByRole('switch', { name: '停用服务 Video Jobs' }))
+    expect(adminRequest).toHaveBeenCalledWith('/local/api/protocols/video/activation', 'test-admin', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: false }) }))
+
+    await user.click(screen.getByRole('tab', { name: /^服务/ }))
+    await user.click(screen.getByRole('switch', { name: '停用子服务 jobs.create' }))
+    expect(adminRequest).toHaveBeenCalledWith('/local/api/protocols/video/operations/jobs.create/activation', 'test-admin', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: false }) }))
   })
 
   it('switches pools from the service navigation without an accordion step', async () => {
@@ -120,21 +164,39 @@ describe('ProtocolsPage master-detail pool console', () => {
     await user.click(searchButton)
     expect(searchButton).toHaveAttribute('aria-current', 'page')
     expect(within(serviceNavigation).queryByRole('progressbar', { name: 'Search Fixture 剩余额度' })).not.toBeInTheDocument()
-    const untrackedDonuts = screen.getAllByRole('img', { name: 'Search Fixture 健康 1，失效 0，额度未接入' })
+    const untrackedDonuts = screen.getAllByRole('img', { name: 'Search Fixture 健康 1，失效 0' })
     expect(untrackedDonuts).toHaveLength(2)
-    expect(untrackedDonuts[0].querySelector('circle')).toHaveClass('stroke-slate-300')
-    expect(untrackedDonuts[0]).toHaveTextContent('—')
-    expect(screen.queryByRole('button', { name: 'Fixture 账号 01' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /展开 Search Fixture 号池账号/ }))
+    expect(untrackedDonuts[0].querySelector('circle')).toHaveClass('stroke-rose-300')
+    expect(untrackedDonuts[0].querySelectorAll('circle')).toHaveLength(2)
+    expect(untrackedDonuts[0]).toHaveTextContent('100%')
+    const quotaFailures = screen.getAllByRole('status', { name: 'Search Fixture 上游未返回' })
+    expect(quotaFailures).toHaveLength(2)
+    expect(quotaFailures[0]).toHaveClass('bg-amber-200/70')
     expect(screen.getByRole('button', { name: 'Fixture 账号 01' })).toBeVisible()
     expect(screen.queryByRole('button', { name: '账号 01 · abc123' })).not.toBeInTheDocument()
+  })
+
+  it('shows an unavailable empty pool as failed instead of an inert ring', () => {
+    const unavailable = protocol({ ready: false, status: 'pool-not-ready' })
+    unavailable.pool_runtime = {
+      ...unavailable.pool_runtime!, status: 'unavailable', total: 0, ready: 0,
+      quota: { status: 'untracked', tracked_accounts: 0, confirmed_accounts: 0, unknown_accounts: 0, stale_accounts: 0 },
+      accounts: [],
+    }
+    render(<ProtocolsPage protocols={[unavailable]} />)
+
+    const donuts = screen.getAllByRole('img', { name: 'Video Jobs 健康 0，失效 1' })
+    expect(donuts).toHaveLength(2)
+    expect(donuts[0].querySelectorAll('circle')).toHaveLength(1)
+    expect(donuts[0].querySelector('circle')).toHaveClass('stroke-rose-300')
+    expect(donuts[0]).toHaveTextContent('0%')
+    expect(screen.getAllByRole('status', { name: 'Video Jobs 额度未配置' })).toHaveLength(2)
   })
 
   it('opens account operations in the right-side detail surface', async () => {
     const user = userEvent.setup()
     render(<ProtocolsPage protocols={[protocol({})]} adminToken='test-admin' />)
 
-    await user.click(screen.getByRole('button', { name: /展开 Video Jobs 号池账号/ }))
     await user.click(screen.getByRole('button', { name: '账号 02 · def456' }))
     const drawer = screen.getByRole('dialog')
     expect(within(drawer).getByRole('heading', { name: '账号 02 · def456' })).toBeVisible()
@@ -149,7 +211,6 @@ describe('ProtocolsPage master-detail pool console', () => {
     const user = userEvent.setup()
     render(<ProtocolsPage protocols={[protocol({})]} />)
 
-    await user.click(screen.getByRole('button', { name: /展开 Video Jobs 号池账号/ }))
     await user.selectOptions(screen.getByRole('combobox', { name: '筛选账号状态' }), 'cooldown')
     expect(screen.getByRole('button', { name: '账号 02 · def456' })).toBeVisible()
     expect(screen.queryByRole('button', { name: '账号 01 · abc123' })).not.toBeInTheDocument()
@@ -218,7 +279,8 @@ describe('ProtocolsPage master-detail pool console', () => {
     expect(screen.getByText('费率不唯一，无法折算')).toBeVisible()
   })
 
-  it('shows concrete pricing in the service row and the main content without opening details', () => {
+  it('shows concrete pricing in the service row and the pricing tab', async () => {
+    const user = userEvent.setup()
     const priced = protocol({
       pricing: {
         entries: [
@@ -251,6 +313,8 @@ describe('ProtocolsPage master-detail pool console', () => {
     const serviceNavigation = screen.getByRole('navigation', { name: 'Protocol Pack' })
     expect(within(serviceNavigation).getByText('10 USD / 1000 credits')).toBeVisible()
 
+    expect(screen.queryByRole('table', { name: 'Video Jobs 定价' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /^服务/ }))
     const pricingTable = screen.getByRole('table', { name: 'Video Jobs 定价' })
     expect(within(pricingTable).getByText('视频生成')).toBeVisible()
     expect(within(pricingTable).getByText('10 USD / 1000 credits')).toBeVisible()

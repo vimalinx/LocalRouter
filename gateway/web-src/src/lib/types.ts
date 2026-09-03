@@ -133,10 +133,38 @@ export type LocalToken = {
   name: string
   key?: string
   status: number
+  agent_code: string
+  agent_name: string
+  workspace: string
+  runtime: string
   unlimited_quota: boolean
   group: string
   accessed_time?: number
   created_time?: number
+}
+
+export type AgentUsage = {
+  token_id: number
+  token_name: string
+  agent_code: string
+  agent_name: string
+  workspace: string
+  runtime: string
+  status: number
+  registered: boolean
+  system: boolean
+  requests: number
+  successful: number
+  failed: number
+  today_requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number
+  cost_status: 'measured' | 'estimated' | 'partial' | 'unavailable'
+  last_used_at: number
+  requests_per_minute: number
+  daily_request_limit: number
+  max_in_flight: number
 }
 
 export type TokenPolicy = {
@@ -243,6 +271,7 @@ export type RequestLog = {
 }
 
 export type ProtocolRoute = {
+  enabled?: boolean
   operation_key?: string
   operation_id: string
   operation_id_role?: 'semantic-selector'

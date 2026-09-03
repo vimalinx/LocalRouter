@@ -18,7 +18,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AdminTokenDialog } from '@/features/overview/admin-token-dialog'
 import { supplierColor } from '@/lib/supplier-colors'
-import type { Analytics, AnalyticsBucket, AnalyticsService, ProtocolView, Summary } from '@/lib/types'
+import type { AgentUsage, Analytics, AnalyticsBucket, AnalyticsService, ProtocolView, Summary } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const relayEndpoints = [
@@ -36,6 +36,31 @@ const decimalNumber = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 
 
 function formatCount(value: number) {
   return compactNumber.format(value || 0)
+}
+
+function RankedBars(props: {
+  title: string
+  description: string
+  items: Array<{ id: string; label: string; value: number; display: string; meta?: string }>
+  empty: string
+}) {
+  const maximum = Math.max(0, ...props.items.map((item) => item.value))
+  return (
+    <section className='min-w-0 py-4' aria-label={props.title}>
+      <div className='mb-3 flex items-start justify-between gap-3'>
+        <div><h3 className='text-sm font-semibold'>{props.title}</h3><p className='mt-0.5 text-[11px] text-muted-foreground'>{props.description}</p></div>
+      </div>
+      {props.items.length ? <div className='space-y-2.5' role='img' aria-label={`${props.title}横向条形图`}>
+        {props.items.slice(0, 6).map((item) => (
+          <div key={item.id} className='grid grid-cols-[minmax(7rem,0.8fr)_minmax(8rem,1.4fr)_auto] items-center gap-3 text-xs'>
+            <span className='truncate font-medium' title={item.label}>{item.label}</span>
+            <span className='h-2 overflow-hidden rounded-full bg-muted' aria-hidden='true'><span className='block h-full rounded-full bg-primary/70' style={{ width: `${maximum ? Math.max(3, item.value / maximum * 100) : 0}%` }} /></span>
+            <span className='min-w-20 text-right tabular-nums'>{item.display}{item.meta ? <small className='ml-1 text-[9px] text-muted-foreground'>{item.meta}</small> : null}</span>
+          </div>
+        ))}
+      </div> : <p className='border-t py-8 text-center text-xs text-muted-foreground'>{props.empty}</p>}
+    </section>
+  )
 }
 
 function formatUSD(value: number) {
@@ -63,7 +88,7 @@ function serviceStatusLabel(status: string) {
 
 function costLabel(service: AnalyticsService) {
   if (service.kind === 'model-provider') return formatUSD(service.cost_usd || 0)
-  if (service.cost_status === 'unavailable') return '未接入'
+  if (service.cost_status === 'unavailable') return '未接入价格'
   const suffix = service.cost_status === 'partial' ? ' 部分' : service.cost_status === 'estimated' ? ' 估算' : ''
   return `${formatUSD(service.cost_usd || 0)}${suffix}`
 }
@@ -152,6 +177,7 @@ export function OverviewPage(props: {
   summary: Summary
   analytics: Analytics
   protocols: ProtocolView[]
+  agentUsage?: AgentUsage[]
   onChangeAdminToken: (token: string) => Promise<void>
   onChangeAdminAuth: (enabled: boolean, token?: string) => Promise<void>
 }) {
@@ -284,8 +310,26 @@ export function OverviewPage(props: {
               onSetEnabled={props.onChangeAdminAuth}
             />
           </div>
-          <p className='py-3 text-[11px] leading-5 text-muted-foreground'>号池参考余额是当前可用资源估值，不属于历史消耗；只有可安全换算为“每次请求”的服务价格才计入成本。</p>
         </aside>
+      </section>
+
+      <section className='grid border-b lg:grid-cols-2 lg:divide-x' aria-label='模型与 Agent 使用图表'>
+        <div className='lg:pr-5'>
+          <RankedBars
+            title='模型调用量'
+            description='按模型累计请求数排序'
+            items={[...props.analytics.models].sort((a, b) => b.requests - a.requests).map((model) => ({ id: model.name, label: model.name, value: model.requests, display: `${formatCount(model.requests)} 次` }))}
+            empty='还没有模型调用记录。'
+          />
+        </div>
+        <div className='border-t lg:border-t-0 lg:pl-5'>
+          <RankedBars
+            title='Agent 总花费'
+            description='按 Agent 汇总'
+            items={(props.agentUsage || []).filter((agent) => !agent.system && agent.registered).sort((a, b) => b.cost_usd - a.cost_usd).map((agent) => ({ id: String(agent.token_id), label: agent.agent_name || agent.agent_code, value: agent.cost_usd, display: agent.cost_status === 'unavailable' ? '未接入价格' : formatUSD(agent.cost_usd), meta: agent.cost_status === 'partial' ? '部分' : agent.cost_status === 'estimated' ? '估算' : undefined }))}
+            empty='还没有已注册 Agent 的成本记录。'
+          />
+        </div>
       </section>
 
       <section aria-labelledby='service-table-title'>
