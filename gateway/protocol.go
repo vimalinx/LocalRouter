@@ -156,9 +156,12 @@ type protocolPublicRoute struct {
 
 type protocolView struct {
 	ID            string                 `json:"id"`
+	PackKey       string                 `json:"pack_key"`
+	Kind          string                 `json:"kind"`
 	Name          string                 `json:"name"`
 	Description   string                 `json:"description"`
 	Mount         string                 `json:"mount"`
+	OpenAIBaseURL string                 `json:"openai_v1_base_url,omitempty"`
 	WorkflowMount string                 `json:"workflow_mount"`
 	Enabled       bool                   `json:"enabled"`
 	Ready         bool                   `json:"ready"`
@@ -171,6 +174,23 @@ type protocolView struct {
 	Pool          protocolPoolView       `json:"pool"`
 	Workflows     []protocolWorkflow     `json:"workflows"`
 	Pricing       *protocolPricing       `json:"pricing,omitempty"`
+}
+
+func protocolOpenAIBaseURL(packID string, routes []protocolRoute) string {
+	models := false
+	chat := false
+	for _, route := range routes {
+		switch route.Path {
+		case "/models":
+			models = routeSupportsMethod(route, http.MethodGet)
+		case "/chat/completions":
+			chat = routeSupportsMethod(route, http.MethodPost)
+		}
+	}
+	if models && chat {
+		return "/p/" + packID + "/v1"
+	}
+	return ""
 }
 
 func publishProtocolRoutes(packID, mount string, routes []protocolRoute) []protocolPublicRoute {
@@ -623,8 +643,9 @@ func (registry *protocolRegistry) views() []protocolView {
 		ready, status := registry.readiness(definition)
 		mount := "/p/" + definition.ID
 		views = append(views, protocolView{
-			ID: definition.ID, Name: definition.Name, Description: definition.Description,
-			Mount: mount, Enabled: definition.Enabled, Ready: ready,
+			ID: definition.ID, PackKey: "protocol:" + definition.ID, Kind: "protocol",
+			Name: definition.Name, Description: definition.Description,
+			Mount: mount, OpenAIBaseURL: protocolOpenAIBaseURL(definition.ID, definition.Routes), Enabled: definition.Enabled, Ready: ready,
 			WorkflowMount: "/w/" + definition.ID,
 			Status:        status, StatusLabel: protocolStatusLabel(status), Routes: definition.Routes,
 			PublicRoutes: publishProtocolRoutes(definition.ID, mount, definition.Routes),
@@ -728,7 +749,7 @@ func (registry *protocolRegistry) counts() (int, int) {
 }
 
 func registerProtocolRoutes(engine *gin.Engine, runtime localRuntime) {
-	engine.GET("/.well-known/localrouter.json", runtime.protocols.handleDiscovery)
+	engine.GET("/.well-known/localrouter.json", runtime.protocols.handleDiscovery(runtime))
 	engine.GET("/doc", func(c *gin.Context) { c.Redirect(http.StatusPermanentRedirect, "/docs") })
 	engine.GET("/docs", runtime.protocols.handleDocsHTML)
 	engine.GET("/docs/index.json", runtime.protocols.handleDocsIndex)
@@ -879,7 +900,7 @@ func resolveLocalAPIToken(rootUserID int, provided string, validate func(string)
 func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 	definition, ok := registry.get(c.Param("protocol"))
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "unknown protocol"})
+		writeAgentError(c, http.StatusNotFound, "pack_not_found", "Protocol Pack was not found", c.Param("protocol"), false, "agent", "run lr tree or lr find operation <intent>, then use a published Pack ID", nil, nil, nil)
 		return
 	}
 	path := c.Param("path")
@@ -888,12 +909,17 @@ func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 	}
 	decodedPath, err := url.PathUnescape(path)
 	if err != nil || unsafeProtocolPath(decodedPath) {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "unsafe protocol path"})
+		writeAgentError(c, http.StatusBadRequest, "unsafe_protocol_path", "Protocol Pack path is unsafe", decodedPath, false, "agent", "use the exact call_url published by lr show or lr describe", nil, nil, nil)
 		return
 	}
+	forwardPath := path
 	matched, ok := matchProtocolRoute(definition.Routes, c.Request.Method, decodedPath)
+	if !ok && protocolOpenAIBaseURL(definition.ID, definition.Routes) != "" && strings.HasPrefix(decodedPath, "/v1/") {
+		forwardPath = strings.TrimPrefix(decodedPath, "/v1")
+		matched, ok = matchProtocolRoute(definition.Routes, c.Request.Method, forwardPath)
+	}
 	if !ok {
-		c.JSON(http.StatusMethodNotAllowed, gin.H{"success": false, "message": "path or method is not allowed by the protocol template"})
+		writeAgentError(c, http.StatusMethodNotAllowed, "route_not_allowed", "path or method is not allowed by the Protocol Pack", decodedPath, false, "agent", "operation_id is a semantic selector, not a URL; run lr show "+definition.ID+" and use the exact published call_url and method", nil, nil, gin.H{"pack": definition.ID, "requested_method": c.Request.Method, "requested_path": decodedPath})
 		return
 	}
 	ready, status := registry.readiness(definition)
@@ -919,18 +945,18 @@ func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 		defer registry.events.recordRequest(c, "p", definition.ID, matched.Route.OperationID, started)
 	}
 	if matched.Route.Transport == "websocket" {
-		registry.forwardWebSocket(c, definition, matched, path)
+		registry.forwardWebSocket(c, definition, matched, forwardPath)
 		return
 	}
 	if matched.Route.Transport == "grpc" {
-		registry.forwardGRPC(c, definition, matched, path)
+		registry.forwardGRPC(c, definition, matched, forwardPath)
 		return
 	}
 	if matched.Route.Transport == "adapter" {
-		registry.forwardAdapter(c, definition, matched, path)
+		registry.forwardAdapter(c, definition, matched, forwardPath)
 		return
 	}
-	registry.forward(c, definition, matched, path)
+	registry.forward(c, definition, matched, forwardPath)
 }
 
 func (registry *protocolRegistry) handleAdminReadinessRefresh(runtime localRuntime) gin.HandlerFunc {

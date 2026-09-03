@@ -121,7 +121,7 @@ jq -e 'any(.data[]; .id == "video" and .pool.mode == "local" and .pool.source ==
 ! grep -q 'base_url\|secret_file\|fixture-value-only' "$test_root/docs.json"
 
 curl --fail --silent "http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" >"$test_root/discovery.json"
-jq -e '.schema_version == "1" and (.contract.digest | test("^[0-9a-f]{64}$")) and .contract.schema_version == "6" and .agent.catalog == "/agent/operations" and .agent.resolve == "/agent/resolve" and .agent.compare == "/agent/compare" and .agent.selection_mode == "agent" and .agent.merged == false and .invocation.operation_id_is_url == false and .documentation.agent == "/docs/agent.json" and .documentation.html == "/docs" and .documentation.openapi == "/docs/openapi.json" and .documentation.pool_catalog == "/docs/pools/index.json" and .documentation.pool_guide == "/docs/pools/catalog.md" and any(.protocols[]; .id == "search" and .docs.markdown == "/docs/packs/search/guide.md" and (.mount as $mount | all(.routes[]; .call_url == ($mount + .path))))' "$test_root/discovery.json" >/dev/null
+jq -e '.schema_version == "1" and (.contract.digest | test("^[0-9a-f]{64}$")) and .contract.schema_version == "9" and (.topology.digest | test("^[0-9a-f]{64}$")) and .topology.schema_version == "9" and .pack_model.unit == "service-pack" and (.surfaces | length) == 4 and (.compatibility_packs | type) == "array" and .agent.catalog == "/agent/operations" and .agent.resolve == "/agent/resolve" and .agent.compare == "/agent/compare" and .agent.selection_mode == "agent" and .agent.merged == false and .invocation.operation_id_is_url == false and .documentation.agent == "/docs/agent.json" and .documentation.html == "/docs" and .documentation.openapi == "/docs/openapi.json" and .documentation.pool_catalog == "/docs/pools/index.json" and .documentation.pool_guide == "/docs/pools/catalog.md" and any(.protocols[]; .id == "search" and .docs.markdown == "/docs/packs/search/guide.md" and (.mount as $mount | all(.routes[]; .call_url == ($mount + .path))))' "$test_root/discovery.json" >/dev/null
 ! grep -q 'base_url\|secret_file\|fixture-value-only' "$test_root/discovery.json"
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
@@ -131,6 +131,18 @@ jq -e '.selection_mode == "agent" and .merged == false and .count == 1 and .matc
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" find model 'fixture model alpha for a coding agent' >"$test_root/lr-find-model.json"
 jq -e '.object == "localrouter.model.search" and .domain == "model" and .count >= 1 and any(.matches[]; .model_key == "search:fixture-model-alpha" and .id == "fixture-model-alpha" and any(.compatible_operations[]; .operation_key == "search.chat.completions" and .operation_id == "chat.completions" and .methods == ["POST"] and .call_url == "/p/search/chat/completions")) and (.boundary | contains("does not configure OMP"))' "$test_root/lr-find-model.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" find model 'fixture-model-alpha' >"$test_root/lr-find-model-exact.json"
+jq -e '.object == "localrouter.model.search" and .match_mode == "exact" and .count == 1 and .matches[0].model_key == "search:fixture-model-alpha"' "$test_root/lr-find-model-exact.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" find model --exact 'search:fixture-model-alpha' >"$test_root/lr-find-model-strict.json"
+jq -e '.match_mode == "exact-only" and .count == 1 and .returned == 1 and .truncated == false and .matches[0].model_key == "search:fixture-model-alpha"' "$test_root/lr-find-model-strict.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" find model --exact 'search:no-such-model' >"$test_root/lr-find-model-missing.json"
+jq -e '.match_mode == "exact-only" and .count == 0 and .returned == 0 and .matches == [] and (.exact_next_step | contains("no exact live model matched"))' "$test_root/lr-find-model-missing.json" >/dev/null
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" find pool search >"$test_root/lr-find-pool.json"
@@ -143,14 +155,38 @@ jq -e '.object == "localrouter.resource.search" and .no_match == false and .doma
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" catalog search >"$test_root/lr-catalog.json"
 jq -e '.object == "localrouter.operation.list" and .merged == false and .count > 0 and all(.operations[]; .pack == "search" and (.operation_key | startswith("search.")))' "$test_root/lr-catalog.json" >/dev/null
+jq -e '.returned == (.operations | length) and .truncated == false and (.next_action | contains("lr describe"))' "$test_root/lr-catalog.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" catalog --limit 1 >"$test_root/lr-catalog-limited.json"
+jq -e '.count > 1 and .returned == 1 and .truncated == true and (.next_action | contains("--all"))' "$test_root/lr-catalog-limited.json" >/dev/null
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" describe search search >"$test_root/lr-describe.json"
 jq -e '.pack == "search" and .operation == "search" and .call.authenticated == true and .operation_id_is_url == false' "$test_root/lr-describe.json" >/dev/null
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" describe search search.search >"$test_root/lr-describe-operation-key.json"
+jq -e '.operation_key == "search.search" and .operation_id == "search"' "$test_root/lr-describe-operation-key.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" preflight search search '{"query":"e2e","numResults":5}' >"$test_root/lr-preflight.json"
-jq -e '.ok == true and .upstream_called == false and all(.checks[] | select(.blocking == true); .status != "fail")' "$test_root/lr-preflight.json" >/dev/null
+jq -e '.success == true and .ok == true and .code == null and .retryable == false and .upstream_called == false and all(.checks[] | select(.blocking == true); .status != "fail")' "$test_root/lr-preflight.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" preflight search search.search '{"query":"e2e","numResults":5}' >"$test_root/lr-preflight-operation-key.json"
+jq -e '.ok == true and .operation.operation_key == "search.search"' "$test_root/lr-preflight-operation-key.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" call search search.search '{"query":"operation-key-call"}' >"$test_root/lr-call-operation-key.json"
+jq -e '.ok == true and .query == "operation-key-call"' "$test_root/lr-call-operation-key.json" >/dev/null
+
+if env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" preflight video jobs.get '{}' >"$test_root/lr-preflight-blocked.json"; then
+  echo "blocked preflight unexpectedly exited zero" >&2
+  exit 1
+fi
+jq -e '.success == false and .ok == false and .code == "preflight_blocked" and .retryable == false and .upstream_called == false and (.alternatives | type) == "array" and any(.checks[]; .blocking == true and .status == "fail")' "$test_root/lr-preflight-blocked.json" >/dev/null
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" whoami >"$test_root/lr-whoami.json"

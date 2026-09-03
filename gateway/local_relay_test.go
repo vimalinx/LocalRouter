@@ -1,14 +1,55 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompatibilityFailureProvidesStructuredReadyAlternatives(t *testing.T) {
+	store, err := openLocalStore(filepath.Join(t.TempDir(), "localrouter.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	root, err := store.ensureRootUser()
+	require.NoError(t, err)
+	require.NoError(t, store.ensureDefaultToken(root.ID, "sk-local"))
+
+	protocolDir, dataDir := t.TempDir(), t.TempDir()
+	writeProtocolDefinition(t, protocolDir, protocolDefinition{
+		SchemaVersion: protocolSchemaVersionV3,
+		ID:            "readychat", Name: "Ready Chat", Description: "Ready alternative", Enabled: true,
+		BaseURL: "https://example.com", Auth: protocolAuth{Type: "none"},
+		Routes: []protocolRoute{{
+			OperationID: "chat.completions", Capabilities: []string{"ai.chat"},
+			Methods: []string{http.MethodPost}, Path: "/chat/completions", Summary: "Create chat completion",
+			RequestBody: json.RawMessage(`{"model":"example","messages":[]}`),
+		}},
+	})
+	registry, err := newProtocolRegistry(protocolDir, dataDir)
+	require.NoError(t, err)
+	runtime := localRuntime{store: store, rootUser: root, channelProfiles: testChannelProfiles(t), protocols: registry}
+	engine := gin.New()
+	registerRelayRoutesWithRuntime(engine, runtime)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"missing","messages":[]}`))
+	request.Header.Set("Authorization", "Bearer sk-local")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"code":"channel_not_ready"`)
+	assert.Contains(t, response.Body.String(), `"type":"upstream_unavailable"`)
+	assert.Contains(t, response.Body.String(), `"operation_key":"readychat.chat.completions"`)
+	assert.Contains(t, response.Body.String(), `"next_action"`)
+}
 
 func testChannelProfiles(t *testing.T) *localChannelProfileRegistry {
 	t.Helper()

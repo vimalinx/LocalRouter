@@ -103,12 +103,16 @@ Use the generated operation contract before calling search.
 	wrongDottedResponse := httptest.NewRecorder()
 	engine.ServeHTTP(wrongDottedResponse, wrongDottedPath)
 	assert.Equal(t, http.StatusMethodNotAllowed, wrongDottedResponse.Code)
+	assert.Contains(t, wrongDottedResponse.Body.String(), `"code":"route_not_allowed"`)
+	assert.Contains(t, wrongDottedResponse.Body.String(), `operation_id is a semantic selector, not a URL`)
+	assert.Contains(t, wrongDottedResponse.Body.String(), `"next_action"`)
 
 	forbidden := httptest.NewRecorder()
 	forbiddenRequest := httptest.NewRequest(http.MethodGet, "/p/searchx/private", nil)
 	forbiddenRequest.Header.Set("Authorization", "Bearer sk-local")
 	engine.ServeHTTP(forbidden, forbiddenRequest)
 	assert.Equal(t, http.StatusMethodNotAllowed, forbidden.Code)
+	assert.Contains(t, forbidden.Body.String(), `"code":"route_not_allowed"`)
 
 	docs := httptest.NewRecorder()
 	engine.ServeHTTP(docs, httptest.NewRequest(http.MethodGet, "/docs/protocols/searchx", nil))

@@ -403,6 +403,23 @@ func (store *localStore) enabledChannels() ([]localChannel, error) {
 	return channels, rows.Err()
 }
 
+func (store *localStore) enabledChannelCountsByType() (map[int]int, error) {
+	rows, err := store.db.Query(`SELECT COALESCE(type, 1), COUNT(*) FROM channels WHERE status = ? GROUP BY COALESCE(type, 1)`, localStatusEnabled)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[int]int)
+	for rows.Next() {
+		var profileID, count int
+		if err := rows.Scan(&profileID, &count); err != nil {
+			return nil, err
+		}
+		counts[profileID] = count
+	}
+	return counts, rows.Err()
+}
+
 func (store *localStore) insertChannel(channel localChannel) (int64, error) {
 	now := time.Now().Unix()
 	profileJSON, err := json.Marshal(channel.UpstreamProfile)

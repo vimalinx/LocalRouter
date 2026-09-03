@@ -1,4 +1,4 @@
-.PHONY: build test verify install uninstall
+.PHONY: build test verify release-verify install uninstall
 
 build:
 	$(MAKE) -C gateway build
@@ -8,6 +8,9 @@ test:
 
 verify:
 	./tests/verify.sh
+
+release-verify:
+	./tests/clean_release_acceptance.sh
 
 install:
 	./tools/install-localrouter.sh install

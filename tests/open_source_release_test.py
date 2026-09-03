@@ -15,8 +15,12 @@ def git(*args: str) -> bytes:
     return subprocess.check_output(["git", "-C", str(ROOT), *args])
 
 
-def staged_files() -> list[str]:
-    return [value.decode() for value in git("ls-files", "-z").split(b"\0") if value]
+def candidate_files() -> list[str]:
+    return [
+        value.decode()
+        for value in git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split(b"\0")
+        if value
+    ]
 
 
 def direct_go_modules() -> set[str]:
@@ -47,15 +51,19 @@ def main() -> int:
         "THIRD-PARTY-LICENSES.md",
         "docs/OPEN_SOURCE_RELEASE.md",
         "packaging/localrouter.env.example",
+        "packaging/agent-contract/AGENTS.localrouter.md",
         "packaging/systemd/localrouter.service.in",
         "tools/install-localrouter.sh",
+        "tests/release_artifact_acceptance.sh",
         "tests/xdg_install_acceptance.sh",
+        ".agents/skills/localrouter-protocol-pack/SKILL.md",
+        ".agents/skills/localrouter-protocol-pack/references/runtime-handoff.md",
         "gateway/protocols/catalogs/pool-catalog.json",
         "gateway/protocols/catalogs/pool-catalog.md",
     }
-    tracked = set(staged_files())
+    tracked = set(candidate_files())
     missing = sorted(required - tracked)
-    assert not missing, f"release files missing from Git index: {missing}"
+    assert not missing, f"release files missing from the non-ignored release candidate: {missing}"
 
     forbidden_prefixes = (
         ".ai/",
@@ -208,9 +216,13 @@ def main() -> int:
     assert "binary: localrouter\n" in release_config
     assert "localrouter-adapter-" not in release_config
     assert "- packaging/localrouter.env.example\n" in release_config
+    assert "- packaging/**/*\n" in release_config
+    assert "- .agents/skills/localrouter-protocol-pack/**/*\n" in release_config
+    assert "- .agents/skills/localrouter-protocol-pack/SKILL.md\n" in release_config
+    assert "- THIRD-PARTY-LICENSES.md\n" in release_config
 
     print(
-        f"open-source Git index accepted: files={len(tracked)} "
+        f"open-source release candidate accepted: files={len(tracked)} "
         f"direct_dependencies={len(dependencies)} submodules=0"
     )
     return 0

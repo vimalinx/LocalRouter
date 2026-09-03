@@ -10,12 +10,15 @@ Treat the loopback listener as consumer authority and a reviewed Pack draft as t
 ## Start from the live contract
 
 1. Request `http://127.0.0.1:8317/.well-known/localrouter.json`.
-2. Follow its Manifest, guide, OpenAPI, pool catalog, and maintenance links. Consumers need no repository access. An Agent may maintain only when discovery reports `maintenance.auth.agent_token.enabled=true` and an operator supplied a maintenance-only Token locator.
+2. Follow its links. Before mutation choose an enabled maintenance Agent Token, explicit delegation for one `lr manage-*` change, or read-only discovery. Keep credentials private and use the port as authority.
 3. Classify the work before reading more detail:
    - **Use only:** call the already documented operation and do not edit the Pack.
+   - **Compatibility Pack:** standard OpenAI, Anthropic, or Gemini routing uses lightweight Channel Profile + Channels on `/v1` or `/v1beta`.
    - **Pack change:** use the semantic tools at `maintenance.mcp` only through the authorized maintenance lane; LocalRouter owns draft paths, JSON/YAML formatting, validation, exact digests, installation, and local rollback.
    - **Runtime change:** Go, WebUI, schema, or handler behavior requires a binary/UI build and restart in addition to any Pack release.
 4. Determine who owns registration, credential refresh, health, request-time selection, quota measurement, and upstream OAuth. Do not silently move ownership into LocalRouter.
+
+With a Pack argument, `lr` accepts bare `operation_id` or Pack-qualified `operation_key`; never turn dotted selectors into paths.
 
 ## Load only the relevant detail
 
@@ -32,37 +35,39 @@ Treat the loopback listener as consumer authority and a reviewed Pack draft as t
 | Validation, impact review, release, binary restart, live verification, or rollback | [references/release-lifecycle.md](references/release-lifecycle.md) |
 | A failed validation, 401/403/409/422/429/5xx, degraded pool, stale quota, or unknown outcome | [references/troubleshooting.md](references/troubleshooting.md) |
 | Any completion claim | [references/acceptance.md](references/acceptance.md) |
+| Delivering a newly published model to OMP or another Agent runtime | [references/runtime-handoff.md](references/runtime-handoff.md) |
 
-Do not read every reference by default. The authoritative schemas remain `gateway/protocols/schema/protocol-pack-v2.schema.json` and `protocol-pack-v3.schema.json`; `docs/PROTOCOL-PACK-V3.md` is the complete runtime contract.
+Authoritative schemas are `gateway/protocols/schema/protocol-pack-v2.schema.json` and `protocol-pack-v3.schema.json`; `docs/PROTOCOL-PACK-V3.md` is the full runtime contract.
 
 ## Non-negotiable boundaries
 
-- Bind the public gateway to loopback. Targets and adapter/module paths are operator-owned constants; request data never selects them.
+- Bind the gateway to loopback. Targets and adapter/module paths are operator-owned; request data never selects them.
 - Keep credentials, cookies, locators, private upstream addresses, and pool contents out of Pack source, guides, logs, tests, and `.ai` project-visible notes. Installed protected material stays below `$XDG_DATA_HOME/localrouter/` with mode `0600`; isolated tests may set `LOCAL_GATEWAY_DATA_DIR`.
 - Keep registration, CAPTCHA, human OAuth consent, anti-bot challenges, payment, and account production outside the request path.
 - Use `pool.mode=external` when another gateway owns the complete pool. Use `pool.mode=local` only when LocalRouter owns request-time selection. An external maintainer may atomically update a private external-readonly source without transferring registration ownership.
-- Default retry to `safe`. Never replay a side-effecting request after an unknown outcome unless the provider honors the same idempotency key or an authoritative reconciliation proves it safe.
+- Default retry to `safe`. Never replay an unknown side-effecting outcome without idempotency or authoritative reconciliation.
 - Prefer byte passthrough for multipart, files, SSE, WebSocket, gRPC, and unknown bodies. Apply JSON transforms only to observed JSON contracts.
 - Give every route a stable `operation_id`. Define workflows only from observed IDs, status paths, transitions, terminal values, results, and cancellation behavior.
 - Unknown capability, cost, balance, or account state stays unknown. Missing quota is not zero; balance is not provider task success.
-- Consumer Tokens are normally long-lived and call-only. Pool concurrency, lease, cooldown, health, and quota still apply. Maintenance uses the administrator credential. Optional Agent maintenance defaults off; when enabled it requires a distinct maintenance-only `localrouter.maintain` Token. Never mix purposes.
+- Consumer Tokens are call-only; pool concurrency, lease, cooldown, health, and quota still apply. Optional Agent maintenance requires a distinct maintenance-only `localrouter.maintain` Token. Never mix purposes.
+- Pack is the common service view. Full Protocol Packs cover isolated routes, transforms, special auth, dedicated pools, adapters, or workflows; `/w` and `/mcp` are projections.
 
 ## Required lifecycle
 
 1. Discover the live Pack and ownership boundary.
-2. Confirm discovery's maintenance lane. Operators use the administrator header; Agents require the enabled maintenance-only lane. Open an isolated `/manage/mcp` draft; never request or edit credentials there.
-3. Author the smallest contract and guide change with the narrowest semantic tool: Pack core, one operation, one upstream supplier profile, or one guide. Run Pack lint after content edits. Use generic merge patch only for advanced/removal fields not owned by a narrower tool. Do not construct paths, front matter, or release payloads manually when a maintenance tool owns them.
+2. Confirm the selected lane and scope. Open an isolated `/manage/mcp` draft; never request, print, copy, or edit credentials there.
+3. Use the narrowest semantic tool for Pack core, operation, supplier profile, or guide. Lint content edits. Use merge patch only for advanced/removal fields outside those tools.
 4. Read the draft's `impact.files`, `impact.protocols`, and `impact.pool_ids`. Inspect every changed section and affected pool before planning.
 5. Run strict validation, focused mocks, relevant transport/workflow tests, and the Skill doctor.
 6. Plan once, retain the reviewed digest, and apply that exact digest. Draft drift invalidates the plan.
-7. Re-discover through port 8317 and verify docs plus every applicable real layer.
-8. Report the acceptance matrix as pass/fail/not-covered and retain the revision digest in the task result. Do not create `.ai` evidence while the project-wide automation pause is active.
-9. A failed local post-apply verification automatically attempts the previous immutable revision and preserves the draft. Inspect the structured `error.stage`, `error.code`, and `error.rollback` before deciding whether to retry. Unknown upstream outcomes are never replayed automatically.
+7. Re-discover through port 8317 and verify each applicable real layer. Resolve dynamic models with `lr find model --exact <pack>:<model-id>`; a zero-result exact query is blocking even if fuzzy suggestions exist. Before OpenAI-compatible runtime configuration, run `lr runtime-openai <pack> <exact-model>` for its public mount.
+8. Report pass/fail/not-covered plus the revision digest. Do not create `.ai` evidence while automation is paused.
+9. Post-apply verification failure preserves the draft and attempts the previous revision. Inspect `error.stage`, `error.code`, and `error.rollback`; reconcile unknown upstream outcomes before retry.
 
-Run the read-only discovery doctor when the listener is available:
+Run the discovery doctor when the listener is available:
 
 ```bash
 python .agents/skills/localrouter-protocol-pack/scripts/protocol_pack_doctor.py
 ```
 
-Use `--pack <id>` to narrow the report. Passing the doctor proves discovery/document consistency only; provider calls, streaming terminals, workflows, cost, and rollback still require their own evidence.
+Use `--pack <id>` to narrow. Doctor success proves discovery/document consistency only; calls, streams, workflows, cost, and rollback need separate evidence.

@@ -21,6 +21,12 @@ import (
 
 const maxRelayBodyBytes = 64 << 20
 
+var localRelayV1PostPaths = []string{
+	"/messages", "/completions", "/chat/completions", "/responses", "/responses/compact",
+	"/alpha/search", "/edits", "/images/generations", "/images/edits", "/embeddings",
+	"/audio/transcriptions", "/audio/translations", "/audio/speech", "/rerank", "/moderations",
+}
+
 type localRelayBalancer struct {
 	mu      sync.Mutex
 	cursors map[string]uint64
@@ -145,11 +151,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 		relayV1.Use(runtime.policies.middleware("v1"))
 	}
 	relayV1.GET("/realtime", unsupportedRealtime)
-	for _, path := range []string{
-		"/messages", "/completions", "/chat/completions", "/responses", "/responses/compact",
-		"/alpha/search", "/edits", "/images/generations", "/images/edits", "/embeddings",
-		"/audio/transcriptions", "/audio/translations", "/audio/speech", "/rerank", "/moderations",
-	} {
+	for _, path := range localRelayV1PostPaths {
 		relayV1.POST(path, handleRelayRequest(runtime))
 	}
 	relayV1.POST("/engines/:model/embeddings", handleRelayRequest(runtime))
@@ -240,7 +242,7 @@ func handleRelayRequest(runtime localRuntime) gin.HandlerFunc {
 			return
 		}
 		if len(channels) == 0 {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": "no enabled channel supports this model and protocol", "type": "upstream_unavailable"}})
+			writeCompatibilityRelayError(c, runtime, http.StatusServiceUnavailable, "channel_not_ready", "no enabled channel supports this model and protocol", false)
 			return
 		}
 		channels = runtime.balancer.ordered(model, channels)
@@ -301,9 +303,49 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 	if len(lastBody) > 0 {
 		copyRelayError(c, status, lastBody)
 	} else {
-		c.JSON(status, gin.H{"error": gin.H{"message": message, "type": "upstream_unavailable"}})
+		writeCompatibilityRelayError(c, runtime, status, "upstream_unavailable", message, true)
 	}
 	logRelay(runtime, c, channels[len(channels)-1], model, requestID, started, relayUsage{}, false, localLogTypeError, message)
+}
+
+func writeCompatibilityRelayError(c *gin.Context, runtime localRuntime, status int, code, reason string, retryable bool) {
+	query := compatibilityAlternativeQuery(c.Request.URL.Path)
+	alternatives := []agentOperationRef{}
+	if runtime.protocols != nil {
+		alternatives = runtime.protocols.readyOperationRefs(c.GetInt(tokenPolicyContextID), query, 3)
+	}
+	nextAction := "run lr tree and choose a ready Pack, or ask the operator to configure an eligible Channel for this compatibility Pack"
+	if len(alternatives) > 0 {
+		nextAction = "choose one published ready alternative explicitly, then use its call_url or lr describe/preflight/call flow"
+	}
+	message := "the standard compatibility Pack is not ready for this request"
+	c.JSON(status, gin.H{
+		"success": false, "code": code, "message": message, "reason": reason,
+		"retryable": retryable, "owner": "localrouter", "retry_after": nil,
+		"next_action": nextAction, "alternatives": alternatives,
+		"error": gin.H{"message": reason, "type": "upstream_unavailable", "code": code},
+	})
+}
+
+func compatibilityAlternativeQuery(requestPath string) string {
+	path := strings.TrimPrefix(requestPath, "/v1beta")
+	path = strings.TrimPrefix(path, "/v1")
+	switch {
+	case strings.Contains(path, "/chat/completions"):
+		return "chat.completions"
+	case strings.Contains(path, "/responses"):
+		return "responses"
+	case strings.Contains(path, "/models"):
+		return "ai.models"
+	case strings.Contains(path, "/embeddings"):
+		return "embeddings"
+	case strings.Contains(path, "/images"):
+		return "images"
+	case strings.Contains(path, "/audio"):
+		return "audio"
+	default:
+		return strings.Trim(strings.ReplaceAll(path, "/", "."), ".")
+	}
 }
 
 func matchingChannels(store *localStore, model string, profileID int) ([]localChannel, error) {

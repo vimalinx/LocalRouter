@@ -7,6 +7,25 @@ xdg_data_home="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
 [[ "$xdg_data_home" = /* ]] || xdg_data_home="$HOME/.local/share"
 admin_token_file="${LOCALROUTER_ADMIN_TOKEN_FILE:-$xdg_data_home/localrouter/admin-token}"
 
+usage() {
+  cat >&2 <<'EOF'
+usage: localrouter-protocols {validate|plan|apply DIGEST|history|rollback DIGEST|pool-reset PACK [CREDENTIAL]|verify-live|verify-lifecycle}
+
+This is a compatibility helper for an explicitly delegated local operator. Agent
+Pack work should use `lr manage-status`, `lr manage-list`, and `lr manage-call`
+to create, review, plan, and apply a semantic draft. Neither workflow may print
+or copy credential values.
+EOF
+}
+
+command="${1:-help}"
+case "$command" in
+  help|-h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
 if [[ ! -r "$admin_token_file" ]]; then
   echo "LocalRouter admin token file is not readable: $admin_token_file" >&2
   exit 1
@@ -33,7 +52,6 @@ request() {
   fi
 }
 
-command="${1:-help}"
 case "$command" in
   validate)
     request POST /local/api/protocols/validate | jq .
@@ -68,7 +86,7 @@ case "$command" in
       "$project_root/tests/live_lifecycle_acceptance.sh"
     ;;
   *)
-    echo "usage: $0 {validate|plan|apply DIGEST|history|rollback DIGEST|pool-reset PACK [CREDENTIAL]|verify-live|verify-lifecycle}" >&2
+    usage
     exit 2
     ;;
 esac

@@ -9,6 +9,8 @@ test -f "$skill_root/references/pack-v2.md"
 test -f "$skill_root/references/pack-v3.md"
 test -f "$skill_root/references/acceptance.md"
 test -x "$skill_root/scripts/protocol_pack_doctor.py"
+"$project_root/tools/lr" call --help | grep -q 'lr call <pack> <operation>'
+"$project_root/tools/lr" find model --help | grep -q 'lr find model'
 
 python3 - "$project_root" <<'PY'
 import json

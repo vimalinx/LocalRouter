@@ -17,20 +17,24 @@ usage() {
 Usage: lr <command> [arguments]
 
 Discover
-  lr status                         Health and Pack readiness summary
+  lr status                         Health and compatibility/Protocol Pack readiness
+  lr tree [pack]                    Show all LR surfaces and Packs as one tree
   lr find <text>                    Search operations, live models and pool metadata
   lr find operation <text>          Search only callable operation contracts
-  lr find model [text]              Query ready model catalogs and search exact model IDs
+  lr find model [--exact] [--limit N|--all] [text]
+                                    Query live model IDs; return at most 20 by default
   lr find pool [text]               Search pool, quota and pricing metadata
-  lr models [text]                  Precise alias for `lr find model`
+  lr models [options] [text]        Precise alias for `lr find model`
   lr pools [text]                   Precise alias for `lr find pool`
-  lr catalog [pack]                 List every independently addressable operation
+  lr catalog [pack] [--limit N|--all]
+                                    List operations; return at most 20 by default
   lr resolve <capability> [limit]   Return all exact independent matches as JSON
   lr compare <pack.operation> <pack.operation> [...]
                                     Compare exact operations without merging or choosing one
-  lr show <pack>                    Show one Pack's routes, status, pool and docs
-  lr describe <pack> <operation>    Read one compact operation contract
+  lr show <pack>                    Show one compatibility or Protocol Pack
+  lr describe <pack> <operation>    Read one compact operation contract; operation_key is accepted
   lr docs <pack>                    Read the Pack's generated Markdown guide
+  lr runtime-openai <pack> <model>  Emit the verified OpenAI-compatible base URL and exact model
   lr env                            Show non-secret LocalRouter configuration
 
 Call
@@ -47,15 +51,22 @@ Call
   lr mcp-call <tool> [json]         Call a ready MCP tool with arguments
   lr whoami                         Show this service Token's non-secret effective policy
 
-Maintain (administrator by default; optional Agent maintenance Token)
-  lr manage-list [text]             List semantic LocalRouter maintenance tools
-  lr manage-call <tool> [json]      Call a maintenance tool; structured failures exit 1
+Maintain (delegated operator or optional Agent maintenance Token)
+  lr manage-status                  Show the selected maintenance lane and its prerequisites
+  lr manage-list [text]             Inspect semantic maintenance tools; listing grants no authority
+  lr manage-call <tool> [json]      Call one semantic draft tool in the selected maintenance lane
 
 JSON may be an inline object or @/path/to/body.json. Service calls read the API
-Token. Maintenance reads the administrator key unless an explicit
-LOCALROUTER_MAINTAINER_TOKEN_FILE is set. Credential values are never printed.
+Token. With LOCALROUTER_MAINTAINER_TOKEN_FILE, an Agent must first confirm
+maintenance.auth.agent_token.enabled=true in discovery and use a distinct
+localrouter.maintain Token. Without that locator, manage commands use the
+administrator-backed operator lane and require explicit user delegation for the
+named change. Neither lane permits credential values in output. Do not replace
+either lane by editing files, SQLite, live Packs, or restarting the service.
 
 operation_id is a semantic selector for lr/Agent/MCP commands, not an HTTP URL.
+Where a command already takes <pack>, <operation> may be either the bare
+operation_id or the published pack-qualified operation_key.
 For direct HTTP, use the exact call_url published by discovery or lr show.
 EOF
 }
@@ -63,6 +74,26 @@ EOF
 fail() {
   printf 'lr: %s\n' "$*" >&2
   exit 1
+}
+
+json_fail() {
+  local code="$1"
+  local message="$2"
+  local next_action="$3"
+  jq -n --arg code "$code" --arg message "$message" --arg next_action "$next_action" '{
+    success:false, code:$code, message:$message, reason:$message,
+    retryable:false, owner:"agent", retry_after:null,
+    next_action:$next_action, alternatives:[]
+  }' >&2
+  return 1
+}
+
+report_curl_failure() {
+  local status="$1"
+  if [[ "$status" != "22" ]]; then
+    printf 'lr: LocalRouter transport failed (curl exit %s); run lr status and verify the loopback discovery URL\n' "$status" >&2
+  fi
+  return 1
 }
 
 require_command() {
@@ -114,16 +145,16 @@ bearer_request() {
   local method="$2"
   local request_url="$3"
   local body="${4:-}"
-  local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --show-error --request "$method")
+  local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --request "$method")
   if [[ -n "$body" && "$method" != "GET" && "$method" != "HEAD" ]]; then
     curl_arguments+=(--header 'Content-Type: application/json' --data-binary @-)
   fi
   read_bearer_token "$token_file"
   if [[ -n "$body" && "$method" != "GET" && "$method" != "HEAD" ]]; then
-    curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_auth) <<<"$body"
+    curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_auth) <<<"$body" || report_curl_failure "$?"
     return
   fi
-  curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_auth)
+  curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_auth) || report_curl_failure "$?"
 }
 
 authenticated_request() {
@@ -138,16 +169,16 @@ maintenance_request() {
   local method="$1"
   local request_url="$2"
   local body="${3:-}"
-  local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --show-error --request "$method")
+  local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --request "$method")
   if [[ -n "$body" && "$method" != "GET" && "$method" != "HEAD" ]]; then
     curl_arguments+=(--header 'Content-Type: application/json' --data-binary @-)
   fi
   read_bearer_token "$admin_token_file"
   if [[ -n "$body" && "$method" != "GET" && "$method" != "HEAD" ]]; then
-    curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_admin_auth) <<<"$body"
+    curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_admin_auth) <<<"$body" || report_curl_failure "$?"
     return
   fi
-  curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_admin_auth)
+  curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_admin_auth) || report_curl_failure "$?"
 }
 
 validate_local_path() {
@@ -173,12 +204,73 @@ command_status() {
   discovery_json="$(discovery)"
   jq -n --argjson health "$health_json" --argjson contract "$discovery_json" '{
     health: $health,
+    compatibility_packs: [$contract.compatibility_packs[]? | {
+      id, kind, status, ready, mounts,
+      operations: (.routes | length),
+      pool: {mode: .pool.mode, eligible: .pool.eligible}
+    }],
     protocols: [$contract.protocols[] | {
       id, status, ready, mount,
       operations: (.routes | length),
       pool: (if .pool then {mode: .pool.mode, source: .pool.source, total: .pool.total, eligible: .pool.eligible} else null end)
     }]
   }'
+}
+
+command_tree() {
+  local pack_id="${1:-}"
+  if [[ -n "$pack_id" ]]; then
+    validate_pack_id "$pack_id"
+  fi
+  local contract
+  contract="$(discovery)"
+  jq -r --arg filter "$pack_id" --arg root "$base_url" '
+    [(.compatibility_packs // [])[] | select($filter == "" or .id == $filter) | . + {_node_kind:"compatibility"}] as $compatibility
+    | [(.protocols // [])[] | select($filter == "" or .id == $filter) | . + {_node_kind:"protocol"}] as $protocols
+    | (if $filter == "" then [(.surfaces // [])[] | . + {_node_kind:"surface"}] else [] end) as $surfaces
+    | ($surfaces + $compatibility + $protocols) as $nodes
+    | if ($compatibility | length) + ($protocols | length) == 0 and $filter != "" then error("unknown Pack: " + $filter) else . end
+    | "LocalRouter " + $root + "  topology=" + (.topology.schema_version // "?") + ":" + ((.topology.digest // "missing")[0:12]),
+      ($nodes | to_entries[]
+        | .key as $node_index
+        | .value as $node
+        | ($node_index == (($nodes | length) - 1)) as $last_node
+        | (if $last_node then "└─ " else "├─ " end) as $branch
+        | (if $last_node then "   " else "│  " end) as $indent
+        | if $node._node_kind == "surface" then
+            $branch + "surface " + $node.id + "  " + (($node.paths // []) | join(", ")) + " — " + ($node.role // "")
+          elif $node._node_kind == "compatibility" then
+            $branch + $node.id + " [compatibility:" + ($node.status // "unknown") + "] " + ($node.name // ""),
+            $indent + "├─ mount  " + (($node.mounts // []) | join(", ")),
+            $indent + "├─ pool   channels eligible=" + (($node.pool.eligible // 0) | tostring),
+            (($node.routes // []) | to_entries[]
+              | $indent
+                + (if .key == ((($node.routes // []) | length) - 1) then "└─ " else "├─ " end)
+                + "api " + ((.value.methods // []) | join("/")) + " " + (.value.call_url // .value.path)
+                + (if .value.status == "unsupported" then " [unsupported]" else "" end))
+          else
+            $branch + $node.id + " [protocol:" + ($node.status // "unknown") + "] " + ($node.name // ""),
+            $indent + "├─ mount  " + ($node.mount // "unknown"),
+            (if ($node.openai_v1_base_url // "") != "" then $indent + "├─ openai " + $node.openai_v1_base_url else empty end),
+            (if $node.pool then
+               $indent + "├─ pool   " + ($node.pool.mode // "static")
+               + (if ($node.pool.source // "") != "" then "/" + $node.pool.source else "" end)
+               + (if $node.pool.total != null then " eligible=" + (($node.pool.eligible // 0) | tostring) + "/" + ($node.pool.total | tostring) else "" end)
+             else empty end),
+            (($node.routes // []) | to_entries[]
+              | $indent
+                + (if (.key == ((($node.routes // []) | length) - 1)) and (($node.workflows // []) | length) == 0 then "└─ " else "├─ " end)
+                + "op " + (.value.operation_key // ($node.id + "." + .value.operation_id))
+                + "  " + ((.value.methods // []) | join("/")) + " " + (.value.call_url // .value.path)
+                + (if (.value.transport // "http") != "http" then " [" + .value.transport + "]" else "" end)),
+            (($node.workflows // []) | to_entries[]
+              | $indent
+                + (if .key == ((($node.workflows // []) | length) - 1) then "└─ " else "├─ " end)
+                + "wf " + .value.id + "  POST " + ($node.workflow_mount + "/" + .value.id))
+          end),
+      "",
+      "Next: lr show <pack>; Protocol Pack → lr describe/preflight/call/run; compatibility Pack → lr request"
+  ' <<<"$contract"
 }
 
 command_find_operation() {
@@ -222,6 +314,8 @@ command_find_operation() {
 
 command_find_model() {
   local search_text="${1:-}"
+  local result_limit="${2:-20}"
+  local exact_only="${3:-false}"
   local contract search_tmp model_rows source_rows failure_rows
   contract="$(discovery)"
   search_tmp="$(mktemp -d "${TMPDIR:-/tmp}/localrouter-model-search.XXXXXX")"
@@ -263,6 +357,8 @@ command_find_model() {
   local output
   output="$(jq -n \
     --arg query "$search_text" \
+    --argjson result_limit "$result_limit" \
+    --argjson exact_only "$exact_only" \
     --argjson contract "$contract" \
     --slurpfile models "$model_rows" \
     --slurpfile sources "$source_rows" \
@@ -270,7 +366,8 @@ command_find_model() {
       def words:
         ascii_downcase | gsub("[^[:alnum:]]+"; " ") | split(" ")
         | map(select(length > 1 and . != "for" and . != "the" and . != "with" and . != "agent" and . != "model"));
-      ($query | words) as $terms
+      ($query | ascii_downcase) as $normalized_query
+      | ($query | words) as $terms
       | ($terms | map(select(. != "free" and . != "quota" and . != "coding" and . != "omp"))) as $specific_terms
       | (if ($specific_terms | length) > 0 then $specific_terms else $terms end) as $identity_terms
       | ($models | map(
@@ -290,24 +387,68 @@ command_find_model() {
                 | {operation_key, operation_id, methods, call_url, summary}
               ]
             }
-        )
-        | if ($query | length) == 0 then . else map(select(.identity_score > 0)) end
-        | sort_by([-.score, .model_key])) as $matches
+        )) as $scored_models
+      | ($scored_models | map(select(
+          (.id | ascii_downcase) == $normalized_query
+          or (.model_key | ascii_downcase) == $normalized_query
+        ))) as $exact_matches
+      | (if $exact_only then $exact_matches
+         elif ($query | length) == 0 then $scored_models
+         elif ($exact_matches | length) > 0 then $exact_matches
+         else ($scored_models | map(select(.identity_score > 0)))
+         end
+        | sort_by([-.score, .model_key])) as $all_matches
+      | (if $result_limit == 0 then $all_matches else $all_matches[:$result_limit] end) as $matches
       | {
           object: "localrouter.model.search",
           domain: "model",
           query: $query,
+          match_mode: (if $exact_only then "exact-only" elif ($query | length) == 0 then "catalog" elif ($exact_matches | length) > 0 then "exact" else "fuzzy" end),
           live: true,
-          count: ($matches | length),
+          count: ($all_matches | length),
+          returned: ($matches | length),
+          truncated: (($matches | length) < ($all_matches | length)),
           matches: $matches,
           sources: $sources,
           failures: $failures,
-          exact_next_step: "choose one model_key and one published compatible_operations entry; run lr describe and lr preflight, then confirm pricing/quota with lr find pool <pack>",
+          exact_next_step: (if $exact_only and ($all_matches | length) == 0
+            then "no exact live model matched; refresh with lr find model --exact <pack>:<model-id> or choose a model_key returned by lr find model"
+            elif (($matches | length) < ($all_matches | length))
+            then "refine the query, increase --limit, or use --all; then choose one model_key and compatible operation before lr describe/preflight"
+            else "choose one model_key and one published compatible_operations entry; run lr describe and lr preflight, then confirm pricing/quota with lr find pool <pack>"
+            end),
           boundary: "model discovery does not configure OMP or another Agent runtime; pass the explicit Pack endpoint and model ID to that runtime separately"
         }
     ')"
-  rm -rf -- "$search_tmp"
+  find "$search_tmp" -depth -delete
   printf '%s\n' "$output"
+}
+
+command_find_model_cli() {
+  local result_limit=20
+  local exact_only=false
+  local -a query_parts=()
+  while (($#)); do
+    case "$1" in
+      --exact) exact_only=true ;;
+      --all) result_limit=0 ;;
+      --limit)
+        shift
+        if [[ ! "${1:-}" =~ ^[0-9]+$ ]] || ((10#${1:-0} < 1 || 10#${1:-0} > 200)); then
+          json_fail "invalid_limit" "model result limit must be between 1 and 200" "use --limit 1..200 or --all"
+          return 1
+        fi
+        result_limit="$1"
+        ;;
+      --*)
+        json_fail "invalid_option" "unknown model-search option: $1" "use lr find model [--exact] [--limit N|--all] [text]"
+        return 1
+        ;;
+      *) query_parts+=("$1") ;;
+    esac
+    shift
+  done
+  command_find_model "${query_parts[*]}" "$result_limit" "$exact_only"
 }
 
 command_find_pool() {
@@ -364,6 +505,10 @@ command_find_pool() {
 
 command_find() {
   local domain="${1:-}"
+  if [[ "$domain" == "-h" || "$domain" == "--help" || "${2:-}" == "-h" || "${2:-}" == "--help" ]]; then
+    usage
+    return 0
+  fi
   case "$domain" in
     operation|operations)
       shift
@@ -371,7 +516,7 @@ command_find() {
       ;;
     model|models)
       shift
-      command_find_model "$*"
+      command_find_model_cli "$@"
       ;;
     pool|pools|quota|pricing)
       shift
@@ -388,7 +533,7 @@ command_find() {
       models_file="$search_tmp/models.json"
       pools_file="$search_tmp/pools.json"
       command_find_operation "$search_text" >"$operations_file"
-      command_find_model "$search_text" >"$models_file"
+      command_find_model "$search_text" 20 false >"$models_file"
       command_find_pool "$search_text" >"$pools_file"
       local output
       output="$(jq -n --arg query "$search_text" --slurpfile operations "$operations_file" --slurpfile models "$models_file" --slurpfile pools "$pools_file" '
@@ -404,7 +549,7 @@ command_find() {
           "Configure OMP or another Agent runtime only after choosing an exact operation_key and model_key"
         ]
       }')"
-      rm -rf -- "$search_tmp"
+      find "$search_tmp" -depth -delete
       printf '%s\n' "$output"
       ;;
   esac
@@ -420,6 +565,15 @@ validate_operation_id() {
   [[ "$value" =~ ^[a-z][a-z0-9._-]{1,63}$ ]] || fail "invalid operation or workflow ID: $value"
 }
 
+normalize_operation_selector() {
+  local pack_id="$1"
+  local selector="$2"
+  if [[ "$selector" == "$pack_id".* ]]; then
+    selector="${selector#${pack_id}.}"
+  fi
+  printf '%s\n' "$selector"
+}
+
 command_resolve() {
   local query="${1:-}"
   local limit="${2:-100}"
@@ -431,13 +585,47 @@ command_resolve() {
 }
 
 command_catalog() {
-  local pack_id="${1:-}"
+  local pack_id=""
+  local result_limit=20
+  while (($#)); do
+    case "$1" in
+      --all) result_limit=0 ;;
+      --limit)
+        shift
+        if [[ ! "${1:-}" =~ ^[0-9]+$ ]] || ((10#${1:-0} < 1 || 10#${1:-0} > 200)); then
+          json_fail "invalid_limit" "catalog result limit must be between 1 and 200" "use --limit 1..200 or --all"
+          return 1
+        fi
+        result_limit="$1"
+        ;;
+      --*)
+        json_fail "invalid_option" "unknown catalog option: $1" "use lr catalog [pack] [--limit N|--all]"
+        return 1
+        ;;
+      *)
+        if [[ -n "$pack_id" ]]; then
+          json_fail "invalid_arguments" "catalog accepts at most one Pack ID" "use lr catalog [pack] [--limit N|--all]"
+          return 1
+        fi
+        pack_id="$1"
+        ;;
+    esac
+    shift
+  done
   local request_url="$base_url/agent/operations"
   if [[ -n "$pack_id" ]]; then
     validate_pack_id "$pack_id"
     request_url+="?pack=$pack_id"
   fi
-  authenticated_request GET "$request_url" | jq .
+  authenticated_request GET "$request_url" | jq --argjson limit "$result_limit" '
+    .operations as $all
+    | (if $limit == 0 then $all else $all[:$limit] end) as $returned
+    | .operations = $returned
+    | .count = ($all | length)
+    | .returned = ($returned | length)
+    | .truncated = (($returned | length) < ($all | length))
+    | .next_action = (if .truncated then "narrow with lr catalog <pack>, increase --limit, or use --all" else "choose an operation_key, then use lr describe and lr preflight" end)
+  '
 }
 
 command_compare() {
@@ -463,6 +651,7 @@ command_describe() {
   local operation_id="${2:-}"
   [[ -n "$pack_id" && -n "$operation_id" ]] || fail "describe requires a Pack ID and operation ID"
   validate_pack_id "$pack_id"
+  operation_id="$(normalize_operation_selector "$pack_id" "$operation_id")"
   validate_operation_id "$operation_id"
   authenticated_request GET "$base_url/agent/operations/$pack_id/$operation_id" | jq 'if (.data | type) == "object" then .data else . end'
 }
@@ -475,6 +664,7 @@ command_preflight() {
   local query_parameters_argument="${5-}"
   [[ -n "$pack_id" && -n "$operation_id" ]] || fail "preflight requires a Pack ID and operation ID"
   validate_pack_id "$pack_id"
+  operation_id="$(normalize_operation_selector "$pack_id" "$operation_id")"
   validate_operation_id "$operation_id"
   [[ -n "$input_argument" ]] || input_argument='{}'
   [[ -n "$path_parameters_argument" ]] || path_parameters_argument='{}'
@@ -486,7 +676,10 @@ command_preflight() {
   [[ "$(jq -r 'type' <<<"$path_parameters")" = "object" ]] || fail "path parameters must be a JSON object"
   [[ "$(jq -r 'type' <<<"$query_parameters")" = "object" ]] || fail "query parameters must be a JSON object"
   request="$(jq -cn --arg pack "$pack_id" --arg operation "$operation_id" --argjson input "$input" --argjson path_parameters "$path_parameters" --argjson query_parameters "$query_parameters" '{pack:$pack,operation:$operation,input:$input,path_parameters:$path_parameters,query_parameters:$query_parameters}')"
-  authenticated_request POST "$base_url/agent/preflight" "$request" | jq .
+  local response
+  response="$(authenticated_request POST "$base_url/agent/preflight" "$request")"
+  jq . <<<"$response"
+  [[ "$(jq -r '.ok // false' <<<"$response")" = "true" ]] || return 1
 }
 
 command_whoami() {
@@ -497,8 +690,15 @@ command_show() {
   local pack_id="${1:-}"
   [[ -n "$pack_id" ]] || fail "show requires a Pack ID"
   local result
-  result="$(discovery | jq --arg id "$pack_id" '[.protocols[] | select(.id == $id) | {id, name, description, ready, status, status_label, mount, workflow_mount, pool, docs, guides, routes: [.routes[] | {operation_key, operation_id, operation_id_role, operation_id_is_url, methods, path, call_url, call, request_example_role, dynamic_inputs, summary, streaming, transport}]}]')"
-  [[ "$(jq 'length' <<<"$result")" != "0" ]] || fail "unknown Pack: $pack_id"
+  result="$(discovery | jq --arg id "$pack_id" '
+    ([.compatibility_packs[]? | select(.id == $id)]
+      + [.protocols[] | select(.id == $id) | {id, pack_key, kind, name, description, ready, status, status_label, mount, openai_v1_base_url, workflow_mount, pool, docs, guides, routes: [.routes[] | {operation_key, operation_id, operation_id_role, operation_id_is_url, methods, path, call_url, call, request_example_role, dynamic_inputs, summary, streaming, transport}]}])
+  ')"
+  if [[ "$(jq 'length' <<<"$result")" = "0" ]]; then
+    json_fail "pack_not_found" "unknown Pack: $pack_id" "run lr tree or lr find <intent>, then use a published Pack ID"
+    return 1
+  fi
+  [[ "$(jq 'length' <<<"$result")" = "1" ]] || fail "Pack ID is ambiguous across compatibility and Protocol Packs: $pack_id"
   jq '.[0]' <<<"$result"
 }
 
@@ -512,27 +712,83 @@ command_docs() {
   curl --noproxy '*' --fail-with-body --silent --show-error "$base_url$markdown_path"
 }
 
+command_runtime_openai() {
+  local pack_id="${1:-}"
+  local model_id="${2:-}"
+  [[ -n "$pack_id" && -n "$model_id" ]] || fail "runtime-openai requires a Pack ID and exact model ID"
+  validate_pack_id "$pack_id"
+
+  local contract binding model_search exact_model
+  contract="$(discovery)"
+  binding="$(jq -c --arg pack "$pack_id" '
+    [.protocols[] | select(.id == $pack) | {
+      ready, status, mount, openai_v1_base_url,
+      models: ([.routes[] | select(.path == "/models" and (.methods | index("GET")))] | length),
+      chat: ([.routes[] | select(.path == "/chat/completions" and (.methods | index("POST")))] | length)
+    }] | if length == 1 then .[0] else empty end
+  ' <<<"$contract")"
+  [[ -n "$binding" ]] || fail "unknown Pack: $pack_id"
+  [[ "$(jq -r '.ready and (.models == 1) and (.chat == 1)' <<<"$binding")" = "true" ]] || fail "Pack is not a ready OpenAI-compatible runtime mount with GET /models and POST /chat/completions"
+
+  model_search="$(command_find_model "$pack_id:$model_id" 20 true)"
+  exact_model="$(jq -c --arg pack "$pack_id" --arg model "$model_id" '
+    [.matches[] | select(.pack == $pack and .id == $model)] | if length == 1 then .[0] else empty end
+  ' <<<"$model_search")"
+  [[ -n "$exact_model" ]] || fail "model is not currently advertised by $pack_id: $model_id"
+
+  local runtime_base_url
+  runtime_base_url="$(jq -r '.openai_v1_base_url // empty' <<<"$binding")"
+  [[ -n "$runtime_base_url" ]] || fail "running LocalRouter does not publish an OpenAI v1 Base URL for this Pack; install and restart a runtime with contract schema 7 or newer"
+
+  jq -n \
+    --arg pack "$pack_id" \
+    --arg model "$model_id" \
+    --arg base_url "$base_url$runtime_base_url" \
+    --arg api_token_file "$api_token_file" \
+    --arg operation_key "$(jq -r '.compatible_operations[0].operation_key' <<<"$exact_model")" \
+    '{
+      object: "localrouter.runtime.openai",
+      pack: $pack,
+      adapter: "openai-completions",
+      base_url: $base_url,
+      model: $model,
+      operation_key: $operation_key,
+      api_token_file: $api_token_file,
+      route_contract: "use this published Base URL unchanged; the runtime appends /models and /chat/completions",
+      credential_value_exported: false
+    }'
+}
+
 command_call() {
   local pack_id="${1:-}"
   local operation_id="${2:-}"
   local body_input="${3-}"
   [[ -n "$body_input" ]] || body_input='{}'
   [[ -n "$pack_id" && -n "$operation_id" ]] || fail "call requires a Pack ID and operation ID"
+  validate_pack_id "$pack_id"
+  operation_id="$(normalize_operation_selector "$pack_id" "$operation_id")"
+  validate_operation_id "$operation_id"
   local binding
   binding="$(discovery | jq -c --arg pack "$pack_id" --arg operation "$operation_id" '
     [.protocols[] | select(.id == $pack) as $protocol
       | $protocol.routes[] | select(.operation_id == $operation)
       | {ready: $protocol.ready, status: $protocol.status, path: .call_url, method: .call.default_method}]
   ')"
-  [[ "$(jq 'length' <<<"$binding")" = "1" ]] || fail "operation not found or ambiguous: $pack_id/$operation_id"
-  [[ "$(jq -r '.[0].ready' <<<"$binding")" = "true" ]] || fail "Pack is not ready: $(jq -r '.[0].status' <<<"$binding")"
+  if [[ "$(jq 'length' <<<"$binding")" != "1" ]]; then
+    json_fail "operation_not_found" "operation not found or ambiguous: $pack_id/$operation_id" "run lr show $pack_id or lr find operation <intent>, then use the published operation_id"
+    return 1
+  fi
   local request_path method body
   request_path="$(jq -r '.[0].path' <<<"$binding")"
   method="$(jq -r '.[0].method' <<<"$binding")"
-  [[ "$request_path" != *'{'* ]] || fail "operation needs path parameters; use lr mcp-call with the schema from lr mcp-list"
+  if [[ "$request_path" == *'{'* ]]; then
+    json_fail "path_parameters_required" "operation needs path parameters" "use lr mcp-list to inspect the schema, then lr mcp-call with the required path parameters"
+    return 1
+  fi
   body="$(json_argument "$body_input")"
   if [[ "$method" = "GET" && "$body" != "{}" ]]; then
-    fail "GET operation bodies are not supported; use lr request with an explicit query path"
+    json_fail "query_parameters_required" "GET operation bodies are not supported" "use lr request with an explicit published call_url and query string, or lr mcp-call"
+    return 1
   fi
   authenticated_request "$method" "$base_url$request_path" "$body"
 }
@@ -552,6 +808,7 @@ command_run() {
     authenticated_request POST "$base_url/w/$pack_id/$target_id" "$body"
     return
   fi
+  target_id="$(normalize_operation_selector "$pack_id" "$target_id")"
   command_call "$pack_id" "$target_id" "$body_input"
 }
 
@@ -631,7 +888,7 @@ command_mcp_list() {
     | @tsv
   ' <<<"$response")"
   [[ -n "$matches" ]] || fail "no ready MCP tool matched: $search_text"
-  printf '%s\n' "$matches"
+  printf 'name\tdescription\tread_only\tdestructive\n%s\n' "$matches"
 }
 
 command_mcp_call() {
@@ -664,6 +921,25 @@ command_manage_list() {
   ' <<<"$response")"
   [[ -n "$matches" ]] || fail "no maintenance tool matched: $search_text"
   printf '%s\n' "$matches"
+}
+
+command_manage_status() {
+  local contract
+  contract="$(discovery)"
+  jq -n \
+    --arg lane "$(if [[ -n "$maintainer_token_file" ]]; then printf 'agent-token'; else printf 'delegated-operator'; fi)" \
+    --argjson contract "$contract" '
+      {
+        object: "localrouter.maintenance.status",
+        selected_lane: $lane,
+        agent_maintenance_enabled: ($contract.maintenance.auth.agent_token.enabled // false),
+        prerequisite: (if $lane == "agent-token"
+          then "discovery must enable maintenance.auth.agent_token and the supplied locator must contain a distinct localrouter.maintain Token"
+          else "explicit user delegation is required for the named local operator change"
+          end),
+        credential_value_exported: false,
+        next: "use lr manage-list, then open an isolated draft and apply only its reviewed exact digest"
+      }'
 }
 
 command_manage_call() {
@@ -708,10 +984,15 @@ validate_loopback_url "$maintenance_mcp_url"
 
 command_name="${1:-help}"
 shift || true
+if [[ "$command_name" != "help" && ("${1:-}" == "-h" || "${1:-}" == "--help") ]]; then
+  usage
+  exit 0
+fi
 case "$command_name" in
   status) command_status "$@" ;;
+  tree) command_tree "$@" ;;
   find) command_find "$@" ;;
-  models) command_find_model "$*" ;;
+  models) command_find_model_cli "$@" ;;
   pools) command_find_pool "$*" ;;
   catalog) command_catalog "$@" ;;
   resolve) command_resolve "$@" ;;
@@ -719,6 +1000,7 @@ case "$command_name" in
   show) command_show "$@" ;;
   describe) command_describe "$@" ;;
   docs) command_docs "$@" ;;
+  runtime-openai) command_runtime_openai "$@" ;;
   preflight) command_preflight "$@" ;;
   call) command_call "$@" ;;
   run) command_run "$@" ;;
@@ -728,6 +1010,7 @@ case "$command_name" in
   mcp-list) command_mcp_list "$@" ;;
   mcp-call) command_mcp_call "$@" ;;
   whoami) command_whoami "$@" ;;
+  manage-status) command_manage_status "$@" ;;
   manage-list) command_manage_list "$@" ;;
   manage-call) command_manage_call "$@" ;;
   env) command_env "$@" ;;

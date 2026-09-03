@@ -27,6 +27,10 @@ prefix="$test_root/prefix"
 go_module_cache="$(go env GOMODCACHE)"
 go_build_cache="$(go env GOCACHE)"
 mkdir -p "$test_home"
+mkdir -p "$test_home/.agents" "$test_home/.codex" "$test_home/.omp/agent"
+printf '%s\n' 'shared-agent-sentinel' >"$test_home/.agents/AGENTS.md"
+printf '%s\n' 'codex-sentinel' >"$test_home/.codex/AGENTS.md"
+printf '%s\n' 'omp-sentinel' >"$test_home/.omp/agent/AGENTS.md"
 
 HOME="$test_home" \
 XDG_CONFIG_HOME="$config_home" \
@@ -40,6 +44,21 @@ GOCACHE="$go_build_cache" \
 
 test -x "$prefix/bin/localrouter"
 test -x "$prefix/bin/lr"
+"$prefix/bin/lr" help | grep -Fq 'runtime-openai <pack> <model>'
+test -f "$test_home/.agents/skills/localrouter-protocol-pack/SKILL.md"
+test -f "$test_home/.omp/agent/skills/localrouter-protocol-pack/SKILL.md"
+test -f "$test_home/.agents/skills/localrouter-protocol-pack/.localrouter-managed"
+test -f "$test_home/.omp/agent/skills/localrouter-protocol-pack/.localrouter-managed"
+grep -Fq 'explicit delegation for one `lr manage-*` change' "$test_home/.agents/skills/localrouter-protocol-pack/SKILL.md"
+grep -Fq 'Provider and runtime handoff' "$test_home/.agents/skills/localrouter-protocol-pack/references/runtime-handoff.md"
+grep -Fq 'lr runtime-openai <pack> <exact-model>' "$test_home/.agents/skills/localrouter-protocol-pack/references/runtime-handoff.md"
+for agent_contract in "$test_home/.agents/AGENTS.md" "$test_home/.codex/AGENTS.md" "$test_home/.omp/agent/AGENTS.md"; do
+  test "$(grep -Fc '<!-- LOCALROUTER:BEGIN managed-block global-consumer-contract version=1 -->' "$agent_contract")" = "1"
+  grep -Fq 'lr find model --exact <pack>:<model-id>' "$agent_contract"
+done
+grep -Fq 'shared-agent-sentinel' "$test_home/.agents/AGENTS.md"
+grep -Fq 'codex-sentinel' "$test_home/.codex/AGENTS.md"
+grep -Fq 'omp-sentinel' "$test_home/.omp/agent/AGENTS.md"
 expected_version="$(tr -d '\n' <"$project_root/VERSION")"
 test "$("$prefix/bin/localrouter" version | awk '{print $2}')" = "$expected_version"
 test -f "$config_home/systemd/user/localrouter.service"
@@ -102,4 +121,20 @@ relative_paths="$(HOME="$relative_home" XDG_CONFIG_HOME=relative XDG_DATA_HOME=r
 jq -e --arg data "$relative_home/.local/share/localrouter" --arg state "$relative_home/.local/state/localrouter" \
   '.data_dir == $data and .state_dir == $state' <<<"$relative_paths" >/dev/null
 
-echo "XDG layout, standalone install, generated API key, and loopback service acceptance passed"
+HOME="$test_home" \
+XDG_CONFIG_HOME="$config_home" \
+XDG_DATA_HOME="$data_home" \
+XDG_STATE_HOME="$state_home" \
+XDG_CACHE_HOME="$cache_home" \
+LOCALROUTER_PREFIX="$prefix" \
+  "$project_root/tools/install-localrouter.sh" uninstall --no-systemd >"$test_root/uninstall.out"
+test ! -e "$test_home/.agents/skills/localrouter-protocol-pack"
+test ! -e "$test_home/.omp/agent/skills/localrouter-protocol-pack"
+for agent_contract in "$test_home/.agents/AGENTS.md" "$test_home/.codex/AGENTS.md" "$test_home/.omp/agent/AGENTS.md"; do
+  ! grep -Fq '<!-- LOCALROUTER:BEGIN' "$agent_contract"
+done
+grep -Fq 'shared-agent-sentinel' "$test_home/.agents/AGENTS.md"
+grep -Fq 'codex-sentinel' "$test_home/.codex/AGENTS.md"
+grep -Fq 'omp-sentinel' "$test_home/.omp/agent/AGENTS.md"
+
+echo "XDG layout, standalone install/uninstall, global Agent contract, generated API key, and loopback service acceptance passed"

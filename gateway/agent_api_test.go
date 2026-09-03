@@ -84,7 +84,7 @@ func TestAgentResolveDescribePreflightAndWhoAmI(t *testing.T) {
 
 	unauthorized := agentAPIRequest(engine, http.MethodPost, "/agent/resolve", `{"query":"web.search"}`, false)
 	require.Equal(t, http.StatusUnauthorized, unauthorized.Code)
-	assert.JSONEq(t, `{"success":false,"code":"service_token_required","message":"local API token required","reason":"Authorization is missing or invalid","retryable":false,"owner":"localrouter","retry_after":null,"next_action":"read the configured mode-600 service Token file and retry with Authorization: Bearer","alternatives":null}`, unauthorized.Body.String())
+	assert.JSONEq(t, `{"success":false,"code":"service_token_required","message":"local API token required","reason":"Authorization is missing or invalid","retryable":false,"owner":"localrouter","retry_after":null,"next_action":"read the configured mode-600 service Token file and retry with Authorization: Bearer","alternatives":[]}`, unauthorized.Body.String())
 
 	resolved := agentAPIRequest(engine, http.MethodPost, "/agent/resolve", `{"query":"web.search"}`, true)
 	require.Equal(t, http.StatusOK, resolved.Code, resolved.Body.String())
@@ -147,12 +147,24 @@ func TestAgentResolveDescribePreflightAndWhoAmI(t *testing.T) {
 	invalid := agentAPIRequest(engine, http.MethodPost, "/agent/preflight", `{"pack":"readysearch","operation":"search","input":{}}`, true)
 	require.Equal(t, http.StatusOK, invalid.Code, invalid.Body.String())
 	assert.Contains(t, invalid.Body.String(), `"ok":false`)
+	assert.Contains(t, invalid.Body.String(), `"success":false`)
+	assert.Contains(t, invalid.Body.String(), `"code":"preflight_blocked"`)
+	assert.Contains(t, invalid.Body.String(), `"retryable":false`)
 	assert.Contains(t, invalid.Body.String(), `$.query is required`)
+	assert.Contains(t, invalid.Body.String(), `"alternatives":[]`)
 	assert.Contains(t, invalid.Body.String(), `"upstream_called":false`)
+
+	blocked := agentAPIRequest(engine, http.MethodPost, "/agent/preflight", `{"pack":"offsearch","operation":"search","input":{}}`, true)
+	require.Equal(t, http.StatusOK, blocked.Code, blocked.Body.String())
+	assert.Contains(t, blocked.Body.String(), `"ok":false`)
+	assert.Contains(t, blocked.Body.String(), `"operation_key":"readysearch.search"`)
+	assert.Contains(t, blocked.Body.String(), `"next_action":"choose an alternative or ask the operator to enable the Pack"`)
 
 	valid := agentAPIRequest(engine, http.MethodPost, "/agent/preflight", `{"pack":"readysearch","operation":"search","input":{"query":"hello"},"query_parameters":{"freshness":"day"}}`, true)
 	require.Equal(t, http.StatusOK, valid.Code, valid.Body.String())
 	assert.Contains(t, valid.Body.String(), `"ok":true`)
+	assert.Contains(t, valid.Body.String(), `"success":true`)
+	assert.Contains(t, valid.Body.String(), `"code":null`)
 
 	whoami := agentAPIRequest(engine, http.MethodGet, "/agent/whoami", "", true)
 	require.Equal(t, http.StatusOK, whoami.Code, whoami.Body.String())

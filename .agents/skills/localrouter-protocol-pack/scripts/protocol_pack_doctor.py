@@ -79,19 +79,47 @@ class Doctor:
             return self.checks
 
         protocols = discovery.get("protocols") if isinstance(discovery, dict) else None
+        compatibility_packs = (
+            discovery.get("compatibility_packs")
+            if isinstance(discovery, dict)
+            else None
+        )
         valid_discovery = (
             discovery.get("schema_version") == "1"
             and discovery.get("name") == "LocalRouter"
             and discovery.get("scope") == "loopback"
             and isinstance(protocols, list)
+            and isinstance(compatibility_packs, list)
         )
         self.add(
             "Discovery",
             "pass" if valid_discovery else "fail",
-            f"schema={discovery.get('schema_version')!r}, scope={discovery.get('scope')!r}, packs={len(protocols or [])}",
+            f"schema={discovery.get('schema_version')!r}, scope={discovery.get('scope')!r}, compatibility_packs={len(compatibility_packs or [])}, protocol_packs={len(protocols or [])}",
         )
         if not valid_discovery:
             return self.checks
+
+        surfaces = discovery.get("surfaces") or []
+        pack_model = discovery.get("pack_model") or {}
+        topology = discovery.get("topology") or {}
+        surface_ids = {
+            surface.get("id")
+            for surface in surfaces
+            if isinstance(surface, dict)
+        }
+        topology_ok = (
+            pack_model.get("unit") == "service-pack"
+            and surface_ids == {"compatibility", "protocol", "workflow", "mcp"}
+            and isinstance(topology.get("digest"), str)
+            and bool(DIGEST.fullmatch(topology.get("digest")))
+            and topology.get("schema_version")
+            == (discovery.get("contract") or {}).get("schema_version")
+        )
+        self.add(
+            "Service topology",
+            "pass" if topology_ok else "fail",
+            f"digest={topology.get('digest')!r}; all services use compatibility or Protocol Pack views; workflows and MCP are projections",
+        )
 
         maintenance = discovery.get("maintenance") or {}
         authentication = discovery.get("authentication") or {}
@@ -126,7 +154,8 @@ class Doctor:
         agent_contract_ok = (
             isinstance(contract_digest, str)
             and bool(DIGEST.fullmatch(contract_digest))
-            and contract.get("schema_version") == "5"
+            and isinstance(contract.get("schema_version"), str)
+            and bool(contract.get("schema_version"))
             and agent.get("catalog") == "/agent/operations"
             and agent.get("resolve") == "/agent/resolve"
             and agent.get("compare") == "/agent/compare"
@@ -140,7 +169,7 @@ class Doctor:
             agent_docs = self.fetch(agent.get("docs", "/docs/agent.json"))
             agent_contract_ok = agent_contract_ok and (
                 agent_docs.get("contract_digest") == contract_digest
-                and agent_docs.get("schema_version") == "5"
+                and agent_docs.get("schema_version") == contract.get("schema_version")
                 and agent_docs.get("selection", {}).get("mode") == "agent"
                 and agent_docs.get("selection", {}).get("merged") is False
                 and agent_docs.get("endpoints", {}).get("catalog", {}).get("path")
@@ -187,8 +216,21 @@ class Doctor:
         openapi_paths = openapi.get("paths") or {} if isinstance(openapi, dict) else {}
 
         by_id = {pack.get("id"): pack for pack in protocols if isinstance(pack, dict)}
+        compatibility_by_id = {
+            pack.get("id"): pack
+            for pack in compatibility_packs
+            if isinstance(pack, dict)
+        }
         if selected_pack:
-            if selected_pack not in by_id:
+            if selected_pack in by_id and selected_pack in compatibility_by_id:
+                self.add(
+                    "Discovery",
+                    "fail",
+                    f"requested Pack {selected_pack!r} is ambiguous across Pack kinds",
+                    selected_pack,
+                )
+                return self.checks
+            if selected_pack not in by_id and selected_pack not in compatibility_by_id:
                 self.add(
                     "Discovery",
                     "fail",
@@ -196,7 +238,19 @@ class Doctor:
                     selected_pack,
                 )
                 return self.checks
-            by_id = {selected_pack: by_id[selected_pack]}
+            by_id = (
+                {selected_pack: by_id[selected_pack]}
+                if selected_pack in by_id
+                else {}
+            )
+            compatibility_by_id = (
+                {selected_pack: compatibility_by_id[selected_pack]}
+                if selected_pack in compatibility_by_id
+                else {}
+            )
+
+        for pack_id, pack in sorted(compatibility_by_id.items()):
+            self.check_compatibility_pack(pack_id, pack)
 
         for pack_id, pack in sorted(by_id.items()):
             if not isinstance(pack_id, str) or not PACK_ID.fullmatch(pack_id):
@@ -242,6 +296,50 @@ class Doctor:
         )
         return self.checks
 
+    def check_compatibility_pack(self, pack_id: str, pack: dict[str, Any]) -> None:
+        routes = pack.get("routes") or []
+        mounts = pack.get("mounts") or []
+        pool = pack.get("pool") or {}
+        forbidden = {"base_url", "auth", "channels", "models", "credentials"}
+        contract_ok = (
+            isinstance(pack_id, str)
+            and bool(PACK_ID.fullmatch(pack_id))
+            and pack.get("pack_key") == f"compatibility:{pack_id}"
+            and pack.get("kind") == "compatibility"
+            and isinstance(pack.get("ready"), bool)
+            and pack.get("status")
+            in {"ready", "channel-not-ready", "state-unavailable"}
+            and bool(mounts)
+            and all(
+                isinstance(mount, str)
+                and (
+                    mount == "/v1"
+                    or mount.startswith("/v1/")
+                    or mount == "/v1beta"
+                )
+                for mount in mounts
+            )
+            and pool.get("mode") == "channels"
+            and isinstance(pool.get("eligible"), int)
+            and pool.get("eligible") >= 0
+            and bool(routes)
+            and not forbidden.intersection(pack)
+        )
+        for route in routes:
+            contract_ok = contract_ok and (
+                isinstance(route, dict)
+                and bool(route.get("methods"))
+                and route.get("path") == route.get("call_url")
+                and route.get("transport") == "http"
+                and route.get("status") in {"available", "unsupported"}
+            )
+        self.add(
+            "Compatibility Pack",
+            "pass" if contract_ok else "fail",
+            f"{len(routes)} standard routes, channel pool eligible={pool.get('eligible')!r}; private upstream and channel records omitted",
+            pack_id,
+        )
+
     def check_pack(
         self,
         pack_id: str,
@@ -256,7 +354,9 @@ class Doctor:
         ]
         operation_set = {item for item in operation_ids if isinstance(item, str)}
         contract_ok = (
-            len(operation_ids) == len(operation_set)
+            pack.get("pack_key") == f"protocol:{pack_id}"
+            and pack.get("kind") == "protocol"
+            and len(operation_ids) == len(operation_set)
             and all(isinstance(item, str) and item for item in operation_ids)
             and bool(routes)
         )

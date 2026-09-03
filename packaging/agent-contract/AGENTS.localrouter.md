@@ -1,0 +1,10 @@
+<!-- LOCALROUTER:BEGIN managed-block global-consumer-contract version=1 -->
+## LocalRouter global consumer contract
+
+- Use `lr` as the default interface to the loopback LocalRouter. Begin with `lr status` and `lr tree [pack]`, then narrow with `lr find`, `lr show`, `lr describe`, and `lr docs`. Treat live discovery on port 8317 as authority and require `ready=true`.
+- Search callable operations with `lr find operation <intent>`, pools with `lr find pool <pack>`, and live models with `lr find model <name>`. Final model selection must use `lr find model --exact <pack>:<model-id>` and return one exact result. Model and catalog commands return at most 20 entries by default; refine first and use `--all` only when the complete catalog is required.
+- Treat `operation_key` and `operation_id` as semantic selectors, never URL fragments. Where `lr` already takes a Pack, paste either the bare `operation_id` or the Pack-qualified `operation_key`. Use `lr call`, MCP, or the exact published `call_url`. For an OpenAI-compatible external runtime, use `lr runtime-openai <pack> <exact-model>` and keep its `/p/<pack>/v1` Base URL unchanged.
+- Before a paid or side-effecting call, explicitly choose the Pack, operation, and dynamic inputs, then run `lr preflight`. A nonzero preflight exit is blocking. Consume structured `code`, `retryable`, `next_action`, and `alternatives`; never blindly replay an unknown side-effecting outcome.
+- Invoke an authorized real or paid `lr call` once, capture its raw response and exit status, then summarize that captured value offline. A `jq`, pipe, or display failure does not authorize another upstream request.
+- API Token locators name mode-600 files; they are not Token values. Never print, export, or paste Token contents, and never read the administrator credential for consumer work. For Pack, auth, pool, workflow, guide, or release changes, load the globally installed `localrouter-protocol-pack` Skill and use its reviewed exact-digest lifecycle.
+<!-- LOCALROUTER:END managed-block global-consumer-contract -->

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,6 +60,126 @@ type localChannelProfileRegistry struct {
 	profiles  []localChannelProfile
 	byID      map[int]localChannelProfile
 	defaultID int
+}
+
+// localCompatibilityPackView is the public, secret-free Pack projection of a
+// lightweight channel profile. It deliberately omits upstream addresses,
+// credentials, channel names and model IDs.
+type localCompatibilityPackView struct {
+	ID          string                        `json:"id"`
+	PackKey     string                        `json:"pack_key"`
+	Kind        string                        `json:"kind"`
+	Name        string                        `json:"name"`
+	Description string                        `json:"description"`
+	Mounts      []string                      `json:"mounts"`
+	Ready       bool                          `json:"ready"`
+	Status      string                        `json:"status"`
+	StatusLabel string                        `json:"status_label"`
+	Pool        localCompatibilityPoolView    `json:"pool"`
+	Routes      []localCompatibilityRouteView `json:"routes"`
+}
+
+type localCompatibilityPoolView struct {
+	Mode     string `json:"mode"`
+	Eligible int    `json:"eligible"`
+}
+
+type localCompatibilityRouteView struct {
+	Methods   []string `json:"methods"`
+	Path      string   `json:"path"`
+	CallURL   string   `json:"call_url"`
+	Status    string   `json:"status"`
+	Transport string   `json:"transport"`
+}
+
+type localRelayRouteDefinition struct {
+	Methods   []string
+	Path      string
+	MatchPath string
+	Status    string
+}
+
+func localRelayRouteDefinitions() []localRelayRouteDefinition {
+	routes := []localRelayRouteDefinition{
+		{Methods: []string{http.MethodGet}, Path: "/v1/models", MatchPath: "/v1/models", Status: "available"},
+		{Methods: []string{http.MethodGet}, Path: "/v1/models/{model}", MatchPath: "/v1/models/example", Status: "available"},
+		{Methods: []string{http.MethodGet}, Path: "/v1beta/models", MatchPath: "/v1beta/models", Status: "available"},
+		{Methods: []string{http.MethodGet}, Path: "/v1beta/models/{model}", MatchPath: "/v1beta/models/example", Status: "available"},
+		{Methods: []string{http.MethodGet}, Path: "/v1/realtime", MatchPath: "/v1/realtime", Status: "unsupported"},
+		{Methods: []string{http.MethodPost}, Path: "/v1/engines/{model}/embeddings", MatchPath: "/v1/engines/example/embeddings", Status: "available"},
+		{Methods: []string{http.MethodPost}, Path: "/v1beta/models/{path}", MatchPath: "/v1beta/models/example:generateContent", Status: "available"},
+	}
+	for _, path := range localRelayV1PostPaths {
+		routes = append(routes, localRelayRouteDefinition{
+			Methods: []string{http.MethodPost}, Path: "/v1" + path,
+			MatchPath: "/v1" + path, Status: "available",
+		})
+	}
+	return routes
+}
+
+func (registry *localChannelProfileRegistry) compatibilityViews(store *localStore) []localCompatibilityPackView {
+	if registry == nil {
+		return []localCompatibilityPackView{}
+	}
+	eligible := make(map[int]int)
+	stateAvailable := store != nil
+	if stateAvailable {
+		counts, err := store.enabledChannelCountsByType()
+		if err != nil {
+			stateAvailable = false
+		} else {
+			eligible = counts
+		}
+	}
+	routesByProfile := make(map[int][]localCompatibilityRouteView)
+	for _, route := range localRelayRouteDefinitions() {
+		profile, ok := registry.matchRequestPath(route.MatchPath)
+		if !ok {
+			continue
+		}
+		routesByProfile[profile.ID] = append(routesByProfile[profile.ID], localCompatibilityRouteView{
+			Methods: append([]string(nil), route.Methods...), Path: route.Path,
+			CallURL: route.Path, Status: route.Status, Transport: "http",
+		})
+	}
+	views := make([]localCompatibilityPackView, 0, len(registry.profiles))
+	for _, profile := range registry.profiles {
+		mounts := make([]string, 0, len(profile.RequestPaths.Exact)+len(profile.RequestPaths.Prefixes)+1)
+		if profile.RequestPaths.Default {
+			mounts = append(mounts, "/v1")
+		}
+		mounts = append(mounts, profile.RequestPaths.Exact...)
+		for _, prefix := range profile.RequestPaths.Prefixes {
+			mounts = append(mounts, strings.TrimSuffix(prefix, "/"))
+		}
+		status, label := "channel-not-ready", "等待可用 Channel"
+		if !stateAvailable {
+			status, label = "state-unavailable", "Channel 状态不可读"
+		} else if eligible[profile.ID] > 0 {
+			status, label = "ready", "已就绪"
+		}
+		views = append(views, localCompatibilityPackView{
+			ID: profile.Key, PackKey: "compatibility:" + profile.Key, Kind: "compatibility",
+			Name: profile.Name, Description: "Standard API compatibility Pack backed by the LocalRouter channel pool.",
+			Mounts: mounts, Ready: status == "ready", Status: status, StatusLabel: label,
+			Pool:   localCompatibilityPoolView{Mode: "channels", Eligible: eligible[profile.ID]},
+			Routes: routesByProfile[profile.ID],
+		})
+	}
+	return views
+}
+
+func localServiceTopologyDigest(protocolDigest string, profiles *localChannelProfileRegistry) string {
+	payload := struct {
+		ProtocolDigest     string                       `json:"protocol_digest"`
+		CompatibilityPacks []localCompatibilityPackView `json:"compatibility_packs"`
+	}{
+		ProtocolDigest:     protocolDigest,
+		CompatibilityPacks: profiles.compatibilityViews(nil),
+	}
+	encoded, _ := json.Marshal(payload)
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
 func loadLocalChannelProfiles(path string) (*localChannelProfileRegistry, error) {

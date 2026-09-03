@@ -21,7 +21,7 @@
 
 ---
 
-LocalRouter 现在使用自己的 Go 运行时：本地 SQLite 渠道与 Token、同模型多渠道选路、流式透传、请求日志、声明式 Protocol Pack、账号池、异步工作流、Agent 文档和哈希绑定发布均由本仓库实现，编译和运行不依赖外部网关源码。
+LocalRouter 现在使用自己的 Go 运行时：本地 SQLite 渠道与 Token、同模型多渠道选路、流式透传、请求日志、声明式 Protocol Pack、账号池、异步工作流、Agent 文档和哈希绑定发布均由本仓库实现，编译和运行不依赖外部网关源码。对 Agent 来说，所有可调用服务都以 Pack 发现；维护者则按复杂度选择轻量兼容 Pack 或完整 Protocol Pack。
 
 它不是账号注册平台，也不接管人工 OAuth、CAPTCHA、支付或订阅。公开发行版不附带任何供应商 Pack、真实上游地址、账号池或供应商专用适配器；安装完成后，只有本机操作者明确发布的私有配置才会产生可调用能力。
 
@@ -36,8 +36,11 @@ cd LocalRouter
 ```
 
 安装器把主程序和 `lr` 放入 `~/.local/bin`，创建并启动
-`localrouter.service` 用户服务。卸载只移除程序和服务，不删除用户配置、
-数据库、Key 或状态：
+`localrouter.service` 用户服务；同时将 `localrouter-protocol-pack` 安装到
+`~/.agents/skills/` 和 `~/.omp/agent/skills/`，并以可识别、可原子替换的 managed block 更新
+`~/.agents/AGENTS.md`、`~/.codex/AGENTS.md` 与 `~/.omp/agent/AGENTS.md`，让共享 Agent、Codex 与 OMP 从任意仓库都先发现 `lr`，在新增
+模型、Provider、Pack、认证、池、工作流、文档或发布任务时自动找到受控生命周期。
+若同名目录不是此前由 LocalRouter 安装的 Skill，或 AGENTS 文件中的 managed block 损坏，安装器会拒绝覆盖。卸载会精确移除 LocalRouter 自己的全局 block 与带所有权标记的 Skill，保留其他 Agent 指令以及用户配置、数据库、Key 和状态：
 
 ```bash
 ./tools/install-localrouter.sh uninstall
@@ -148,7 +151,7 @@ LocalRouter 强制监听回环 IP。请求参数不能选择任意上游地址�
 3. 通过 `/mcp` 的 `tools/list` 发现所有已发布且就绪的操作；
 4. 使用 API Token 调用 `/v1`、`/p`、`/w` 或 `/mcp`。
 
-发现结果是可执行契约，不需要 Agent 拼路径。`operation_key`/`operation_id` 是供 catalog、describe、preflight、`lr` 和 MCP 使用的语义选择标识；它们不是 URL。直接发 HTTP 时必须使用每个 operation 已解析好的 `call_url` 和 `call.methods`。例如 `operation_id=chat.completions` 可以对应 `call_url=/p/provider/chat/completions`，不能写成 `/p/provider/chat.completions`。Manifest、示例、Agent descriptor 与 OpenAPI 都发布同一个 `call_url`，doctor 会把不一致判为失败。`request_example` 只表示请求形状；当 operation 发布 `dynamic_inputs` 时，先调用其中指向的模型/资源目录并使用当前返回值，不能把示例模型当成可用性证明。
+发现结果是可执行契约，不需要 Agent 拼路径。`operation_key`/`operation_id` 是供 catalog、describe、preflight、`lr` 和 MCP 使用的语义选择标识；它们不是 URL。凡是已经单独传入 Pack 的 `lr` 命令，operation 参数同时接受裸 `operation_id` 和可直接从目录粘贴的 Pack-qualified `operation_key`。直接发 HTTP 时必须使用每个 operation 已解析好的 `call_url` 和 `call.methods`。例如 `operation_id=chat.completions` 可以对应 `call_url=/p/provider/chat/completions`，不能把点号直接当路径分隔符写成 `/p/provider/chat.completions`。Manifest、示例、Agent descriptor 与 OpenAPI 都发布同一个 `call_url`，doctor 会把不一致判为失败。`request_example` 只表示请求形状；当 operation 发布 `dynamic_inputs` 时，先调用其中指向的模型/资源目录并使用当前返回值，不能把示例模型当成可用性证明。
 
 ### `lr`：给本机 Agent 的快速入口
 
@@ -156,11 +159,14 @@ LocalRouter 强制监听回环 IP。请求参数不能选择任意上游地址�
 
 ```bash
 lr status
+lr tree
+lr tree codebuddy
 lr find '适合长任务的文本模型'
 lr find operation '聊天补全'
-lr find model 'operator-model'
+lr find model --exact 'provider:operator-model'
 lr find pool media-worker
-lr catalog
+lr catalog                       # 默认只返回前 20 条及 total/returned/truncated
+lr catalog --all                 # 明确需要完整机器目录时再展开
 lr catalog search-primary
 lr resolve web.search
 lr compare search-primary.query search-backup.query
@@ -175,13 +181,17 @@ lr mcp-list responses
 lr request GET /v1/models
 ```
 
+`lr tree` 只读取一次 live discovery，把 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp` 表面，以及全部 Pack、readiness、挂载点、池摘要、operation、workflow、adapter transport 和已发布的 OpenAI v1 Base URL 展成一棵树；它不逐个调用上游。看到目标后用 `lr show <pack>` 进入单个 Pack：完整 Protocol Pack 再走 `lr describe`、`lr preflight`、`lr call/run`，轻量兼容 Pack 使用它发布的标准路径和 `lr request`。
+
+服务统一采用 Pack 视图，但配置保持分级：只需要标准 OpenAI、Anthropic 或 Gemini 请求面、上游地址、Key、模型和同模型渠道轮换时，使用 Channel Profile + Channels 形成轻量兼容 Pack并直出 `/v1` 或 `/v1beta`；需要独立命名空间、自定义路由或转换、特殊认证、专属号池、adapter、异步 workflow 时，使用完整 Protocol Pack并挂载到 `/p/<pack>`。workflow 和 MCP 是 Pack 的执行视图，不需要再维护一份服务定义。
+
 `lr describe` 直接返回所选 operation 的顶层合同（不是 HTTP API 的 `.data` 包装），因此 Agent 可以直接读取 `operation_key`、`call_url`、`request_schema`、`dynamic_inputs`、`pricing`、`pool` 与 `verification`。`request_schema` 的必填项是调用约束，不因供应商免 Key 或免费而放宽；免 Key 只影响上游鉴权。
 
-先分清搜索对象：operation 是可调用契约，model 是就绪 Pack 从上游实时列出的模型 ID，pool 是号池 readiness、额度与价格，OMP/其他 Agent runtime 的模型分配则属于外部运行时。`lr find <混合意图>` 会把前三类分栏返回；已知类别时直接使用 `lr find operation|model|pool`，避免把模型名或运行时配置误当 operation。模型结果使用 `<pack>:<model-id>` 保留供应商身份，不跨供应商合并，并通过 `compatible_operations` 列出确实声明会消费该模型目录的操作；这条关系来自 Pack 的 `dynamic_inputs`，不靠 LocalRouter 猜它是不是聊天、图片、视频或其他 API。
+先分清搜索对象：operation 是可调用契约，model 是就绪 Pack 从上游实时列出的模型 ID，pool 是号池 readiness、额度与价格，OMP/其他 Agent runtime 的模型分配则属于外部运行时。`lr find <混合意图>` 会把前三类分栏返回；已知类别时直接使用 `lr find operation|model|pool`，避免把模型名或运行时配置误当 operation。模型结果使用 `<pack>:<model-id>` 保留供应商身份，不跨供应商合并，并通过 `compatible_operations` 列出确实声明会消费该模型目录的操作；这条关系来自 Pack 的 `dynamic_inputs`，不靠 LocalRouter 猜它是不是聊天、图片、视频或其他 API。模型和 catalog 默认最多返回 20 条并给出 `count/returned/truncated`；先缩小查询，只有确需全量时才用 `--all`。最终选择模型时使用 `lr find model --exact <pack>:<model-id>`，零结果就是不可调用，不能把 fuzzy 建议当精确命中。
 
-推荐调用顺序是 `find/catalog/resolve → compare（有多个候选时）→ Agent 明确选择 operation_key 与 model_key → describe → preflight → run`。`catalog` 返回 Token 允许访问的全部独立 operation；`resolve` 只解析 operation，并返回所有精确匹配（没有精确匹配时才做宽松文本匹配），默认同时保留 ready 与 unavailable 项；`compare` 按调用者给定顺序返回完整独立合同与 verification 层级，永远不输出推荐项。LocalRouter 不合并供应商、不隐藏差异，也不替 Agent 选择某一家。每项分别公开 Pack、号池、readiness、capabilities、aliases、请求/响应 schema、价格、重试、指南、工作流和调用路径。`preflight` 检查鉴权、模型策略、Pack/号池、operation、必需 path/query parameters、输入 schema、价格状态和副作用，但不会访问上游或消费额度。第五个参数是 Query JSON；MCP 和 OpenAPI 也会把必需 Query 公开为机器约束。已知固定接口时可直接 `call` 或 `request`。异步任务使用 `run → watch`，`watch` 默认不设超时，Agent 中断后可凭同一个 Job ID 恢复；只有明确需要时才传超时秒数或调用 `cancel`。
+推荐调用顺序是 `find/catalog/resolve → compare（有多个候选时）→ Agent 明确选择 operation_key 与 model_key → describe → preflight → run`。`catalog` 返回 Token 允许访问的独立 operation 分页视图；`--all` 才展开完整目录。`resolve` 只解析 operation，并返回所有精确匹配（没有精确匹配时才做宽松文本匹配），默认同时保留 ready 与 unavailable 项；`compare` 按调用者给定顺序返回完整独立合同与 verification 层级，永远不输出推荐项。LocalRouter 不合并供应商、不隐藏差异，也不替 Agent 选择某一家。每项分别公开 Pack、号池、readiness、capabilities、aliases、请求/响应 schema、价格、重试、指南、工作流和调用路径。`preflight` 检查鉴权、模型策略、Pack/号池、operation、必需 path/query parameters、输入 schema、价格状态和副作用，但不会访问上游或消费额度；因此动态模型存在性必须由前一步的 `find model --exact` 证明。`preflight` 的 `ok=false` 会让 CLI 非零退出并返回具体 alternatives。第五个参数是 Query JSON；MCP 和 OpenAPI 也会把必需 Query 公开为机器约束。已知固定接口时可直接 `call` 或 `request`。异步任务使用 `run → watch`，`watch` 默认不设超时，Agent 中断后可凭同一个 Job ID 恢复；只有明确需要时才传超时秒数或调用 `cancel`。
 
-发现文档顶层的 `contract.digest` 与 `/docs/index.json` 的 `contract_digest` 是同一份 Pack 契约摘要。Agent 可以缓存 operation 描述，但 `contract.digest` 或 `contract.schema_version` 任一变化都必须重新读取。调用失败时优先消费统一的 `code`、`reason`、`retryable`、`retry_after`、`next_action` 和 `alternatives`，不要从自然语言猜测是否重试。
+发现文档顶层的 `contract.digest` 与 `/docs/index.json` 的 `contract_digest` 是同一份 Protocol Pack 契约摘要；`topology.digest` 覆盖 compatibility + Protocol Pack 服务树。Agent 可以缓存 operation 描述和服务树，但各自 digest 或 `schema_version` 变化时必须重新读取。调用失败时优先消费统一的 `code`、`reason`、`retryable`、`retry_after`、`next_action` 和 `alternatives`，不要从自然语言猜测是否重试。
 
 普通 Token 默认长期有效、无分钟/每日/并发调用上限；实际资源安全由每个 Pack 的账号池并发、租约、冷却、健康和额度资格控制。它始终只用于调用，不能修改 LocalRouter。
 
@@ -195,7 +205,11 @@ discover → open draft → put Pack / operation / supplier profile → lint
          → plan reviewed digest → apply exact digest → verify / rollback
 ```
 
-Agent 不再拼文件路径、JSON 缩进、YAML front matter 或发布请求。Pack core、单个 operation、单个供应商请求 profile 和 guide 都有各自的强类型工具；无 Key 服务省略 `auth` 时会明确生成 `auth.type=none`，operation 会生成安全的 transport/retry/draft-availability 缺省值。`lint` 与 review 失败返回 `issues[].path`、允许值和修复动作。LocalRouter 负责格式、原子写入、严格校验和 digest；发布后会重新读取线上 Pack 树，本地验证失败时默认恢复上一修订并保留草稿。
+Agent 通过语义工具建立并发布草稿：Pack core、单个 operation、单个供应商请求 profile 和 guide 都有各自的强类型入口；无 Key 服务省略 `auth` 时会生成 `auth.type=none`，operation 会生成 transport/retry/draft-availability 缺省值。`lint` 与 review 返回 `issues[].path`、允许值和修复动作。LocalRouter 负责格式、原子写入、严格校验和 digest；发布后会重新读取线上 Pack 树，本地验证失败时默认恢复上一修订并保留草稿。
+
+Pack 交给 OpenAI 兼容运行时时，发布后的下一步固定为 `lr runtime-openai <pack> <exact-model>`：它核验 `GET /models` 和 `POST /chat/completions`，并输出 `/p/<pack>/v1` Base URL。上游 `/v1` 前缀仍留在 Pack target；随后以运行时真实一次请求验收。
+
+任何 Agent 收到“把模型/Provider/本机服务接入 LR”“新增或修改 Pack”等请求，都按同一条维护跑道行动：加载 Skill → `lr manage-status` 选择已启用的维护 Token 入口或用户明确委托的本机维护入口 → 语义 MCP draft → 审阅 impact → plan/exact-digest apply → discovery 与 `lr find model --exact <pack>:<model-id>` 选择精确模型 → 运行时真实调用验收。没有发布入口时，Agent 仍可完成 discovery、上游探测和 draft 设计，并把所需授权说清楚。这个流程适用于 OMP、Codex、Claude 及其他 Agent；运行时只在 Pack 已发布和模型已实时发现之后接入。
 
 人工维护终端可以直接使用；授权给 Agent 时还必须显式设置其 `LOCALROUTER_MAINTAINER_TOKEN_FILE`：
 
@@ -257,6 +271,14 @@ lr manage-call localrouter_draft_review '{"draft_id":"agent-change"}'
 | `LOCALROUTER_ADMIN_TOKEN_FILE` | 默认 `$XDG_DATA_HOME/localrouter/admin-token`；供控制台和人工 `lr manage-*` 使用，不交给 Agent |
 
 `lr` 会拒绝非回环 Base URL、符号链接 Token 文件、错误所有者以及非 `0600` 权限，避免环境变量被篡改后把 Token 发往外部地址。
+
+`/p/<pack>` 是 LocalRouter 给每个独立 Protocol Pack 保留的挂载命名空间，用来避免不同 Pack 的 `/models`、`/chat/completions` 等路由互相覆盖。满足 OpenAI 模型与聊天契约的 Pack 还会自动发布 `/p/<pack>/v1` 兼容 Base URL：
+
+```bash
+lr runtime-openai codebuddy hy4-preview
+```
+
+输出的 `base_url` 已包含 Pack 命名空间与 `/v1`。把它和精确 `model` 填入运行时；适配器会补 `/models` 或 `/chat/completions`。原生 `/p/<pack>/...` 路径继续保留兼容已有调用。
 
 已有仓库内运行数据可在安装时非破坏性复制并拆分到 XDG 目录；原目录不会删除：
 

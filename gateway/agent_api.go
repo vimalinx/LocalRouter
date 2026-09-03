@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "6"
+const agentContractSchemaVersion = "9"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -133,6 +133,12 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"mode": "agent", "merged": false,
 			"rule": "every Pack operation remains independently addressable; LocalRouter never collapses providers or silently chooses one",
 		},
+		"service_packs": gin.H{
+			"discovery":     "lr tree [pack]",
+			"compatibility": "lightweight standard API Pack on /v1 or /v1beta, backed by Channel Profiles and Channels; invoke its published path with lr request",
+			"protocol":      "full Pack on /p/<pack> for isolated paths, transforms, special auth, dedicated pools, adapters or workflows; use describe and preflight",
+			"projections":   gin.H{"workflow": "/w/{pack}", "mcp": "/mcp"},
+		},
 		"discovery_domains": gin.H{
 			"operation": gin.H{
 				"contains": "callable capabilities, operation keys, methods, schemas and call URLs",
@@ -141,8 +147,8 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			},
 			"model": gin.H{
 				"contains": "current model IDs returned by ready Packs' advertised model catalog operations",
-				"cli":      "lr find model <name>",
-				"next":     "choose the provider-qualified model_key <pack>:<model-id> and that Pack's chat operation",
+				"cli":      "lr find model --exact <pack>:<model-id>",
+				"next":     "require one exact live provider-qualified model_key and choose that Pack's compatible operation",
 			},
 			"pool": gin.H{
 				"contains": "Pack readiness, credential eligibility, quota freshness and pricing metadata",
@@ -184,8 +190,8 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"workflow_cancel": gin.H{"method": "DELETE", "path": "/w/{pack}/{workflow}/{job}", "only_when_advertised": true},
 		},
 		"cli": gin.H{
-			"find": "lr find <intent>", "find_operation": "lr find operation <intent>", "find_model": "lr find model <name>", "find_pool": "lr find pool <provider-or-pack>",
-			"catalog": "lr catalog [pack]", "resolve": "lr resolve <capability-or-intent> [limit]", "describe": "lr describe <pack> <operation>", "compare": "lr compare <pack.operation> <pack.operation> [...]",
+			"find": "lr find <intent>", "find_operation": "lr find operation <intent>", "find_model": "lr find model [--exact] [--limit N|--all] <name>", "find_pool": "lr find pool <provider-or-pack>",
+			"catalog": "lr catalog [pack] [--limit N|--all]", "resolve": "lr resolve <capability-or-intent> [limit]", "describe": "lr describe <pack> <operation>", "compare": "lr compare <pack.operation> <pack.operation> [...]",
 			"preflight": "lr preflight <pack> <operation> '<json>'", "run": "lr run <pack> <operation|workflow> '<json>'",
 			"watch": "lr watch <pack> <workflow> <job> [timeout-seconds]", "cancel": "lr cancel <pack> <workflow> <job>",
 		},
@@ -424,7 +430,7 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		if allowed {
 			message := "service Token allows this operation"
 			if modelName != "" {
-				message += " and model " + modelName
+				message += " and does not deny model selector " + modelName
 			}
 			addCheck("authorization", "pass", message, false)
 		} else {
@@ -475,9 +481,12 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 			if blocking {
 				status = "fail"
 			}
-			addCheck("request_schema", status, strings.Join(violations, "; "), blocking)
+			addCheck("request_schema", status, descriptor.SchemaSource+" schema: "+strings.Join(violations, "; "), blocking)
 		} else {
 			addCheck("request_schema", "pass", descriptor.SchemaSource+" request schema accepts the input", false)
+		}
+		if dynamicModel, dynamic := descriptor.DynamicInputs["model"]; dynamic && modelName != "" {
+			addCheck("dynamic_inputs", "warn", "preflight does not call the upstream catalog; first require an exact live match for "+descriptor.Pack+":"+modelName+" from "+dynamicModel.SourceOperationKey, false)
 		}
 		if len(descriptor.Pricing) == 0 {
 			addCheck("pricing", "warn", "operation price is unknown", false)
@@ -503,10 +512,21 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 				nextAction = "ask the operator to adjust this service Token policy"
 			}
 		}
+		alternatives := []agentOperationRef{}
+		if !ok {
+			alternatives = registry.alternativeOperationRefs(c.GetInt(tokenPolicyContextID), descriptor.Pack, descriptor.Operation)
+		}
+		var code any
+		var reason any
+		if !ok {
+			code = "preflight_blocked"
+			reason = "one or more blocking preflight checks failed"
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"object": "localrouter.preflight", "ok": ok, "upstream_called": false,
+			"object": "localrouter.preflight", "success": ok, "ok": ok, "code": code,
+			"reason": reason, "retryable": false, "owner": "agent", "upstream_called": false,
 			"contract_digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion, "operation": descriptor,
-			"checks": checks, "next_action": nextAction,
+			"checks": checks, "next_action": nextAction, "alternatives": alternatives,
 		})
 	}
 }
@@ -840,6 +860,30 @@ func (registry *protocolRegistry) alternativeOperationRefs(tokenID int, packID, 
 	return result
 }
 
+func (registry *protocolRegistry) readyOperationRefs(tokenID int, query string, limit int) []agentOperationRef {
+	if registry == nil || strings.TrimSpace(query) == "" || limit < 1 {
+		return []agentOperationRef{}
+	}
+	seen := make(map[string]bool)
+	result := make([]agentOperationRef, 0, limit)
+	for _, candidate := range registry.resolveCandidates(tokenID, query) {
+		item := candidate.Descriptor
+		if !item.Ready || seen[item.OperationKey] {
+			continue
+		}
+		seen[item.OperationKey] = true
+		result = append(result, agentOperationRef{
+			OperationKey: item.OperationKey, Pack: item.Pack, Operation: item.Operation, OperationID: item.OperationID,
+			Capabilities: item.Capabilities, Summary: item.Summary, Ready: item.Ready, Status: item.Status,
+			CallURL: item.CallURL, Methods: item.Methods,
+		})
+		if len(result) == limit {
+			break
+		}
+	}
+	return result
+}
+
 func (registry *protocolRegistry) writeReadinessError(c *gin.Context, view protocolView, operationID, status string) {
 	reason, nextAction, retryable, retryAfter, owner := agentReadinessAdvice(view, status)
 	code := "operation_not_available"
@@ -862,6 +906,9 @@ func (registry *protocolRegistry) writeReadinessError(c *gin.Context, view proto
 }
 
 func writeAgentError(c *gin.Context, status int, code, message, reason string, retryable bool, owner, nextAction string, retryAfter any, alternatives []agentOperationRef, extra gin.H) {
+	if alternatives == nil {
+		alternatives = []agentOperationRef{}
+	}
 	payload := gin.H{
 		"success": false, "code": code, "message": message, "reason": reason,
 		"retryable": retryable, "owner": owner, "retry_after": retryAfter,

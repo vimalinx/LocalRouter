@@ -38,7 +38,11 @@ archives:
       - NOTICE
       - PROVENANCE.md
       - SECURITY.md
+      - CONTRIBUTING.md
+      - THIRD-PARTY-LICENSES.md
       - VERSION
+      - .agents/skills/localrouter-protocol-pack/SKILL.md
+      - .agents/skills/localrouter-protocol-pack/**/*
       - packaging/localrouter.env.example
       - packaging/**/*
       - tools/lr

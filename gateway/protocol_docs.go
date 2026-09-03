@@ -227,57 +227,81 @@ func (registry *protocolRegistry) viewFor(protocolID string) (protocolView, bool
 	return protocolView{}, false
 }
 
-func (registry *protocolRegistry) handleDiscovery(c *gin.Context) {
-	c.Header("Cache-Control", "no-store")
-	agentMaintenanceEnabled := registry.policies != nil && registry.policies.isAgentMaintenanceEnabled()
-	c.JSON(http.StatusOK, gin.H{
-		"schema_version": "1",
-		"name":           "LocalRouter",
-		"scope":          "loopback",
-		"contract": gin.H{
-			"digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion,
-			"cache": "reuse cached operation contracts until the digest or schema_version changes",
-		},
-		"agent": gin.H{
-			"catalog": "/agent/operations", "resolve": "/agent/resolve", "describe": "/agent/operations/{pack}/{operation}",
-			"compare": "/agent/compare", "preflight": "/agent/preflight", "whoami": "/agent/whoami",
-			"workflow": "/w/{pack}/{workflow}", "docs": "/docs/agent.json",
-			"selection_mode": "agent", "merged": false,
-		},
-		"invocation": gin.H{
-			"operation_key":       "stable Pack and operation selector: <pack>.<operation_id>",
-			"operation_id":        "semantic selector for Agent APIs, lr and MCP; never an HTTP path",
-			"operation_id_is_url": false,
-			"http":                "use each route.call_url with one of route.call.methods",
-			"cli":                 "prefer route.call.cli or lr call <pack> <operation_id> '<json>'",
-		},
-		"documentation": gin.H{
-			"html": "/docs", "index": "/docs/index.json", "openapi": "/docs/openapi.json",
-			"agent": "/docs/agent.json", "pool_catalog": "/docs/pools/index.json", "pool_guide": "/docs/pools/catalog.md", "mcp": "/mcp",
-		},
-		"maintenance": gin.H{
-			"console": "/#control", "grant_console": "/#tokens", "mcp": "/manage/mcp",
-			"drafts": "/local/api/protocol-drafts", "history": "/local/api/protocols/history",
-			"auth": gin.H{
-				"default":       "administrator",
-				"administrator": gin.H{"type": "header", "header": adminTokenHeader},
-				"agent_token": gin.H{
-					"enabled": agentMaintenanceEnabled, "type": "bearer", "header": "Authorization",
-					"required_capability": localRouterMaintainCapability, "service_access": false,
-				},
+func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		agentMaintenanceEnabled := registry.policies != nil && registry.policies.isAgentMaintenanceEnabled()
+		compatibilityPacks := runtime.channelProfiles.compatibilityViews(runtime.store)
+		topologyDigest := localServiceTopologyDigest(registry.currentDigest(), runtime.channelProfiles)
+		c.JSON(http.StatusOK, gin.H{
+			"schema_version": "1",
+			"name":           "LocalRouter",
+			"scope":          "loopback",
+			"contract": gin.H{
+				"digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion,
+				"cache": "reuse cached operation contracts until the digest or schema_version changes",
 			},
-			"grant":        "Service Tokens are call-only. Agent maintenance Tokens are separate, maintenance-only, and accepted only while the operator switch is enabled.",
-			"lifecycle":    []string{"draft", "edit", "validate", "review-impact", "plan", "apply", "verify", "rollback"},
-			"editing":      "Semantic MCP tools own paths, JSON/YAML formatting, atomic writes and exact digests.",
-			"failure":      "Drafts are preserved and local post-apply verification failures automatically restore the previous revision.",
-			"operator_api": gin.H{"path": "/local/api", "auth": gin.H{"type": "header", "header": "X-Local-Admin"}},
-		},
-		"protocols": registry.views(),
-		"authentication": gin.H{
-			"type": "bearer", "header": "Authorization", "applies_to": []string{"/agent/*", "/p/*", "/w/*", "/mcp", "/v1/*", "/v1beta/*"},
-		},
-		"protocol_pack_versions": []string{"1", "2", "3"},
-	})
+			"topology": gin.H{
+				"digest": topologyDigest, "schema_version": agentContractSchemaVersion,
+				"cache": "reuse the service tree until this digest or schema_version changes; readiness remains live state",
+			},
+			"agent": gin.H{
+				"catalog": "/agent/operations", "resolve": "/agent/resolve", "describe": "/agent/operations/{pack}/{operation}",
+				"compare": "/agent/compare", "preflight": "/agent/preflight", "whoami": "/agent/whoami",
+				"workflow": "/w/{pack}/{workflow}", "docs": "/docs/agent.json",
+				"selection_mode": "agent", "merged": false,
+			},
+			"invocation": gin.H{
+				"operation_key":       "stable Pack and operation selector: <pack>.<operation_id>",
+				"operation_id":        "semantic selector for Agent APIs, lr and MCP; never an HTTP path",
+				"operation_id_is_url": false,
+				"http":                "use each route.call_url with one of route.call.methods",
+				"cli":                 "prefer route.call.cli or lr call <pack> <operation_id> '<json>'",
+			},
+			"pack_model": gin.H{
+				"unit": "service-pack",
+				"rule": "all callable services are exposed as Packs; choose the smallest authoring form that preserves the observed contract",
+				"kinds": gin.H{
+					"compatibility": "lightweight standard API Pack backed by Channel Profiles and Channels",
+					"protocol":      "full Pack for isolated paths, custom transports, authentication, pools, adapters or workflows",
+				},
+				"projections": gin.H{"workflow": "/w/{pack}", "mcp": "/mcp"},
+			},
+			"surfaces": []gin.H{
+				{"id": "compatibility", "paths": []string{"/v1/*", "/v1beta/*"}, "role": "standard API Packs"},
+				{"id": "protocol", "paths": []string{"/p/{pack}/*"}, "role": "isolated Protocol Pack calls"},
+				{"id": "workflow", "paths": []string{"/w/{pack}/{workflow}"}, "role": "persistent Pack workflow projection"},
+				{"id": "mcp", "paths": []string{"/mcp"}, "role": "ready Pack operations projected as Agent tools"},
+			},
+			"documentation": gin.H{
+				"html": "/docs", "index": "/docs/index.json", "openapi": "/docs/openapi.json",
+				"agent": "/docs/agent.json", "pool_catalog": "/docs/pools/index.json", "pool_guide": "/docs/pools/catalog.md", "mcp": "/mcp",
+			},
+			"maintenance": gin.H{
+				"console": "/#control", "grant_console": "/#tokens", "mcp": "/manage/mcp",
+				"drafts": "/local/api/protocol-drafts", "history": "/local/api/protocols/history",
+				"auth": gin.H{
+					"default":       "administrator",
+					"administrator": gin.H{"type": "header", "header": adminTokenHeader},
+					"agent_token": gin.H{
+						"enabled": agentMaintenanceEnabled, "type": "bearer", "header": "Authorization",
+						"required_capability": localRouterMaintainCapability, "service_access": false,
+					},
+				},
+				"grant":        "Service Tokens are call-only. Agent maintenance Tokens are separate, maintenance-only, and accepted only while the operator switch is enabled.",
+				"lifecycle":    []string{"draft", "edit", "validate", "review-impact", "plan", "apply", "verify", "rollback"},
+				"editing":      "Semantic MCP tools own paths, JSON/YAML formatting, atomic writes and exact digests.",
+				"failure":      "Drafts are preserved and local post-apply verification failures automatically restore the previous revision.",
+				"operator_api": gin.H{"path": "/local/api", "auth": gin.H{"type": "header", "header": "X-Local-Admin"}},
+			},
+			"compatibility_packs": compatibilityPacks,
+			"protocols":           registry.views(),
+			"authentication": gin.H{
+				"type": "bearer", "header": "Authorization", "applies_to": []string{"/agent/*", "/p/*", "/w/*", "/mcp", "/v1/*", "/v1beta/*"},
+			},
+			"protocol_pack_versions": []string{"1", "2", "3"},
+		})
+	}
 }
 
 func (registry *protocolRegistry) handleOpenAPI(c *gin.Context) {
@@ -471,6 +495,9 @@ func (registry *protocolRegistry) handlePackMarkdown(c *gin.Context) {
 	var output strings.Builder
 	fmt.Fprintf(&output, "# %s\n\n%s\n\n", view.Name, view.Description)
 	fmt.Fprintf(&output, "- 调用前缀：`%s`\n- 状态：`%s`\n- Manifest：`%s`\n- OpenAPI：`/docs/openapi.json`\n\n", view.Mount, view.Status, view.Docs.Manifest)
+	if view.OpenAIBaseURL != "" {
+		fmt.Fprintf(&output, "- OpenAI v1 Base URL：`%s`（客户端在其后追加 `/models` 或 `/chat/completions`）\n\n", view.OpenAIBaseURL)
+	}
 	output.WriteString("> `operation_id` 是给 Agent API、`lr` 和 MCP 使用的语义选择标识，不是 URL。直接发送 HTTP 时只使用下方的 **实际调用地址**（也就是 Manifest 中的 `call_url`）。\n\n")
 	output.WriteString("> `request_example` 只说明请求形状，不证明其中的动态值当前可用；存在 `dynamic_inputs` 时，必须先按其来源解析模型或资源 ID。\n\n")
 	output.WriteString("## 操作参考\n\n")
