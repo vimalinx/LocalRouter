@@ -102,5 +102,17 @@ grep -q 'data: \[DONE\]' "$e2e_root/stream-response.txt"
 curl --fail --silent --show-error --header @"$e2e_root/admin-header" \
   "http://127.0.0.1:${gateway_port}/local/api/logs?page=1&page_size=20" >"$e2e_root/logs.json"
 jq -e '.success == true and (.data.items | length) >= 2' "$e2e_root/logs.json" >/dev/null
+jq -e '
+  any(.data.items[]; .model_name == "localrouter-smoke" and .prompt_tokens == 2 and .completion_tokens == 3 and .total_tokens == 5) and
+  any(.data.items[]; .model_name == "localrouter-smoke" and .prompt_tokens == 2 and .completion_tokens == 2 and .total_tokens == 4)
+' "$e2e_root/logs.json" >/dev/null
+
+curl --fail --silent --show-error --header @"$e2e_root/admin-header" \
+  "http://127.0.0.1:${gateway_port}/local/api/analytics" >"$e2e_root/analytics.json"
+jq -e '
+  .success == true and .data.totals.model_requests == 2 and .data.totals.total_tokens == 9 and
+  .data.totals.tokenized_requests == 2 and .data.totals.model_cost_usd == 0 and
+  any(.data.services[]; .kind == "model-provider" and .cost_status == "unavailable")
+' "$e2e_root/analytics.json" >/dev/null
 
 echo "non-streaming and streaming relay acceptance passed"

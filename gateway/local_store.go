@@ -66,24 +66,30 @@ type localChannel struct {
 }
 
 type localRequestLog struct {
-	ID               int    `json:"id"`
-	UserID           int    `json:"user_id"`
-	CreatedAt        int64  `json:"created_at"`
-	Type             int    `json:"type"`
-	Content          string `json:"content"`
-	Username         string `json:"username"`
-	TokenName        string `json:"token_name"`
-	ModelName        string `json:"model_name"`
-	Quota            int64  `json:"quota"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	UseTime          int64  `json:"use_time"`
-	IsStream         bool   `json:"is_stream"`
-	ChannelID        int    `json:"channel_id"`
-	ChannelName      string `json:"channel_name"`
-	TokenID          int    `json:"token_id"`
-	Group            string `json:"group"`
-	RequestID        string `json:"request_id"`
+	ID                    int     `json:"id"`
+	UserID                int     `json:"user_id"`
+	CreatedAt             int64   `json:"created_at"`
+	Type                  int     `json:"type"`
+	Content               string  `json:"content"`
+	Username              string  `json:"username"`
+	TokenName             string  `json:"token_name"`
+	ModelName             string  `json:"model_name"`
+	Quota                 int64   `json:"quota"`
+	PromptTokens          int64   `json:"prompt_tokens"`
+	CompletionTokens      int64   `json:"completion_tokens"`
+	CachedInputTokens     int64   `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64   `json:"cache_write_input_tokens"`
+	ReasoningTokens       int64   `json:"reasoning_tokens"`
+	TotalTokens           int64   `json:"total_tokens"`
+	CostUSD               float64 `json:"cost_usd"`
+	CostStatus            string  `json:"cost_status"`
+	UseTime               int64   `json:"use_time"`
+	IsStream              bool    `json:"is_stream"`
+	ChannelID             int     `json:"channel_id"`
+	ChannelName           string  `json:"channel_name"`
+	TokenID               int     `json:"token_id"`
+	Group                 string  `json:"group"`
+	RequestID             string  `json:"request_id"`
 }
 
 type localStore struct {
@@ -213,6 +219,21 @@ func (store *localStore) initialize() error {
 	}
 	if err := store.ensureColumn("channels", "upstream_profile", `TEXT NOT NULL DEFAULT '{}'`); err != nil {
 		return err
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "cached_input_tokens", definition: `INTEGER NOT NULL DEFAULT 0`},
+		{name: "cache_write_input_tokens", definition: `INTEGER NOT NULL DEFAULT 0`},
+		{name: "reasoning_tokens", definition: `INTEGER NOT NULL DEFAULT 0`},
+		{name: "total_tokens", definition: `INTEGER NOT NULL DEFAULT 0`},
+		{name: "cost_usd", definition: `REAL NOT NULL DEFAULT 0`},
+		{name: "cost_status", definition: `TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := store.ensureColumn("logs", column.name, column.definition); err != nil {
+			return err
+		}
 	}
 	for _, column := range []struct {
 		name       string
@@ -599,8 +620,8 @@ func (store *localStore) deleteToken(userID, tokenID int) error {
 }
 
 func (store *localStore) logRequest(ctx context.Context, entry localRequestLog) error {
-	_, err := store.db.ExecContext(ctx, `INSERT INTO logs (user_id, created_at, type, content, username, token_name, model_name, quota, prompt_tokens, completion_tokens, use_time, is_stream, channel_id, channel_name, token_id, "group", request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'default', ?)`,
-		entry.UserID, entry.CreatedAt, entry.Type, entry.Content, entry.Username, entry.TokenName, entry.ModelName, entry.Quota, entry.PromptTokens, entry.CompletionTokens, entry.UseTime, entry.IsStream, entry.ChannelID, entry.ChannelName, entry.TokenID, entry.RequestID)
+	_, err := store.db.ExecContext(ctx, `INSERT INTO logs (user_id, created_at, type, content, username, token_name, model_name, quota, prompt_tokens, completion_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_tokens, total_tokens, cost_usd, cost_status, use_time, is_stream, channel_id, channel_name, token_id, "group", request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'default', ?)`,
+		entry.UserID, entry.CreatedAt, entry.Type, entry.Content, entry.Username, entry.TokenName, entry.ModelName, entry.Quota, entry.PromptTokens, entry.CompletionTokens, entry.CachedInputTokens, entry.CacheWriteInputTokens, entry.ReasoningTokens, entry.TotalTokens, entry.CostUSD, entry.CostStatus, entry.UseTime, entry.IsStream, entry.ChannelID, entry.ChannelName, entry.TokenID, entry.RequestID)
 	return err
 }
 
@@ -609,7 +630,7 @@ func (store *localStore) listLogs(userID, page, pageSize int) ([]localRequestLog
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, err := store.db.Query(`SELECT id, COALESCE(user_id, 0), COALESCE(created_at, 0), COALESCE(type, 0), COALESCE(content, ''), COALESCE(username, ''), COALESCE(token_name, ''), COALESCE(model_name, ''), COALESCE(quota, 0), COALESCE(prompt_tokens, 0), COALESCE(completion_tokens, 0), COALESCE(use_time, 0), COALESCE(is_stream, 0), COALESCE(channel_id, 0), COALESCE(channel_name, ''), COALESCE(token_id, 0), COALESCE("group", 'default'), COALESCE(request_id, '') FROM logs WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`, userID, pageSize, (page-1)*pageSize)
+	rows, err := store.db.Query(`SELECT id, COALESCE(user_id, 0), COALESCE(created_at, 0), COALESCE(type, 0), COALESCE(content, ''), COALESCE(username, ''), COALESCE(token_name, ''), COALESCE(model_name, ''), COALESCE(quota, 0), COALESCE(prompt_tokens, 0), COALESCE(completion_tokens, 0), COALESCE(cached_input_tokens, 0), COALESCE(cache_write_input_tokens, 0), COALESCE(reasoning_tokens, 0), COALESCE(total_tokens, 0), COALESCE(cost_usd, 0), COALESCE(cost_status, ''), COALESCE(use_time, 0), COALESCE(is_stream, 0), COALESCE(channel_id, 0), COALESCE(channel_name, ''), COALESCE(token_id, 0), COALESCE("group", 'default'), COALESCE(request_id, '') FROM logs WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`, userID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -617,7 +638,7 @@ func (store *localStore) listLogs(userID, page, pageSize int) ([]localRequestLog
 	logs := make([]localRequestLog, 0)
 	for rows.Next() {
 		var entry localRequestLog
-		if err := rows.Scan(&entry.ID, &entry.UserID, &entry.CreatedAt, &entry.Type, &entry.Content, &entry.Username, &entry.TokenName, &entry.ModelName, &entry.Quota, &entry.PromptTokens, &entry.CompletionTokens, &entry.UseTime, &entry.IsStream, &entry.ChannelID, &entry.ChannelName, &entry.TokenID, &entry.Group, &entry.RequestID); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.UserID, &entry.CreatedAt, &entry.Type, &entry.Content, &entry.Username, &entry.TokenName, &entry.ModelName, &entry.Quota, &entry.PromptTokens, &entry.CompletionTokens, &entry.CachedInputTokens, &entry.CacheWriteInputTokens, &entry.ReasoningTokens, &entry.TotalTokens, &entry.CostUSD, &entry.CostStatus, &entry.UseTime, &entry.IsStream, &entry.ChannelID, &entry.ChannelName, &entry.TokenID, &entry.Group, &entry.RequestID); err != nil {
 			return nil, 0, err
 		}
 		logs = append(logs, entry)

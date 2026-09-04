@@ -50,7 +50,7 @@ function shellQuote(value: string) {
 
 function costLabel(usage?: AgentUsage) {
   if (!usage || usage.cost_status === 'unavailable') return '未接入价格'
-  const suffix = usage.cost_status === 'estimated' ? ' 估算' : usage.cost_status === 'partial' ? ' 部分' : ''
+  const suffix = usage.cost_status === 'estimated' ? ' 估算' : usage.cost_status === 'partial' ? ' 部分' : usage.cost_status === 'reported' ? ' 上游' : ''
   return `${formatUSD(usage.cost_usd)}${suffix}`
 }
 

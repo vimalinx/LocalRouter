@@ -26,6 +26,10 @@ function logContent(log: RequestLog): string {
   return '网关请求'
 }
 
+function logTokens(log: RequestLog) {
+  return log.total_tokens || (log.prompt_tokens || 0) + (log.completion_tokens || 0)
+}
+
 export function LogsPage(props: { logs: RequestLog[] }) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<RequestLog | null>(null)
@@ -125,6 +129,10 @@ export function LogsPage(props: { logs: RequestLog[] }) {
                 {selected.elapsed_time !== undefined ? (
                   <Badge variant='outline'>{selected.elapsed_time} ms</Badge>
                 ) : null}
+                {logTokens(selected) ? <Badge variant='outline'>{logTokens(selected).toLocaleString('zh-CN')} Token</Badge> : null}
+                {selected.cached_input_tokens ? <Badge variant='outline'>缓存读 {selected.cached_input_tokens.toLocaleString('zh-CN')}</Badge> : null}
+                {selected.reasoning_tokens ? <Badge variant='outline'>推理 {selected.reasoning_tokens.toLocaleString('zh-CN')}</Badge> : null}
+                {selected.cost_status === 'reported' ? <Badge variant='outline'>上游 ${Number(selected.cost_usd || 0).toFixed(6)}</Badge> : null}
               </div>
               <pre className='max-h-[58svh] overflow-auto border bg-slate-950 p-4 text-xs leading-5 text-slate-100'>
                 {JSON.stringify(selected, null, 2)}

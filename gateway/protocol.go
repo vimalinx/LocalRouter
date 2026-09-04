@@ -1064,7 +1064,7 @@ func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 	}
 	if registry.events != nil {
 		started := time.Now()
-		defer registry.events.recordRequest(c, "p", definition.ID, matched.Route.OperationID, started)
+		defer registry.events.recordRequestWithDefinition(c, "p", definition, matched.Route.OperationID, started)
 	}
 	if matched.Route.Transport == "websocket" {
 		registry.forwardWebSocket(c, definition, matched, forwardPath)
@@ -1185,6 +1185,9 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 		return
 	}
 	expressionEnv = protocolExpressionEnv(body, matched.Params, query, c.Request.Header, c.Request.Method, 0)
+	if model := requestModel(body); model != "" {
+		c.Set("localrouter_usage_model", model)
+	}
 	for key, expression := range route.RequestTransform.QueryExpr {
 		value, evalErr := evalProtocolExpression(expression, expressionEnv)
 		if evalErr != nil {
@@ -1336,6 +1339,7 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "protocol response body is too large"})
 			return
 		}
+		observeProtocolUsage(c, response.Header.Get("Content-Type"), body)
 		if route.Affinity.ResponseJSONPath != "" && response.StatusCode >= 200 && response.StatusCode < 400 {
 			resourceID := gjson.GetBytes(body, route.Affinity.ResponseJSONPath).String()
 			_ = registry.bindAffinity(definition, resourceID, acquired.Credential.ID, route.Affinity.TTLSeconds)
@@ -1364,11 +1368,14 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 	}
 	registry.copyProtocolResponseHeaders(c, definition, response)
 	c.Status(response.StatusCode)
+	capture := &limitedCaptureWriter{limit: 2 << 20}
 	buffer := make([]byte, 32<<10)
 	for {
 		count, readErr := response.Body.Read(buffer)
 		if count > 0 {
+			_, _ = capture.Write(buffer[:count])
 			if _, writeErr := c.Writer.Write(buffer[:count]); writeErr != nil {
+				observeProtocolUsage(c, response.Header.Get("Content-Type"), capture.Bytes())
 				return
 			}
 			if flusher, ok := c.Writer.(http.Flusher); ok {
@@ -1376,8 +1383,22 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 			}
 		}
 		if readErr != nil {
+			observeProtocolUsage(c, response.Header.Get("Content-Type"), capture.Bytes())
 			return
 		}
+	}
+}
+
+func observeProtocolUsage(c *gin.Context, contentType string, body []byte) {
+	usage := parseUsageMetrics(body)
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") || !usage.hasTokens() {
+		streamUsage := parseStreamUsageMetrics(body)
+		if usageInformationScore(streamUsage) > usageInformationScore(usage) {
+			usage = streamUsage
+		}
+	}
+	if usage.hasTokens() || usage.ReportedCostUSD != nil {
+		c.Set("localrouter_usage_metrics", usage.normalized())
 	}
 }
 

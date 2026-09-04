@@ -19,24 +19,28 @@ import (
 const maxProtocolEventFileBytes = 16 << 20
 
 type protocolEvent struct {
-	ID            string    `json:"id"`
-	CreatedAt     time.Time `json:"created_at"`
-	RequestID     string    `json:"request_id,omitempty"`
-	TokenID       int       `json:"token_id,omitempty"`
-	Surface       string    `json:"surface"`
-	ProtocolID    string    `json:"protocol_id,omitempty"`
-	OperationID   string    `json:"operation_id,omitempty"`
-	WorkflowID    string    `json:"workflow_id,omitempty"`
-	JobID         string    `json:"job_id,omitempty"`
-	Method        string    `json:"method"`
-	Path          string    `json:"path"`
-	Status        int       `json:"status"`
-	LatencyMS     int64     `json:"latency_ms"`
-	ResponseBytes int       `json:"response_bytes"`
-	Attempts      int       `json:"attempts,omitempty"`
-	CredentialRef string    `json:"credential_ref,omitempty"`
-	Target        string    `json:"target,omitempty"`
-	Outcome       string    `json:"outcome,omitempty"`
+	AccountingVersion int           `json:"accounting_version,omitempty"`
+	ID                string        `json:"id"`
+	CreatedAt         time.Time     `json:"created_at"`
+	RequestID         string        `json:"request_id,omitempty"`
+	TokenID           int           `json:"token_id,omitempty"`
+	Surface           string        `json:"surface"`
+	ProtocolID        string        `json:"protocol_id,omitempty"`
+	OperationID       string        `json:"operation_id,omitempty"`
+	Model             string        `json:"model,omitempty"`
+	WorkflowID        string        `json:"workflow_id,omitempty"`
+	JobID             string        `json:"job_id,omitempty"`
+	Method            string        `json:"method"`
+	Path              string        `json:"path"`
+	Status            int           `json:"status"`
+	LatencyMS         int64         `json:"latency_ms"`
+	ResponseBytes     int           `json:"response_bytes"`
+	Attempts          int           `json:"attempts,omitempty"`
+	CredentialRef     string        `json:"credential_ref,omitempty"`
+	Target            string        `json:"target,omitempty"`
+	Outcome           string        `json:"outcome,omitempty"`
+	Usage             *usageMetrics `json:"usage,omitempty"`
+	Cost              *usageCost    `json:"cost,omitempty"`
 }
 
 type protocolEventStore struct {
@@ -99,6 +103,10 @@ func eventRequestID(c *gin.Context) string {
 }
 
 func (store *protocolEventStore) recordRequest(c *gin.Context, surface, protocolID, operationID string, started time.Time) {
+	store.recordRequestWithDefinition(c, surface, protocolDefinition{ID: protocolID}, operationID, started)
+}
+
+func (store *protocolEventStore) recordRequestWithDefinition(c *gin.Context, surface string, definition protocolDefinition, operationID string, started time.Time) {
 	status := c.Writer.Status()
 	if status == 0 {
 		status = http.StatusOK
@@ -111,15 +119,28 @@ func (store *protocolEventStore) recordRequest(c *gin.Context, surface, protocol
 	if credentialID := c.GetString("localrouter_protocol_credential"); credentialID != "" {
 		credentialRef = protocolCredentialRef(credentialID)
 	}
-	store.append(protocolEvent{
-		ID:        fmt.Sprintf("PVE-%s-%06d", time.Now().UTC().Format("20060102T150405.000000000Z"), time.Now().UnixNano()%1000000),
-		CreatedAt: time.Now().UTC(), RequestID: eventRequestID(c), TokenID: c.GetInt(tokenPolicyContextID),
-		Surface: surface, ProtocolID: protocolID, OperationID: operationID,
+	model := strings.TrimSpace(c.GetString("localrouter_usage_model"))
+	usage, _ := c.Get("localrouter_usage_metrics")
+	metrics, _ := usage.(usageMetrics)
+	metrics = metrics.normalized()
+	var usageView *usageMetrics
+	if metrics.hasTokens() || metrics.ReportedCostUSD != nil {
+		copy := metrics
+		usageView = &copy
+	}
+	event := protocolEvent{
+		AccountingVersion: 1,
+		ID:                fmt.Sprintf("PVE-%s-%06d", time.Now().UTC().Format("20060102T150405.000000000Z"), time.Now().UnixNano()%1000000),
+		CreatedAt:         time.Now().UTC(), RequestID: eventRequestID(c), TokenID: c.GetInt(tokenPolicyContextID),
+		Surface: surface, ProtocolID: definition.ID, OperationID: operationID, Model: model,
 		Method: c.Request.Method, Path: c.Request.URL.Path, Status: status,
 		LatencyMS: time.Since(started).Milliseconds(), ResponseBytes: c.Writer.Size(), Attempts: attempts,
 		CredentialRef: credentialRef, Target: c.GetString("localrouter_protocol_target"), Outcome: c.GetString("localrouter_protocol_outcome"),
 		WorkflowID: c.Param("workflow"), JobID: c.GetString("localrouter_workflow_job"),
-	})
+		Usage: usageView,
+	}
+	event.Cost = protocolUsageCost(definition, operationID, model, metrics, status > 0 && status < http.StatusBadRequest)
+	store.append(event)
 }
 
 func (store *protocolEventStore) read(limit int) ([]protocolEvent, error) {

@@ -74,11 +74,18 @@ make -C gateway web
 - Pack 生命周期：Agent 使用 `/manage/mcp` 或上级 `lr manage-*`；LocalRouter 负责路径、格式、原子安装、线上摘要复验和本地失败自动回滚。`/local/api/protocols/*` 继续作为人工控制台使用的管理 API。
 - 端口草稿：维护工具支持隔离创建、语义修改、校验和计划；精确 digest 发布失败时保留草稿，并返回结构化阶段、错误码和回滚结果。
 - Token 策略：`/local/api/token-policies/*` 限制入口、Pack、operation、model、每分钟/每日请求、并发与到期时间。
-- Agent 注册与计量：非系统 Token 必须绑定唯一 `agent_code`、名称和工作区；`GET /local/api/agent-usage` 按 Token ID 合并模型日志与 Protocol Pack 事件，返回调用、Token、成本状态和额度使用。`GET /agent/whoami` 返回当前 Token 的脱敏 Agent 身份。
+- Agent 注册与计量：非系统 Token 必须绑定唯一 `agent_code`、名称和工作区；`GET /local/api/agent-usage` 按 Token ID 合并模型日志与 Protocol Pack 事件，返回调用、输入/输出/缓存读写/推理 Token、成本状态和额度使用。`GET /agent/whoami` 返回当前 Token 的脱敏 Agent 身份。
+- 调用账本：`GET /local/api/protocol-events` 为每次 Protocol Pack、Workflow 与 MCP 调用保留一条脱敏事件。模型响应存在标准 usage 时会记录规范化 Token；当上游明确返回 USD 成本或 Pack 有可计算的 operation/model 标价时，事件会冻结当次成本及组成，后续改价不会重算新格式的历史事件。
 - 任务与审计：`/local/api/workflows/jobs` 和 `/local/api/protocol-events` 只返回脱敏状态；客户端只能列出和操作自己 Token 创建的新 Job。
 
 客户端应通过其 secret-file、环境文件或系统凭据能力读取
 `$XDG_DATA_HOME/localrouter/api-token`。不要将令牌写入仓库、命令历史或截图。
+
+## 用量与成本边界
+
+LocalRouter 的 `usage-accounting` 是本机计量和成本归因，不是支付、余额扣减或供应商发票系统。兼容入口与 OpenAI、Anthropic、Gemini 形状的 Protocol Pack 响应会规范化记录 input、output、cache-read、cache-write、reasoning 和 total Token；缓存与推理 Token 是输入/输出的细分维度，不会再次加入 total。
+
+成本来源分开标记：上游明确返回 `usage.cost_usd` 或 `usage.total_cost_usd` 时记为 `reported`；Pack 的 `operation` 级 `per-request` 价格以及 `model` 级 input/output/cache/reasoning/total-token 价格记为 `confirmed` 或 `estimated`；只有部分价格单位可归因时记为 `partial`；没有可靠价格时记为 `unavailable`，绝不把零展示成免费。旧 Channel 日志中的 `quota / 500000` 只作为历史兼容值保留。
 
 ## 验证
 

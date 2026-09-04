@@ -86,7 +86,7 @@ describe('OverviewPage', () => {
     render(<OverviewPage summary={summary} analytics={analytics} protocols={[protocol]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
 
     expect(screen.getByRole('heading', { name: '运行概览' })).toBeInTheDocument()
-    expect(screen.getByText('10 模型 · 2 服务 API')).toBeInTheDocument()
+    expect(screen.getByText('10 次模型调用 · 2 条 Pack 事件')).toBeInTheDocument()
     expect(screen.getAllByText('OpenAI compatible').length).toBeGreaterThanOrEqual(2)
     expect(screen.getAllByText('Search API').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('$25.00')).toBeInTheDocument()

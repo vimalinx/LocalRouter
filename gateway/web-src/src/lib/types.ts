@@ -44,7 +44,11 @@ export type AnalyticsTotals = {
   success_rate: number
   prompt_tokens: number
   completion_tokens: number
+  cached_input_tokens?: number
+  cache_write_input_tokens?: number
+  reasoning_tokens?: number
   total_tokens: number
+  tokenized_requests?: number
   model_cost_usd: number
   protocol_cost_usd: number
   protocol_priced_calls: number
@@ -74,11 +78,16 @@ export type AnalyticsService = {
   success_rate: number
   average_latency_ms: number
   operations: number
+  model_requests?: number
   prompt_tokens?: number
   completion_tokens?: number
+  cached_input_tokens?: number
+  cache_write_input_tokens?: number
+  reasoning_tokens?: number
+  tokenized_requests?: number
   cost_usd?: number
   priced_requests?: number
-  cost_status: 'measured' | 'confirmed' | 'estimated' | 'partial' | 'unavailable'
+  cost_status: 'measured' | 'confirmed' | 'estimated' | 'reported' | 'partial' | 'unavailable'
   trend: Array<{ requests: number; tokens: number; cost_usd: number }>
 }
 
@@ -87,7 +96,11 @@ export type AnalyticsModel = {
   requests: number
   prompt_tokens: number
   completion_tokens: number
+  cached_input_tokens?: number
+  cache_write_input_tokens?: number
+  reasoning_tokens?: number
   cost_usd: number
+  cost_status?: 'measured' | 'confirmed' | 'estimated' | 'reported' | 'partial' | 'unavailable'
 }
 
 export type Analytics = {
@@ -159,8 +172,11 @@ export type AgentUsage = {
   today_requests: number
   prompt_tokens: number
   completion_tokens: number
+  cached_input_tokens?: number
+  cache_write_input_tokens?: number
+  reasoning_tokens?: number
   cost_usd: number
-  cost_status: 'measured' | 'estimated' | 'partial' | 'unavailable'
+  cost_status: 'measured' | 'estimated' | 'reported' | 'partial' | 'unavailable'
   last_used_at: number
   requests_per_minute: number
   daily_request_limit: number
@@ -240,12 +256,14 @@ export type WorkflowJob = {
 }
 
 export type ProtocolEvent = {
+  accounting_version?: number
   id: string
   created_at: string
   token_id?: number
   surface: string
   protocol_id?: string
   operation_id?: string
+  model?: string
   workflow_id?: string
   job_id?: string
   method: string
@@ -257,6 +275,28 @@ export type ProtocolEvent = {
   credential_ref?: string
   target?: string
   outcome?: string
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_input_tokens?: number
+    cache_write_input_tokens?: number
+    reasoning_tokens?: number
+    total_tokens?: number
+    reported_cost_usd?: number
+  }
+  cost?: {
+    amount_usd: number
+    status: 'confirmed' | 'estimated' | 'reported' | 'partial'
+    source: 'provider' | 'published-pricing' | 'legacy-current-pricing'
+    components?: Array<{
+      pricing_id: string
+      scope: string
+      unit: string
+      units: number
+      amount_usd: number
+      status: string
+    }>
+  }
 }
 
 export type RequestLog = {
@@ -270,6 +310,14 @@ export type RequestLog = {
   username?: string
   channel_name?: string
   elapsed_time?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  cached_input_tokens?: number
+  cache_write_input_tokens?: number
+  reasoning_tokens?: number
+  total_tokens?: number
+  cost_usd?: number
+  cost_status?: string
   [key: string]: unknown
 }
 

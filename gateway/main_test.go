@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -33,6 +35,38 @@ func TestProtectDatabaseFiles(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	}
+}
+
+func TestLocalStoreMigratesLegacyLogsForUsageAccounting(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "localrouter.db")
+	require.NoError(t, os.WriteFile(databasePath, nil, credentialMode))
+	database, err := sql.Open("sqlite", databasePath)
+	require.NoError(t, err)
+	_, err = database.Exec(`CREATE TABLE logs (
+		id INTEGER PRIMARY KEY, user_id INTEGER, created_at INTEGER, type INTEGER, content TEXT,
+		username TEXT, token_name TEXT, model_name TEXT, quota INTEGER DEFAULT 0,
+		prompt_tokens INTEGER DEFAULT 0, completion_tokens INTEGER DEFAULT 0, use_time INTEGER DEFAULT 0,
+		is_stream NUMERIC, channel_id INTEGER, channel_name TEXT, token_id INTEGER DEFAULT 0,
+		"group" TEXT, request_id TEXT DEFAULT ''
+	)`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	store, err := openLocalStore(databasePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.logRequest(t.Context(), localRequestLog{
+		CreatedAt: time.Now().Unix(), Type: localLogTypeConsume, ModelName: "migrated-model",
+		PromptTokens: 10, CompletionTokens: 2, CachedInputTokens: 4, ReasoningTokens: 1, TotalTokens: 12,
+		CostUSD: 0.01, CostStatus: "reported",
+	}))
+	logs, _, err := store.listLogs(0, 1, 10)
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+	assert.Equal(t, int64(4), logs[0].CachedInputTokens)
+	assert.Equal(t, int64(1), logs[0].ReasoningTokens)
+	assert.Equal(t, int64(12), logs[0].TotalTokens)
+	assert.Equal(t, "reported", logs[0].CostStatus)
 }
 
 func TestProtectedRuntimeFilesRejectSymlinksAndLooseModes(t *testing.T) {

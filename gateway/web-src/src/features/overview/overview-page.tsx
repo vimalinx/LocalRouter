@@ -87,9 +87,8 @@ function serviceStatusLabel(status: string) {
 }
 
 function costLabel(service: AnalyticsService) {
-  if (service.kind === 'model-provider') return formatUSD(service.cost_usd || 0)
   if (service.cost_status === 'unavailable') return '未接入价格'
-  const suffix = service.cost_status === 'partial' ? ' 部分' : service.cost_status === 'estimated' ? ' 估算' : ''
+  const suffix = service.cost_status === 'partial' ? ' 部分' : service.cost_status === 'estimated' ? ' 估算' : service.cost_status === 'reported' ? ' 上游' : ''
   return `${formatUSD(service.cost_usd || 0)}${suffix}`
 }
 
@@ -198,7 +197,7 @@ export function OverviewPage(props: {
   const stats = [
     {
       label: '总调用', value: formatCount(totals.requests),
-      detail: `${formatCount(totals.model_requests)} 模型 · ${formatCount(totals.protocol_requests)} 服务 API`, icon: Activity,
+      detail: `${formatCount(totals.model_requests)} 次模型调用 · ${formatCount(totals.protocol_requests)} 条 Pack 事件`, icon: Activity,
     },
     {
       label: '服务能力', value: `${readyServices}/${configuredServices}`,
@@ -206,7 +205,7 @@ export function OverviewPage(props: {
     },
     {
       label: '资源消耗', value: formatCount(totals.total_tokens),
-      detail: `${formatUSD(totals.model_cost_usd)} 模型 · ${formatUSD(totals.protocol_cost_usd)} 服务`, icon: CircleDollarSign,
+      detail: `${formatCount(totals.cached_input_tokens || 0)} 缓存读 · ${formatCount(totals.reasoning_tokens || 0)} 推理`, icon: CircleDollarSign,
     },
     {
       label: '请求质量', value: `${decimalNumber.format(totals.success_rate)}%`,
@@ -358,7 +357,7 @@ export function OverviewPage(props: {
                   <td className='px-3 py-2.5'><Badge variant='outline' className='font-normal'>{service.kind === 'model-provider' ? '模型' : '服务 API'}</Badge></td>
                   <td className='px-3 py-2.5 text-right tabular-nums'>{integerNumber.format(service.requests)}</td>
                   <td className='px-3 py-2.5 text-right tabular-nums'>{service.requests ? `${decimalNumber.format(service.success_rate)}%` : '—'}</td>
-                  <td className='px-3 py-2.5 text-right tabular-nums'>{service.kind === 'model-provider' ? `${formatCount((service.prompt_tokens || 0) + (service.completion_tokens || 0))} Token` : `${service.operations} 项能力`}</td>
+                  <td className='px-3 py-2.5 text-right tabular-nums'>{service.tokenized_requests ? `${formatCount((service.prompt_tokens || 0) + (service.completion_tokens || 0))} Token` : `${service.operations} 项能力`}</td>
                   <td className={cn('px-3 py-2.5 text-right tabular-nums', service.cost_status === 'unavailable' && 'text-muted-foreground')}>{costLabel(service)}</td>
                   <td className='py-2.5 pl-3 text-right tabular-nums'>{formatLatency(service.average_latency_ms)}</td>
                 </tr>
@@ -379,7 +378,7 @@ export function OverviewPage(props: {
                   <span className='truncate font-mono'>{model.name}</span>
                   <span className='text-right tabular-nums text-muted-foreground'>{formatCount(model.requests)} 次</span>
                   <span className='text-right tabular-nums text-muted-foreground'>{formatCount(model.prompt_tokens + model.completion_tokens)} T</span>
-                  <span className='text-right tabular-nums'>{formatUSD(model.cost_usd)}</span>
+                  <span className='text-right tabular-nums'>{model.cost_status === 'unavailable' ? '未计价' : formatUSD(model.cost_usd)}</span>
                 </div>
               ))}
             </div>

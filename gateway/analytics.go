@@ -26,22 +26,26 @@ type localAnalytics struct {
 }
 
 type localAnalyticsTotals struct {
-	Requests             int64   `json:"requests"`
-	ModelRequests        int64   `json:"model_requests"`
-	ProtocolRequests     int64   `json:"protocol_requests"`
-	Successful           int64   `json:"successful"`
-	Failed               int64   `json:"failed"`
-	SuccessRate          float64 `json:"success_rate"`
-	PromptTokens         int64   `json:"prompt_tokens"`
-	CompletionTokens     int64   `json:"completion_tokens"`
-	TotalTokens          int64   `json:"total_tokens"`
-	ModelCostUSD         float64 `json:"model_cost_usd"`
-	ProtocolCostUSD      float64 `json:"protocol_cost_usd"`
-	ProtocolPricedCalls  int64   `json:"protocol_priced_calls"`
-	AverageLatencyMS     float64 `json:"average_latency_ms"`
-	ProtocolP95LatencyMS float64 `json:"protocol_p95_latency_ms"`
-	ActiveServices       int     `json:"active_services"`
-	ActiveOperations     int     `json:"active_operations"`
+	Requests              int64   `json:"requests"`
+	ModelRequests         int64   `json:"model_requests"`
+	ProtocolRequests      int64   `json:"protocol_requests"`
+	Successful            int64   `json:"successful"`
+	Failed                int64   `json:"failed"`
+	SuccessRate           float64 `json:"success_rate"`
+	PromptTokens          int64   `json:"prompt_tokens"`
+	CompletionTokens      int64   `json:"completion_tokens"`
+	CachedInputTokens     int64   `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64   `json:"cache_write_input_tokens"`
+	ReasoningTokens       int64   `json:"reasoning_tokens"`
+	TotalTokens           int64   `json:"total_tokens"`
+	TokenizedRequests     int64   `json:"tokenized_requests"`
+	ModelCostUSD          float64 `json:"model_cost_usd"`
+	ProtocolCostUSD       float64 `json:"protocol_cost_usd"`
+	ProtocolPricedCalls   int64   `json:"protocol_priced_calls"`
+	AverageLatencyMS      float64 `json:"average_latency_ms"`
+	ProtocolP95LatencyMS  float64 `json:"protocol_p95_latency_ms"`
+	ActiveServices        int     `json:"active_services"`
+	ActiveOperations      int     `json:"active_operations"`
 }
 
 type localAnalyticsBucket struct {
@@ -54,22 +58,27 @@ type localAnalyticsBucket struct {
 }
 
 type localAnalyticsService struct {
-	ID               string                        `json:"id"`
-	Name             string                        `json:"name"`
-	Kind             string                        `json:"kind"`
-	Status           string                        `json:"status"`
-	Requests         int64                         `json:"requests"`
-	Successful       int64                         `json:"successful"`
-	Failed           int64                         `json:"failed"`
-	SuccessRate      float64                       `json:"success_rate"`
-	AverageLatencyMS float64                       `json:"average_latency_ms"`
-	Operations       int                           `json:"operations"`
-	PromptTokens     int64                         `json:"prompt_tokens,omitempty"`
-	CompletionTokens int64                         `json:"completion_tokens,omitempty"`
-	CostUSD          float64                       `json:"cost_usd,omitempty"`
-	PricedRequests   int64                         `json:"priced_requests,omitempty"`
-	CostStatus       string                        `json:"cost_status"`
-	Trend            []localAnalyticsServiceBucket `json:"trend"`
+	ID                    string                        `json:"id"`
+	Name                  string                        `json:"name"`
+	Kind                  string                        `json:"kind"`
+	Status                string                        `json:"status"`
+	Requests              int64                         `json:"requests"`
+	Successful            int64                         `json:"successful"`
+	Failed                int64                         `json:"failed"`
+	SuccessRate           float64                       `json:"success_rate"`
+	AverageLatencyMS      float64                       `json:"average_latency_ms"`
+	Operations            int                           `json:"operations"`
+	ModelRequests         int64                         `json:"model_requests,omitempty"`
+	PromptTokens          int64                         `json:"prompt_tokens,omitempty"`
+	CompletionTokens      int64                         `json:"completion_tokens,omitempty"`
+	CachedInputTokens     int64                         `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens int64                         `json:"cache_write_input_tokens,omitempty"`
+	ReasoningTokens       int64                         `json:"reasoning_tokens,omitempty"`
+	TokenizedRequests     int64                         `json:"tokenized_requests,omitempty"`
+	CostUSD               float64                       `json:"cost_usd,omitempty"`
+	PricedRequests        int64                         `json:"priced_requests,omitempty"`
+	CostStatus            string                        `json:"cost_status"`
+	Trend                 []localAnalyticsServiceBucket `json:"trend"`
 }
 
 type localAnalyticsServiceBucket struct {
@@ -79,41 +88,64 @@ type localAnalyticsServiceBucket struct {
 }
 
 type localAnalyticsModel struct {
-	Name             string  `json:"name"`
-	Requests         int64   `json:"requests"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
+	Name                  string  `json:"name"`
+	Requests              int64   `json:"requests"`
+	PromptTokens          int64   `json:"prompt_tokens"`
+	CompletionTokens      int64   `json:"completion_tokens"`
+	CachedInputTokens     int64   `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64   `json:"cache_write_input_tokens"`
+	ReasoningTokens       int64   `json:"reasoning_tokens"`
+	CostUSD               float64 `json:"cost_usd"`
+	CostStatus            string  `json:"cost_status"`
 }
 
 type modelAnalyticsAggregate struct {
-	ChannelID        int
-	Requests         int64
-	Successful       int64
-	Failed           int64
-	PromptTokens     int64
-	CompletionTokens int64
-	Quota            int64
-	AverageUseTime   float64
-	Operations       int
+	ChannelID             int
+	Requests              int64
+	Successful            int64
+	Failed                int64
+	PromptTokens          int64
+	CompletionTokens      int64
+	CachedInputTokens     int64
+	CacheWriteInputTokens int64
+	ReasoningTokens       int64
+	Quota                 int64
+	ReportedCostUSD       float64
+	PricedRequests        int64
+	EstimatedRequests     int64
+	ReportedRequests      int64
+	TokenizedRequests     int64
+	AverageUseTime        float64
+	Operations            int
 }
 
 type modelAnalyticsModelAggregate struct {
-	Name             string
-	Requests         int64
-	PromptTokens     int64
-	CompletionTokens int64
-	Quota            int64
+	Name                  string
+	Requests              int64
+	PromptTokens          int64
+	CompletionTokens      int64
+	CachedInputTokens     int64
+	CacheWriteInputTokens int64
+	ReasoningTokens       int64
+	Quota                 int64
+	ReportedCostUSD       float64
+	PricedRequests        int64
+	EstimatedRequests     int64
+	ReportedRequests      int64
 }
 
 type modelAnalyticsTrendAggregate struct {
-	ChannelID        int
-	Bucket           int64
-	Requests         int64
-	Failed           int64
-	PromptTokens     int64
-	CompletionTokens int64
-	Quota            int64
+	ChannelID             int
+	Bucket                int64
+	Requests              int64
+	Failed                int64
+	PromptTokens          int64
+	CompletionTokens      int64
+	CachedInputTokens     int64
+	CacheWriteInputTokens int64
+	ReasoningTokens       int64
+	Quota                 int64
+	ReportedCostUSD       float64
 }
 
 func localAnalyticsHandler(runtime localRuntime) gin.HandlerFunc {
@@ -160,18 +192,28 @@ func addModelAnalytics(analytics *localAnalytics, runtime localRuntime, now time
 		SUM(CASE WHEN type = ? THEN 1 ELSE 0 END),
 		COALESCE(SUM(CASE WHEN type = ? THEN prompt_tokens ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN type = ? THEN completion_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN cached_input_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN cache_write_input_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN reasoning_tokens ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN type = ? THEN quota ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN cost_usd ELSE 0 END), 0),
+		SUM(CASE WHEN type = ? AND (quota > 0 OR cost_status IN ('confirmed', 'estimated', 'reported')) THEN 1 ELSE 0 END),
+		SUM(CASE WHEN type = ? AND cost_status = 'estimated' THEN 1 ELSE 0 END),
+		SUM(CASE WHEN type = ? AND cost_status = 'reported' THEN 1 ELSE 0 END),
+		SUM(CASE WHEN type = ? AND (total_tokens > 0 OR prompt_tokens > 0 OR completion_tokens > 0) THEN 1 ELSE 0 END),
 		COALESCE(AVG(CASE WHEN type = ? THEN use_time ELSE NULL END), 0),
 		COUNT(DISTINCT CASE WHEN model_name <> '' THEN model_name ELSE NULL END)
 		FROM logs WHERE user_id = ? AND type IN (?, ?) AND model_name <> '' GROUP BY channel_id`,
 		localLogTypeConsume, localLogTypeError, localLogTypeConsume, localLogTypeConsume,
-		localLogTypeConsume, localLogTypeConsume, runtime.rootUser.ID, localLogTypeConsume, localLogTypeError)
+		localLogTypeConsume, localLogTypeConsume, localLogTypeConsume, localLogTypeConsume,
+		localLogTypeConsume, localLogTypeConsume, localLogTypeConsume, localLogTypeConsume, localLogTypeConsume,
+		localLogTypeConsume, runtime.rootUser.ID, localLogTypeConsume, localLogTypeError)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var aggregate modelAnalyticsAggregate
-		if err := rows.Scan(&aggregate.ChannelID, &aggregate.Requests, &aggregate.Successful, &aggregate.Failed, &aggregate.PromptTokens, &aggregate.CompletionTokens, &aggregate.Quota, &aggregate.AverageUseTime, &aggregate.Operations); err != nil {
+		if err := rows.Scan(&aggregate.ChannelID, &aggregate.Requests, &aggregate.Successful, &aggregate.Failed, &aggregate.PromptTokens, &aggregate.CompletionTokens, &aggregate.CachedInputTokens, &aggregate.CacheWriteInputTokens, &aggregate.ReasoningTokens, &aggregate.Quota, &aggregate.ReportedCostUSD, &aggregate.PricedRequests, &aggregate.EstimatedRequests, &aggregate.ReportedRequests, &aggregate.TokenizedRequests, &aggregate.AverageUseTime, &aggregate.Operations); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -207,17 +249,26 @@ func addModelAnalytics(analytics *localAnalytics, runtime localRuntime, now time
 		SUM(CASE WHEN type = ? THEN 1 ELSE 0 END) AS requests,
 		COALESCE(SUM(CASE WHEN type = ? THEN prompt_tokens ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN type = ? THEN completion_tokens ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN type = ? THEN quota ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN type = ? THEN cached_input_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN cache_write_input_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN reasoning_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN quota ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN cost_usd ELSE 0 END), 0),
+		SUM(CASE WHEN type = ? AND (quota > 0 OR cost_status IN ('confirmed', 'estimated', 'reported')) THEN 1 ELSE 0 END),
+		SUM(CASE WHEN type = ? AND cost_status = 'estimated' THEN 1 ELSE 0 END),
+		SUM(CASE WHEN type = ? AND cost_status = 'reported' THEN 1 ELSE 0 END)
 		FROM logs WHERE user_id = ? AND type IN (?, ?) AND model_name <> ''
 		GROUP BY model_name ORDER BY requests DESC LIMIT 24`,
 		localLogTypeConsume, localLogTypeConsume, localLogTypeConsume, localLogTypeConsume,
+		localLogTypeConsume, localLogTypeConsume, localLogTypeConsume, localLogTypeConsume,
+		localLogTypeConsume, localLogTypeConsume, localLogTypeConsume,
 		runtime.rootUser.ID, localLogTypeConsume, localLogTypeError)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var aggregate modelAnalyticsModelAggregate
-		if err := rows.Scan(&aggregate.Name, &aggregate.Requests, &aggregate.PromptTokens, &aggregate.CompletionTokens, &aggregate.Quota); err != nil {
+		if err := rows.Scan(&aggregate.Name, &aggregate.Requests, &aggregate.PromptTokens, &aggregate.CompletionTokens, &aggregate.CachedInputTokens, &aggregate.CacheWriteInputTokens, &aggregate.ReasoningTokens, &aggregate.Quota, &aggregate.ReportedCostUSD, &aggregate.PricedRequests, &aggregate.EstimatedRequests, &aggregate.ReportedRequests); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -230,7 +281,10 @@ func addModelAnalytics(analytics *localAnalytics, runtime localRuntime, now time
 		analytics.Models = append(analytics.Models, localAnalyticsModel{
 			Name: aggregate.Name, Requests: aggregate.Requests,
 			PromptTokens: aggregate.PromptTokens, CompletionTokens: aggregate.CompletionTokens,
-			CostUSD: quotaToUSD(aggregate.Quota),
+			CachedInputTokens: aggregate.CachedInputTokens, CacheWriteInputTokens: aggregate.CacheWriteInputTokens,
+			ReasoningTokens: aggregate.ReasoningTokens,
+			CostUSD:         quotaToUSD(aggregate.Quota) + aggregate.ReportedCostUSD,
+			CostStatus:      modelCostStatus(aggregate.Requests, aggregate.PricedRequests, aggregate.EstimatedRequests, aggregate.ReportedRequests),
 		})
 	}
 
@@ -243,17 +297,22 @@ func addModelAnalytics(analytics *localAnalytics, runtime localRuntime, now time
 		SUM(CASE WHEN type = ? THEN 1 ELSE 0 END),
 		COALESCE(SUM(CASE WHEN type = ? THEN prompt_tokens ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN type = ? THEN completion_tokens ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN type = ? THEN quota ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN type = ? THEN cached_input_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN cache_write_input_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN reasoning_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN quota ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN type = ? THEN cost_usd ELSE 0 END), 0)
 		FROM logs WHERE user_id = ? AND type IN (?, ?) AND model_name <> '' AND created_at >= ?
 		GROUP BY channel_id, created_at / 3600`,
 		localLogTypeConsume, localLogTypeError, localLogTypeConsume, localLogTypeConsume, localLogTypeConsume,
+		localLogTypeConsume, localLogTypeConsume, localLogTypeConsume, localLogTypeConsume,
 		runtime.rootUser.ID, localLogTypeConsume, localLogTypeError, trendStart)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var aggregate modelAnalyticsTrendAggregate
-		if err := rows.Scan(&aggregate.ChannelID, &aggregate.Bucket, &aggregate.Requests, &aggregate.Failed, &aggregate.PromptTokens, &aggregate.CompletionTokens, &aggregate.Quota); err != nil {
+		if err := rows.Scan(&aggregate.ChannelID, &aggregate.Bucket, &aggregate.Requests, &aggregate.Failed, &aggregate.PromptTokens, &aggregate.CompletionTokens, &aggregate.CachedInputTokens, &aggregate.CacheWriteInputTokens, &aggregate.ReasoningTokens, &aggregate.Quota, &aggregate.ReportedCostUSD); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -275,11 +334,11 @@ func addModelAnalytics(analytics *localAnalytics, runtime localRuntime, now time
 		analytics.Trend[index].ModelRequests += aggregate.Requests
 		analytics.Trend[index].Failed += aggregate.Failed
 		analytics.Trend[index].Tokens += aggregate.PromptTokens + aggregate.CompletionTokens
-		analytics.Trend[index].CostUSD += quotaToUSD(aggregate.Quota)
+		analytics.Trend[index].CostUSD += quotaToUSD(aggregate.Quota) + aggregate.ReportedCostUSD
 		if service, exists := serviceIndex["channel:"+strconv.Itoa(aggregate.ChannelID)]; exists {
 			analytics.Services[service].Trend[index].Requests += aggregate.Requests
 			analytics.Services[service].Trend[index].Tokens += aggregate.PromptTokens + aggregate.CompletionTokens
-			analytics.Services[service].Trend[index].CostUSD += quotaToUSD(aggregate.Quota)
+			analytics.Services[service].Trend[index].CostUSD += quotaToUSD(aggregate.Quota) + aggregate.ReportedCostUSD
 		}
 	}
 	return nil
@@ -297,10 +356,33 @@ func modelAnalyticsService(channel localChannel, aggregate modelAnalyticsAggrega
 	return localAnalyticsService{
 		ID: "channel:" + strconv.Itoa(channel.ID), Name: name, Kind: "model-provider", Status: status,
 		Requests: aggregate.Requests, Successful: aggregate.Successful, Failed: aggregate.Failed,
+		ModelRequests:    aggregate.Requests,
 		SuccessRate:      analyticsPercent(aggregate.Successful, aggregate.Requests),
 		AverageLatencyMS: aggregate.AverageUseTime * 1000, Operations: aggregate.Operations,
 		PromptTokens: aggregate.PromptTokens, CompletionTokens: aggregate.CompletionTokens,
-		CostUSD: quotaToUSD(aggregate.Quota), CostStatus: "measured", Trend: newAnalyticsServiceTrend(),
+		CachedInputTokens: aggregate.CachedInputTokens, CacheWriteInputTokens: aggregate.CacheWriteInputTokens,
+		ReasoningTokens:   aggregate.ReasoningTokens,
+		TokenizedRequests: aggregate.TokenizedRequests,
+		CostUSD:           quotaToUSD(aggregate.Quota) + aggregate.ReportedCostUSD,
+		CostStatus:        modelCostStatus(aggregate.Successful, aggregate.PricedRequests, aggregate.EstimatedRequests, aggregate.ReportedRequests),
+		Trend:             newAnalyticsServiceTrend(),
+	}
+}
+
+func modelCostStatus(successful, priced, estimated, reported int64) string {
+	switch {
+	case successful == 0 || priced == 0:
+		return "unavailable"
+	case priced < successful:
+		return "partial"
+	case reported == priced:
+		return "reported"
+	case estimated > 0:
+		return "estimated"
+	case reported > 0:
+		return "partial"
+	default:
+		return "measured"
 	}
 }
 
@@ -309,6 +391,9 @@ func addProtocolAnalytics(analytics *localAnalytics, events []protocolEvent, def
 	latencies := make(map[string][]int64, len(definitions))
 	operations := make(map[string]map[string]bool, len(definitions))
 	estimatedCost := make(map[string]bool, len(definitions))
+	reportedCost := make(map[string]bool, len(definitions))
+	publishedCost := make(map[string]bool, len(definitions))
+	partialCost := make(map[string]bool, len(definitions))
 	for id, definition := range definitions {
 		ready, status := registry.readiness(definition)
 		if ready {
@@ -321,6 +406,10 @@ func addProtocolAnalytics(analytics *localAnalytics, events []protocolEvent, def
 		operations[id] = make(map[string]bool)
 	}
 	trendIndex := analyticsTrendIndex(analytics.Trend)
+	modelIndex := make(map[string]int, len(analytics.Models))
+	for index := range analytics.Models {
+		modelIndex[analytics.Models[index].Name] = index
+	}
 	allLatencies := make([]int64, 0, len(events))
 	for _, event := range events {
 		service := services[event.ProtocolID]
@@ -342,12 +431,50 @@ func addProtocolAnalytics(analytics *localAnalytics, events []protocolEvent, def
 		if event.OperationID != "" {
 			operations[event.ProtocolID][event.OperationID] = true
 		}
-		if event.Status > 0 && event.Status < http.StatusBadRequest {
-			if rate, status, ok := protocolOperationRequestRate(definitions[event.ProtocolID], event.OperationID); ok {
-				service.CostUSD += rate
-				service.PricedRequests++
-				if status == "estimated" {
-					estimatedCost[event.ProtocolID] = true
+		if event.Model != "" {
+			service.ModelRequests++
+			name := event.ProtocolID + ":" + event.Model
+			position, exists := modelIndex[name]
+			if !exists {
+				position = len(analytics.Models)
+				modelIndex[name] = position
+				analytics.Models = append(analytics.Models, localAnalyticsModel{Name: name, CostStatus: "unavailable"})
+			}
+			analytics.Models[position].Requests++
+		}
+		if event.Usage != nil {
+			usage := event.Usage.normalized()
+			service.PromptTokens += usage.InputTokens
+			service.CompletionTokens += usage.OutputTokens
+			service.CachedInputTokens += usage.CacheReadInputTokens
+			service.CacheWriteInputTokens += usage.CacheWriteInputTokens
+			service.ReasoningTokens += usage.ReasoningTokens
+			if usage.hasTokens() {
+				service.TokenizedRequests++
+			}
+			if event.Model != "" {
+				position := modelIndex[event.ProtocolID+":"+event.Model]
+				model := &analytics.Models[position]
+				model.PromptTokens += usage.InputTokens
+				model.CompletionTokens += usage.OutputTokens
+				model.CachedInputTokens += usage.CacheReadInputTokens
+				model.CacheWriteInputTokens += usage.CacheWriteInputTokens
+				model.ReasoningTokens += usage.ReasoningTokens
+			}
+		}
+		cost := protocolEventCost(event, definitions[event.ProtocolID])
+		if cost != nil {
+			service.CostUSD += cost.AmountUSD
+			service.PricedRequests++
+			estimatedCost[event.ProtocolID] = estimatedCost[event.ProtocolID] || cost.Status == "estimated"
+			reportedCost[event.ProtocolID] = reportedCost[event.ProtocolID] || cost.Status == "reported"
+			publishedCost[event.ProtocolID] = publishedCost[event.ProtocolID] || cost.Source == "published-pricing"
+			partialCost[event.ProtocolID] = partialCost[event.ProtocolID] || cost.Status == "partial"
+			if event.Model != "" {
+				if position, exists := modelIndex[event.ProtocolID+":"+event.Model]; exists {
+					model := &analytics.Models[position]
+					model.CostUSD += cost.AmountUSD
+					model.CostStatus = mergeCostStatus(model.CostStatus, cost.Status)
 				}
 			}
 		}
@@ -358,9 +485,14 @@ func addProtocolAnalytics(analytics *localAnalytics, events []protocolEvent, def
 			if event.Status <= 0 || event.Status >= http.StatusBadRequest {
 				analytics.Trend[index].Failed++
 			}
-			if rate, _, ok := protocolOperationRequestRate(definitions[event.ProtocolID], event.OperationID); ok && event.Status > 0 && event.Status < http.StatusBadRequest {
-				analytics.Trend[index].CostUSD += rate
-				service.Trend[index].CostUSD += rate
+			if event.Usage != nil {
+				tokens := event.Usage.normalized().TotalTokens
+				analytics.Trend[index].Tokens += tokens
+				service.Trend[index].Tokens += tokens
+			}
+			if cost != nil {
+				analytics.Trend[index].CostUSD += cost.AmountUSD
+				service.Trend[index].CostUSD += cost.AmountUSD
 			}
 		}
 	}
@@ -369,9 +501,15 @@ func addProtocolAnalytics(analytics *localAnalytics, events []protocolEvent, def
 		service.AverageLatencyMS = averageInt64(latencies[id])
 		if service.Requests > 0 {
 			if service.PricedRequests == service.Successful && service.Successful > 0 {
-				service.CostStatus = "confirmed"
-				if estimatedCost[id] {
+				switch {
+				case partialCost[id] || (reportedCost[id] && publishedCost[id]):
+					service.CostStatus = "partial"
+				case reportedCost[id]:
+					service.CostStatus = "reported"
+				case estimatedCost[id]:
 					service.CostStatus = "estimated"
+				default:
+					service.CostStatus = "confirmed"
 				}
 			} else if service.PricedRequests > 0 {
 				service.CostStatus = "partial"
@@ -383,6 +521,20 @@ func addProtocolAnalytics(analytics *localAnalytics, events []protocolEvent, def
 		analytics.Services = append(analytics.Services, *service)
 	}
 	analytics.Totals.ProtocolP95LatencyMS = percentile95(allLatencies)
+}
+
+func protocolEventCost(event protocolEvent, definition protocolDefinition) *usageCost {
+	if event.AccountingVersion > 0 {
+		return event.Cost
+	}
+	if event.Status <= 0 || event.Status >= http.StatusBadRequest {
+		return nil
+	}
+	rate, status, ok := protocolOperationRequestRate(definition, event.OperationID)
+	if !ok {
+		return nil
+	}
+	return &usageCost{AmountUSD: rate, Status: status, Source: "legacy-current-pricing"}
 }
 
 func protocolPricingCoverageStatus(definition protocolDefinition) string {
@@ -452,10 +604,14 @@ func finalizeLocalAnalytics(analytics *localAnalytics) {
 		analytics.Totals.Requests += service.Requests
 		analytics.Totals.Successful += service.Successful
 		analytics.Totals.Failed += service.Failed
+		analytics.Totals.ModelRequests += service.ModelRequests
+		analytics.Totals.PromptTokens += service.PromptTokens
+		analytics.Totals.CompletionTokens += service.CompletionTokens
+		analytics.Totals.CachedInputTokens += service.CachedInputTokens
+		analytics.Totals.CacheWriteInputTokens += service.CacheWriteInputTokens
+		analytics.Totals.ReasoningTokens += service.ReasoningTokens
+		analytics.Totals.TokenizedRequests += service.TokenizedRequests
 		if service.Kind == "model-provider" {
-			analytics.Totals.ModelRequests += service.Requests
-			analytics.Totals.PromptTokens += service.PromptTokens
-			analytics.Totals.CompletionTokens += service.CompletionTokens
 			analytics.Totals.ModelCostUSD += service.CostUSD
 		} else {
 			analytics.Totals.ProtocolRequests += service.Requests

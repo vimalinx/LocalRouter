@@ -53,7 +53,7 @@ curl --fail --silent --show-error "http://127.0.0.1:${smoke_port}/" >"$smoke_roo
 grep -q 'LocalRouter' "$smoke_root/index.html"
 
 curl --fail --silent --show-error "http://127.0.0.1:${smoke_port}/local/api/summary" >"$smoke_root/summary.json"
-jq -e '.success == true and .data.admin_auth_enabled == false and .data.billing == "disabled" and .data.oauth == "external-maintainer"' "$smoke_root/summary.json" >/dev/null
+jq -e '.success == true and .data.admin_auth_enabled == false and .data.billing == "usage-accounting" and .data.oauth == "external-maintainer"' "$smoke_root/summary.json" >/dev/null
 
 initial_admin_token="fixture-custom-console-password"
 jq -n --arg token "$initial_admin_token" '{enabled:true,token:$token}' >"$smoke_root/admin-auth-enable.json"

@@ -32,11 +32,6 @@ type localRelayBalancer struct {
 	cursors map[string]uint64
 }
 
-type relayUsage struct {
-	PromptTokens     int64
-	CompletionTokens int64
-}
-
 func newLocalRelayBalancer() *localRelayBalancer {
 	return &localRelayBalancer{cursors: make(map[string]uint64)}
 }
@@ -305,7 +300,7 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 	} else {
 		writeCompatibilityRelayError(c, runtime, status, "upstream_unavailable", message, true)
 	}
-	logRelay(runtime, c, channels[len(channels)-1], model, requestID, started, relayUsage{}, false, localLogTypeError, message)
+	logRelay(runtime, c, channels[len(channels)-1], model, requestID, started, usageMetrics{}, false, localLogTypeError, message)
 }
 
 func writeCompatibilityRelayError(c *gin.Context, runtime localRuntime, status int, code, reason string, retryable bool) {
@@ -526,19 +521,19 @@ func copyRelayHeaders(destination, source http.Header) {
 	}
 }
 
-func copyRelayResponse(c *gin.Context, response *http.Response) (relayUsage, bool, error) {
+func copyRelayResponse(c *gin.Context, response *http.Response) (usageMetrics, bool, error) {
 	defer response.Body.Close()
 	streamed := strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
 	if !streamed {
 		body, err := io.ReadAll(io.LimitReader(response.Body, maxRelayBodyBytes+1))
 		if err != nil {
-			return relayUsage{}, false, err
+			return usageMetrics{}, false, err
 		}
 		if len(body) > maxRelayBodyBytes {
-			return relayUsage{}, false, errors.New("upstream response exceeds 64 MiB")
+			return usageMetrics{}, false, errors.New("upstream response exceeds 64 MiB")
 		}
 		_, err = c.Writer.Write(body)
-		return parseRelayUsage(body), false, err
+		return parseUsageMetrics(body), false, err
 	}
 
 	capture := &limitedCaptureWriter{limit: 2 << 20}
@@ -548,15 +543,15 @@ func copyRelayResponse(c *gin.Context, response *http.Response) (relayUsage, boo
 		count, readErr := response.Body.Read(buffer)
 		if count > 0 {
 			if _, err := writer.Write(buffer[:count]); err != nil {
-				return parseRelayStreamUsage(capture.Bytes()), true, err
+				return parseStreamUsageMetrics(capture.Bytes()), true, err
 			}
 			c.Writer.Flush()
 		}
 		if errors.Is(readErr, io.EOF) {
-			return parseRelayStreamUsage(capture.Bytes()), true, nil
+			return parseStreamUsageMetrics(capture.Bytes()), true, nil
 		}
 		if readErr != nil {
-			return parseRelayStreamUsage(capture.Bytes()), true, readErr
+			return parseStreamUsageMetrics(capture.Bytes()), true, readErr
 		}
 	}
 }
@@ -567,59 +562,22 @@ type limitedCaptureWriter struct {
 }
 
 func (writer *limitedCaptureWriter) Write(data []byte) (int, error) {
-	remaining := writer.limit - len(writer.data)
-	if remaining > 0 {
-		if remaining > len(data) {
-			remaining = len(data)
-		}
-		writer.data = append(writer.data, data[:remaining]...)
+	if writer.limit <= 0 {
+		return len(data), nil
+	}
+	if len(data) >= writer.limit {
+		writer.data = append(writer.data[:0], data[len(data)-writer.limit:]...)
+		return len(data), nil
+	}
+	writer.data = append(writer.data, data...)
+	if overflow := len(writer.data) - writer.limit; overflow > 0 {
+		copy(writer.data, writer.data[overflow:])
+		writer.data = writer.data[:writer.limit]
 	}
 	return len(data), nil
 }
 
 func (writer *limitedCaptureWriter) Bytes() []byte { return writer.data }
-
-func parseRelayUsage(body []byte) relayUsage {
-	var document struct {
-		Usage struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			InputTokens      int64 `json:"input_tokens"`
-			OutputTokens     int64 `json:"output_tokens"`
-		} `json:"usage"`
-	}
-	if json.Unmarshal(body, &document) != nil {
-		return relayUsage{}
-	}
-	prompt := document.Usage.PromptTokens
-	completion := document.Usage.CompletionTokens
-	if prompt == 0 {
-		prompt = document.Usage.InputTokens
-	}
-	if completion == 0 {
-		completion = document.Usage.OutputTokens
-	}
-	return relayUsage{PromptTokens: prompt, CompletionTokens: completion}
-}
-
-func parseRelayStreamUsage(body []byte) relayUsage {
-	usage := relayUsage{}
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		candidate := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if candidate == "" || candidate == "[DONE]" {
-			continue
-		}
-		parsed := parseRelayUsage([]byte(candidate))
-		if parsed.PromptTokens != 0 || parsed.CompletionTokens != 0 {
-			usage = parsed
-		}
-	}
-	return usage
-}
 
 func retryableRelayStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500
@@ -633,14 +591,20 @@ func copyRelayError(c *gin.Context, status int, body []byte) {
 	c.JSON(status, gin.H{"error": gin.H{"message": strings.TrimSpace(string(body)), "type": "upstream_error"}})
 }
 
-func logRelay(runtime localRuntime, c *gin.Context, channel localChannel, model, requestID string, started time.Time, usage relayUsage, streamed bool, entryType int, content string) {
+func logRelay(runtime localRuntime, c *gin.Context, channel localChannel, model, requestID string, started time.Time, usage usageMetrics, streamed bool, entryType int, content string) {
 	token, _ := c.Get("local_token")
 	local, _ := token.(*localToken)
 	entry := localRequestLog{
 		UserID: runtime.rootUser.ID, CreatedAt: time.Now().Unix(), Type: entryType, Content: content,
-		Username: runtime.rootUser.Username, ModelName: model, PromptTokens: usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens, UseTime: int64(time.Since(started).Seconds()), IsStream: streamed,
+		Username: runtime.rootUser.Username, ModelName: model, PromptTokens: usage.InputTokens,
+		CompletionTokens: usage.OutputTokens, CachedInputTokens: usage.CacheReadInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens, ReasoningTokens: usage.ReasoningTokens,
+		TotalTokens: usage.TotalTokens, UseTime: int64(time.Since(started).Seconds()), IsStream: streamed,
 		ChannelID: channel.ID, ChannelName: channel.Name, RequestID: requestID, Group: "default",
+	}
+	if usage.ReportedCostUSD != nil {
+		entry.CostUSD = *usage.ReportedCostUSD
+		entry.CostStatus = "reported"
 	}
 	if local != nil {
 		entry.TokenID = local.ID

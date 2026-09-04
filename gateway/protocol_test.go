@@ -32,6 +32,10 @@ func TestProtocolTemplateProxyAndSanitizedDocs(t *testing.T) {
 		sawMode = request.URL.Query().Get("mode")
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusCreated)
+		if request.URL.Path == "/chat/completions" {
+			_, _ = writer.Write([]byte(`{"ok":true,"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4}}}`))
+			return
+		}
 		_, _ = writer.Write([]byte(`{"ok":true}`))
 	}))
 	defer upstream.Close()
@@ -52,6 +56,10 @@ func TestProtocolTemplateProxyAndSanitizedDocs(t *testing.T) {
 			{OperationID: "models", Capabilities: []string{"ai.models"}, Methods: []string{http.MethodGet}, Path: "/models", Summary: "List models"},
 			{OperationID: "chat.completions", Methods: []string{http.MethodPost}, Path: "/chat/completions", Summary: "Chat completions", RequestBody: json.RawMessage(`{"model":"stale-example","messages":[]}`)},
 		},
+		Pricing: &protocolPricing{Entries: []protocolPricingEntry{
+			{ID: "chat.completions", Scope: "operation", Amount: analyticsPrice(1), Currency: "USD", Unit: "per-100-requests", Status: "confirmed", SourceURL: "https://example.com/pricing", SourceType: "official-docs", CheckedAt: "2026-09-04"},
+			{ID: "fixture-model-alpha", Scope: "model", Amount: analyticsPrice(2), Currency: "USD", Unit: "per-1m-input-tokens", Status: "confirmed", SourceURL: "https://example.com/pricing", SourceType: "official-docs", CheckedAt: "2026-09-04"},
+		}},
 	})
 	writeProtocolGuide(t, protocolDir, "searchx", "quickstart", `---
 id: quickstart
@@ -68,6 +76,9 @@ Use the generated operation contract before calling search.
 `)
 	registry, err := newProtocolRegistry(protocolDir, dataDir)
 	require.NoError(t, err)
+	events, err := newProtocolEventStore(t.TempDir())
+	require.NoError(t, err)
+	registry.events = events
 
 	engine := gin.New()
 	registerProtocolRoutes(engine, localRuntime{apiToken: "sk-local", protocols: registry})
@@ -91,12 +102,23 @@ Use the generated operation contract before calling search.
 
 	// A dotted semantic operation ID must never become the HTTP path. The
 	// runtime publishes and accepts the slash path from call_url.
-	dottedRequest := httptest.NewRequest(http.MethodPost, "/p/searchx/chat/completions", strings.NewReader(`{"messages":[]}`))
+	dottedRequest := httptest.NewRequest(http.MethodPost, "/p/searchx/chat/completions", strings.NewReader(`{"model":"fixture-model-alpha","messages":[]}`))
 	dottedRequest.Header.Set("Authorization", "Bearer sk-local")
 	dottedResponse := httptest.NewRecorder()
 	engine.ServeHTTP(dottedResponse, dottedRequest)
 	assert.Equal(t, http.StatusCreated, dottedResponse.Code)
 	assert.Equal(t, "/chat/completions", sawPath)
+	recorded, err := events.read(10)
+	require.NoError(t, err)
+	require.NotEmpty(t, recorded)
+	chatEvent := recorded[0]
+	assert.Equal(t, "fixture-model-alpha", chatEvent.Model)
+	require.NotNil(t, chatEvent.Usage)
+	assert.Equal(t, int64(12), chatEvent.Usage.InputTokens)
+	assert.Equal(t, int64(3), chatEvent.Usage.OutputTokens)
+	assert.Equal(t, int64(4), chatEvent.Usage.CacheReadInputTokens)
+	require.NotNil(t, chatEvent.Cost)
+	assert.InDelta(t, 0.010024, chatEvent.Cost.AmountUSD, 1e-12)
 
 	wrongDottedPath := httptest.NewRequest(http.MethodPost, "/p/searchx/chat.completions", strings.NewReader(`{}`))
 	wrongDottedPath.Header.Set("Authorization", "Bearer sk-local")

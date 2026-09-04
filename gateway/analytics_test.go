@@ -159,3 +159,31 @@ func TestProtocolEventStoreReadRetainedIncludesRotatedFile(t *testing.T) {
 		t.Fatalf("unexpected retained events: %+v", events)
 	}
 }
+
+func TestProtocolAnalyticsUsesPersistedUsageAndCostSnapshot(t *testing.T) {
+	now := time.Now().UTC()
+	currentPrice := 99.0
+	definitions := map[string]protocolDefinition{"llm": {
+		ID: "llm", Name: "LLM", Enabled: true, Auth: protocolAuth{Type: "none"},
+		Routes:  []protocolRoute{{OperationID: "chat"}},
+		Pricing: &protocolPricing{Entries: []protocolPricingEntry{{ID: "chat", Scope: "operation", Amount: &currentPrice, Currency: "USD", Unit: "per-request", Status: "confirmed"}}},
+	}}
+	registry := &protocolRegistry{templates: definitions, readinessCache: map[string]protocolReadinessRuntime{}}
+	usage := usageMetrics{InputTokens: 80, OutputTokens: 20, CacheReadInputTokens: 30, ReasoningTokens: 5, TotalTokens: 100}
+	analytics := localAnalytics{Trend: newAnalyticsTrend(now), Models: []localAnalyticsModel{}, Services: []localAnalyticsService{}}
+	addProtocolAnalytics(&analytics, []protocolEvent{{
+		AccountingVersion: 1, CreatedAt: now, ProtocolID: "llm", OperationID: "chat", Model: "m1", Status: 200,
+		Usage: &usage, Cost: &usageCost{AmountUSD: 0.25, Status: "reported", Source: "provider"},
+	}}, definitions, registry)
+	finalizeLocalAnalytics(&analytics)
+
+	if analytics.Totals.TotalTokens != 100 || analytics.Totals.CachedInputTokens != 30 || analytics.Totals.ReasoningTokens != 5 || analytics.Totals.ModelRequests != 1 {
+		t.Fatalf("unexpected token totals: %+v", analytics.Totals)
+	}
+	if math.Abs(analytics.Totals.ProtocolCostUSD-0.25) > 1e-12 {
+		t.Fatalf("historical event was repriced: %+v", analytics.Totals)
+	}
+	if len(analytics.Models) != 1 || analytics.Models[0].Name != "llm:m1" || analytics.Models[0].CostStatus != "reported" {
+		t.Fatalf("unexpected protocol model aggregate: %+v", analytics.Models)
+	}
+}

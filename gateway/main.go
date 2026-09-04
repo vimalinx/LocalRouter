@@ -799,7 +799,7 @@ func localSummary(runtime localRuntime) gin.HandlerFunc {
 				"engine":             "localrouter-native",
 				"protocols":          protocolTotal,
 				"protocols_ready":    protocolReady,
-				"billing":            "disabled",
+				"billing":            "usage-accounting",
 				"oauth":              "external-maintainer",
 			},
 		})
