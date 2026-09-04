@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+unset LOCALROUTER_BASE_URL LOCALROUTER_DISCOVERY_URL LOCALROUTER_DOCS_URL \
+  LOCALROUTER_OPENAPI_URL LOCALROUTER_MCP_URL LOCALROUTER_MAINTENANCE_MCP_URL
+
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d)"
 gateway_pid=""
@@ -40,6 +43,21 @@ jq --arg base_url "http://127.0.0.1:${upstream_port}" \
     format:"json",locator_file:"protocol-pool-sources/search.json",id_path:"email",secret_path:"api_key",disabled_path:"disabled"
   }' \
   "$project_root/tests/fixtures/search-v3.json" >"$test_root/protocols/search.json"
+jq '.id = "unrelated" | .name = "Unrelated model source"
+    | .routes |= map(if .operation_id == "search" then .capabilities = ["unrelated.search"] else . end)' \
+  "$test_root/protocols/search.json" >"$test_root/protocols/unrelated.json"
+jq -n --arg base_url "http://127.0.0.1:${upstream_port}" '{
+  schema_version:"3", id:"enumonly", name:"Schema enum model source",
+  description:"Fixture Pack with a reviewed model enum and no upstream model catalog.",
+  enabled:true, base_url:$base_url, timeout_seconds:30, auth:{type:"none"},
+  routes:[{
+    operation_id:"video.create", capabilities:["video.generate"], methods:["POST"], path:"/video",
+    summary:"Create a fixture video", request_example:{model:"v6",prompt:"fixture"},
+    request_schema:{type:"object",required:["model","prompt"],properties:{model:{type:"string",enum:["v6"]},prompt:{type:"string"}}},
+    retry:{mode:"never",transport_errors:false},
+    availability:{status:"verified",level:"mock",covers:["schema"],reason:"The isolated fixture is exercised by protocol_e2e.sh.",verified_at:"2026-09-04T00:00:00Z"}
+  }]
+}' >"$test_root/protocols/enumonly.json"
 cp -a "$project_root/tests/fixtures/search" "$test_root/protocols/search"
 cp -a "$project_root/gateway/protocols/catalogs" "$test_root/protocols/catalogs"
 jq --arg base_url "http://127.0.0.1:${upstream_port}" \
@@ -134,11 +152,22 @@ jq -e '.object == "localrouter.model.search" and .domain == "model" and .count >
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" find model 'fixture-model-alpha' >"$test_root/lr-find-model-exact.json"
-jq -e '.object == "localrouter.model.search" and .match_mode == "exact" and .count == 1 and .matches[0].model_key == "search:fixture-model-alpha"' "$test_root/lr-find-model-exact.json" >/dev/null
+jq -e '.object == "localrouter.model.search" and .match_mode == "exact" and .count == 2 and any(.matches[]; .model_key == "search:fixture-model-alpha") and any(.matches[]; .model_key == "unrelated:fixture-model-alpha")' "$test_root/lr-find-model-exact.json" >/dev/null
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" find model --exact 'search:fixture-model-alpha' >"$test_root/lr-find-model-strict.json"
 jq -e '.match_mode == "exact-only" and .count == 1 and .returned == 1 and .truncated == false and .matches[0].model_key == "search:fixture-model-alpha"' "$test_root/lr-find-model-strict.json" >/dev/null
+jq -e '(.sources | length) == 1 and .sources[0].pack == "search" and .sources[0].operation_key == "search.models" and .sources[0].call_url == "/p/search/models" and .sources[0].status == "ok" and .sources[0].models == 1 and .failures == []' "$test_root/lr-find-model-strict.json" >/dev/null
+
+env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
+  "$project_root/tools/lr" find model --exact 'enumonly:v6' >"$test_root/lr-find-model-enum.json"
+jq -e '
+  .match_mode == "exact-only" and .count == 1 and .matches[0].model_key == "enumonly:v6"
+  and .matches[0].source_kind == "request-schema-enum"
+  and .matches[0].compatible_operations[0].operation_key == "enumonly.video.create"
+  and .sources == [{pack:"enumonly",operation_key:"enumonly.video.create",call_url:null,status:"contract",source_kind:"request-schema-enum",models:1}]
+  and .failures == []
+' "$test_root/lr-find-model-enum.json" >/dev/null
 
 env LOCALROUTER_BASE_URL="http://127.0.0.1:${gateway_port}" LOCALROUTER_DISCOVERY_URL="http://127.0.0.1:${gateway_port}/.well-known/localrouter.json" LOCALROUTER_API_TOKEN_FILE="$test_root/data/api-token" \
   "$project_root/tools/lr" find model --exact 'search:no-such-model' >"$test_root/lr-find-model-missing.json"

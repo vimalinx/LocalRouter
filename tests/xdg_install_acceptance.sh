@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+unset LOCALROUTER_BASE_URL LOCALROUTER_DISCOVERY_URL LOCALROUTER_DOCS_URL \
+  LOCALROUTER_OPENAPI_URL LOCALROUTER_MCP_URL LOCALROUTER_MAINTENANCE_MCP_URL
+
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d /tmp/localrouter-xdg.XXXXXX)"
 case "$test_root" in

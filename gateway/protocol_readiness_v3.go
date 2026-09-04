@@ -25,6 +25,13 @@ func (registry *protocolRegistry) probeReadiness(definition protocolDefinition) 
 	registry.readinessMu.Unlock()
 
 	ready, status := registry.executeReadinessProbe(definition, config)
+	if !ready && interval > 5 {
+		// A failed pooled probe may have quarantined one or more bad
+		// credentials. Recheck promptly so a healthy credential behind that
+		// tranche can restore the Pack without waiting for the normal healthy
+		// cache interval.
+		interval = 5
+	}
 	registry.readinessMu.Lock()
 	registry.readinessCache[definition.ID] = protocolReadinessRuntime{
 		Ready: ready, Status: status, CheckedAt: now, ExpiresAt: now.Add(time.Duration(interval) * time.Second),
@@ -54,54 +61,71 @@ func (registry *protocolRegistry) executeReadinessProbe(definition protocolDefin
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 	route := protocolRoute{OperationID: "readiness.probe", Methods: []string{method}, Path: config.Path, Transport: "http"}
-	acquired, err := registry.acquireCredential(definition, route, "", map[string]bool{})
-	if err != nil {
-		return false, "probe-credential-unavailable"
+	maxAttempts := 1
+	if definition.Pool != nil && definition.Pool.Mode == "local" && definition.Pool.MaxAttempts > maxAttempts {
+		maxAttempts = definition.Pool.MaxAttempts
 	}
-	request, err := http.NewRequestWithContext(ctx, method, probeURL.String(), bytes.NewReader(nil))
-	if err != nil {
-		_ = registry.releaseCredential(definition, acquired, 0, "")
-		return false, "probe-request-invalid"
-	}
-	request.Header.Set("Accept", "application/json")
-	if err := registry.injectProtocolCredential(request, definition, acquired, nil); err != nil {
-		_ = registry.releaseCredential(definition, acquired, 0, "")
-		return false, "probe-auth-failed"
-	}
-	response, err := registry.client.Do(request)
-	if err != nil {
-		_ = registry.releaseCredential(definition, acquired, http.StatusBadGateway, "")
-		return false, "probe-transport-failed"
-	}
-	defer response.Body.Close()
-	_ = registry.releaseCredential(definition, acquired, response.StatusCode, response.Header.Get("Retry-After"))
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return false, "probe-read-failed"
-	}
-	statusAllowed := response.StatusCode >= 200 && response.StatusCode < 300
-	if len(config.SuccessStatuses) > 0 {
-		statusAllowed = false
-		for _, candidate := range config.SuccessStatuses {
-			if response.StatusCode == candidate {
-				statusAllowed = true
-				break
+	excluded := make(map[string]bool, maxAttempts)
+	lastStatus := "probe-credential-unavailable"
+	for range maxAttempts {
+		acquired, err := registry.acquireCredential(definition, route, "", excluded)
+		if err != nil {
+			break
+		}
+		if acquired.Pooled {
+			excluded[acquired.Credential.ID] = true
+		}
+		request, err := http.NewRequestWithContext(ctx, method, probeURL.String(), bytes.NewReader(nil))
+		if err != nil {
+			_ = registry.releaseCredential(definition, acquired, 0, "")
+			return false, "probe-request-invalid"
+		}
+		request.Header.Set("Accept", "application/json")
+		if err := registry.injectProtocolCredential(request, definition, acquired, nil); err != nil {
+			_ = registry.releaseCredential(definition, acquired, 0, "")
+			lastStatus = "probe-auth-failed"
+			continue
+		}
+		response, err := registry.client.Do(request)
+		if err != nil {
+			_ = registry.releaseCredential(definition, acquired, http.StatusBadGateway, "")
+			lastStatus = "probe-transport-failed"
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		_ = registry.releaseCredential(definition, acquired, response.StatusCode, response.Header.Get("Retry-After"))
+		if readErr != nil {
+			lastStatus = "probe-read-failed"
+			continue
+		}
+		statusAllowed := response.StatusCode >= 200 && response.StatusCode < 300
+		if len(config.SuccessStatuses) > 0 {
+			statusAllowed = false
+			for _, candidate := range config.SuccessStatuses {
+				if response.StatusCode == candidate {
+					statusAllowed = true
+					break
+				}
 			}
 		}
-	}
-	if !statusAllowed {
-		return false, "probe-unhealthy"
-	}
-	if config.Expression != "" {
-		env := protocolExpressionEnv(body, nil, url.Values{}, response.Header, method, response.StatusCode)
-		value, evalErr := evalProtocolExpression(config.Expression, env)
-		if evalErr != nil {
-			return false, "probe-expression-failed"
+		if !statusAllowed {
+			lastStatus = "probe-unhealthy"
+			continue
 		}
-		accepted, ok := value.(bool)
-		if !ok || !accepted {
-			return false, "probe-unhealthy"
+		if config.Expression != "" {
+			env := protocolExpressionEnv(body, nil, url.Values{}, response.Header, method, response.StatusCode)
+			value, evalErr := evalProtocolExpression(config.Expression, env)
+			if evalErr != nil {
+				return false, "probe-expression-failed"
+			}
+			accepted, ok := value.(bool)
+			if !ok || !accepted {
+				lastStatus = "probe-unhealthy"
+				continue
+			}
 		}
+		return true, "ready"
 	}
-	return true, "ready"
+	return false, lastStatus
 }

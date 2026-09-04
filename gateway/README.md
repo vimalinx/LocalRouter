@@ -2,9 +2,10 @@
 
 ## 作用
 
-这个目录是 LocalRouter 的独立本机运行时：
+这个目录是 LocalRouter 的独立本机优先运行时：
 
-- 只允许 `127.0.0.0/8` 或 `::1` 等回环地址；
+- 完整操作者入口只允许 `127.0.0.0/8` 或 `::1` 等回环地址；
+- 可显式启用第二个私有 LAN 服务监听器，它只注册 Service Token 保护的消费路由；
 - 自动创建单一本机管理员和可撤销的默认 API 密钥；
 - 本地管理 API 默认仅靠 loopback 边界免密使用，并可选用 `X-Local-Admin` 密码保护；
 - 保留 OpenAI、Anthropic 与 Gemini 协议入口；
@@ -29,6 +30,19 @@ make -C gateway web
 默认监听 `http://127.0.0.1:8317`。安装运行读取
 `$XDG_CONFIG_HOME/localrouter/config.env`；源码开发仍可用 `.env`。
 `LOCAL_GATEWAY_HOST` 如果不是回环 IP，程序会拒绝启动。
+
+可选 LAN 服务面使用独立配置，默认完全关闭：
+
+```text
+LOCAL_GATEWAY_LAN_ENABLED=true
+LOCAL_GATEWAY_LAN_HOST=192.168.1.10
+LOCAL_GATEWAY_LAN_PORT=8318
+LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL=http://192.168.1.10:8318
+```
+
+LAN host 必须是未指定地址、私网地址或链路本地 IP，不能是 loopback、主机名或公网 IP。该监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent`、discovery 和脱敏文档，但不会注册控制台、`/local/status`、`/local/api` 或 `/manage/mcp`。浏览器来源默认全部拒绝，只有 `LOCAL_GATEWAY_LAN_ALLOWED_ORIGINS` 中逗号分隔的精确 Origin 可以访问消费面。
+
+图工作流的 callback URL 不使用请求 `Host`。绑定具体私网 IP 时从配置监听地址生成；监听 `0.0.0.0` 或 `::` 时必须设置 `LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL`，否则 LAN 图工作流创建会被拒绝。
 
 首次启动会生成：
 
@@ -94,12 +108,15 @@ make web-test
 go test ./...
 go build -trimpath -o localrouter .
 ../tests/smoke_local_gateway.sh
+../tests/lan_service_acceptance.sh
 ../tests/e2e_relay.sh
 ```
 
 `smoke_local_gateway.sh` 验证真实二进制、回环监听、权限、鉴权及被移除路由；`e2e_relay.sh` 用确定性的本机 OpenAI 兼容上游验证渠道创建、模型路由、非流式响应、SSE 流式响应和日志。
 
 `protocol_e2e.sh` 用真实 LocalRouter 二进制和虚构 loopback fixture 验证 allowlist、上游认证隔离、普通 JSON、SSE 流式透传、转换、外部只读池源、号池重试、资源粘性、持久化 Workflow、哈希绑定发布和确定性生成的脱敏文档。
+
+`lan_service_acceptance.sh` 使用动态端口验证双监听器、LAN Service Token、Origin 白名单、管理路由缺失和 `lr` 的 LAN discovery 安全检查；`docker_acceptance.sh` 进一步验证真实镜像、非 root/只读运行、优雅退出和卷持久化。
 
 这些测试不调用任何真实供应商或付费服务。操作者配置私有上游后，应在自己的环境中单独做 provider-backed smoke test。
 

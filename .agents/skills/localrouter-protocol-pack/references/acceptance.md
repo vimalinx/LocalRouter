@@ -4,11 +4,11 @@ Mark each row pass, fail, or not covered. Do not collapse the rows into one “w
 
 | Layer | Evidence |
 |---|---|
-| Discovery | Port 8317 advertises the Pack, docs, auth surfaces, and maintenance lifecycle |
+| Discovery | Port 8317 advertises the Pack, docs, auth surfaces, and maintenance lifecycle; an optional LAN discovery advertises `scope=lan-service` and unavailable maintenance |
 | Syntax | Strict JSON and guide front matter validation |
 | Contract | Stable operation references, required path/query parameters, and workflow references |
 | Draft impact | Every changed file, Pack section, operation, pool mode, and `pool_id` was reviewed before plan |
-| Security | Loopback binding, path allowlist, protected credential modes, sanitized docs/state |
+| Security | Operator loopback binding; optional LAN private binding, exact Origin policy and management-route absence; path allowlist, protected credential modes, sanitized docs/state |
 | Authorization surfaces | Console `/local/api` auth defaults off on loopback and can be enabled with a custom password; `/manage/mcp` still requires the separate administrator lane; Service Tokens are call-only; optional Agent maintenance defaults off and accepts only a maintenance-only `localrouter.maintain` Token |
 | Transform | Mock proves exact upstream path, query, headers, request body, and public response |
 | Authentication | Exact signature/token behavior, cache/refresh boundary, and no secret disclosure |
@@ -31,6 +31,7 @@ Mark each row pass, fail, or not covered. Do not collapse the rows into one “w
 | Agent recovery | Contract digest is stable across reads; long workflow watch can resume by Job ID and cancel preserves Token ownership |
 | Compatibility | Existing IDs/paths/shapes remain compatible or a documented deprecation/migration exists |
 | Runtime build | Go/WebUI/schema changes were built, restarted, and verified separately from Pack apply |
+| Container | Image runs non-root with a read-only root, dropped capabilities, private persistent volumes, graceful shutdown, restart persistence and no embedded operator state |
 | Release | Candidate digest reviewed and exact digest applied |
 | Recovery | Failed local post-apply verification restores the previous revision, preserves the draft, and reports the rollback result |
 | Evidence | Pass/fail/not-covered result and final digest are reported without writing paused `.ai` automation records; strict validation passes |

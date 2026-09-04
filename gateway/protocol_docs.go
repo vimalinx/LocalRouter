@@ -233,10 +233,41 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 		agentMaintenanceEnabled := registry.policies != nil && registry.policies.isAgentMaintenanceEnabled()
 		compatibilityPacks := runtime.channelProfiles.compatibilityViews(runtime.store)
 		topologyDigest := localServiceTopologyDigest(registry.currentDigest(), runtime.channelProfiles)
+		scope := requestServerScope(c)
+		console := any("/#tokens")
+		maintenance := gin.H{
+			"available": true, "scope": loopbackScope,
+			"console": "/#control", "grant_console": "/#tokens", "mcp": "/manage/mcp",
+			"drafts": "/local/api/protocol-drafts", "history": "/local/api/protocols/history",
+			"console_auth": gin.H{
+				"enabled": runtime.adminAuth.isEnabled(), "default_enabled": false,
+				"enable_or_disable": "/local/api/admin-auth", "change_token": "/local/api/admin-token",
+			},
+			"auth": gin.H{
+				"default":       "administrator",
+				"administrator": gin.H{"type": "header", "header": adminTokenHeader, "required_for_maintenance_mcp": true},
+				"agent_token": gin.H{
+					"enabled": agentMaintenanceEnabled, "type": "bearer", "header": "Authorization",
+					"required_capability": localRouterMaintainCapability, "service_access": false,
+				},
+			},
+			"grant":        "Service Tokens are call-only. Agent maintenance Tokens are separate, maintenance-only, and accepted only while the operator switch is enabled.",
+			"lifecycle":    []string{"draft", "edit", "validate", "review-impact", "plan", "apply", "verify", "rollback"},
+			"editing":      "Semantic MCP tools own paths, JSON/YAML formatting, atomic writes and exact digests.",
+			"failure":      "Drafts are preserved and local post-apply verification failures automatically restore the previous revision.",
+			"operator_api": gin.H{"path": "/local/api", "auth": gin.H{"type": "header", "header": "X-Local-Admin", "required": runtime.adminAuth.isEnabled()}},
+		}
+		if scope == lanServiceScope {
+			console = "loopback-only"
+			maintenance = gin.H{
+				"available": false, "scope": loopbackScope,
+				"reason": "the LAN listener exposes service calls only; use the loopback listener for console and maintenance",
+			}
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"schema_version": "1",
 			"name":           "LocalRouter",
-			"scope":          "loopback",
+			"scope":          scope,
 			"contract": gin.H{
 				"digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion,
 				"cache": "reuse cached operation contracts until the digest or schema_version changes",
@@ -252,7 +283,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"selection_mode": "agent", "merged": false,
 			},
 			"agent_identity": gin.H{
-				"binding": "service-token", "registration": "operator-issued", "console": "/#tokens",
+				"binding": "service-token", "registration": "operator-issued", "console": console,
 				"required_fields": []string{"agent_code", "agent_name", "workspace"},
 				"rule":            "every non-system service Token is bound to one registered Agent identity; usage and quotas are attributed by Token ID",
 			},
@@ -282,27 +313,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"html": "/docs", "index": "/docs/index.json", "openapi": "/docs/openapi.json",
 				"agent": "/docs/agent.json", "pool_catalog": "/docs/pools/index.json", "pool_guide": "/docs/pools/catalog.md", "mcp": "/mcp",
 			},
-			"maintenance": gin.H{
-				"console": "/#control", "grant_console": "/#tokens", "mcp": "/manage/mcp",
-				"drafts": "/local/api/protocol-drafts", "history": "/local/api/protocols/history",
-				"console_auth": gin.H{
-					"enabled": runtime.adminAuth.isEnabled(), "default_enabled": false,
-					"enable_or_disable": "/local/api/admin-auth", "change_token": "/local/api/admin-token",
-				},
-				"auth": gin.H{
-					"default":       "administrator",
-					"administrator": gin.H{"type": "header", "header": adminTokenHeader, "required_for_maintenance_mcp": true},
-					"agent_token": gin.H{
-						"enabled": agentMaintenanceEnabled, "type": "bearer", "header": "Authorization",
-						"required_capability": localRouterMaintainCapability, "service_access": false,
-					},
-				},
-				"grant":        "Service Tokens are call-only. Agent maintenance Tokens are separate, maintenance-only, and accepted only while the operator switch is enabled.",
-				"lifecycle":    []string{"draft", "edit", "validate", "review-impact", "plan", "apply", "verify", "rollback"},
-				"editing":      "Semantic MCP tools own paths, JSON/YAML formatting, atomic writes and exact digests.",
-				"failure":      "Drafts are preserved and local post-apply verification failures automatically restore the previous revision.",
-				"operator_api": gin.H{"path": "/local/api", "auth": gin.H{"type": "header", "header": "X-Local-Admin", "required": runtime.adminAuth.isEnabled()}},
-			},
+			"maintenance":         maintenance,
 			"compatibility_packs": compatibilityPacks,
 			"protocols":           registry.views(),
 			"authentication": gin.H{

@@ -156,6 +156,123 @@ func TestNormalizeLoopbackHost(t *testing.T) {
 	}
 }
 
+func TestNormalizeLANHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "default", input: "", want: "0.0.0.0"},
+		{name: "all interfaces ipv4", input: "0.0.0.0", want: "0.0.0.0"},
+		{name: "all interfaces ipv6", input: "::", want: "::"},
+		{name: "private ipv4", input: "192.168.1.8", want: "192.168.1.8"},
+		{name: "private ipv6", input: "fd00::8", want: "fd00::8"},
+		{name: "loopback ipv4", input: "127.0.0.1", wantErr: true},
+		{name: "loopback ipv6", input: "::1", wantErr: true},
+		{name: "public address", input: "203.0.113.8", wantErr: true},
+		{name: "hostname", input: "gateway.local", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeLANHost(test.input)
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestParseAllowedOrigins(t *testing.T) {
+	t.Parallel()
+
+	origins, err := parseAllowedOrigins("https://router.home, http://192.168.1.20:3000, https://router.home/")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://router.home", "http://192.168.1.20:3000"}, origins)
+
+	for _, invalid := range []string{"router.home", "https://user@router.home", "https://router.home/path", "https://router.home?query=1", "file:///tmp/router"} {
+		_, err := parseAllowedOrigins(invalid)
+		assert.Error(t, err, invalid)
+	}
+}
+
+func TestNormalizePublicBaseURL(t *testing.T) {
+	t.Parallel()
+
+	for input, expected := range map[string]string{
+		"":                         "",
+		"http://192.168.1.10:8318": "http://192.168.1.10:8318",
+		"https://router.home/":     "https://router.home",
+	} {
+		actual, err := normalizePublicBaseURL(input)
+		require.NoError(t, err)
+		assert.Equal(t, expected, actual)
+	}
+	for _, invalid := range []string{"router.home", "https://router.home/path", "https://user@router.home", "file:///tmp/router"} {
+		_, err := normalizePublicBaseURL(invalid)
+		assert.Error(t, err, invalid)
+	}
+}
+
+func TestWorkflowCallbackBaseURLNeverUsesRequestHost(t *testing.T) {
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "http://attacker.invalid/w/demo", nil)
+
+	localURL, err := workflowCallbackBaseURL(context, localRuntime{config: runtimeConfig{Host: "127.0.0.1", Port: 8317}})
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:8317", localURL)
+
+	context.Set(serverScopeKey, lanServiceScope)
+	lanURL, err := workflowCallbackBaseURL(context, localRuntime{config: runtimeConfig{LANHost: "192.168.1.10", LANPort: 8318}})
+	require.NoError(t, err)
+	assert.Equal(t, "http://192.168.1.10:8318", lanURL)
+
+	configuredURL, err := workflowCallbackBaseURL(context, localRuntime{config: runtimeConfig{LANHost: "0.0.0.0", LANPort: 8318, LANPublicBaseURL: "https://router.home"}})
+	require.NoError(t, err)
+	assert.Equal(t, "https://router.home", configuredURL)
+
+	_, err = workflowCallbackBaseURL(context, localRuntime{config: runtimeConfig{LANHost: "0.0.0.0", LANPort: 8318}})
+	assert.ErrorContains(t, err, "LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL")
+}
+
+func TestLANServerExposesOnlyServiceRoutes(t *testing.T) {
+	engine := buildLANServer(localRuntime{config: runtimeConfig{LANAllowedOrigins: []string{"https://client.home"}}})
+	routes := make(map[string]bool)
+	for _, route := range engine.Routes() {
+		routes[route.Method+" "+route.Path] = true
+	}
+
+	assert.True(t, routes["GET /healthz"])
+	assert.True(t, routes["GET /.well-known/localrouter.json"])
+	assert.True(t, routes["GET /agent/operations"])
+	assert.True(t, routes["POST /mcp"])
+	assert.True(t, routes["POST /v1/chat/completions"])
+	assert.True(t, routes["POST /p/:protocol"])
+	assert.False(t, routes["GET /local/status"])
+	assert.False(t, routes["GET /local/api/summary"])
+	assert.False(t, routes["POST /manage/mcp"])
+
+	allowed := httptest.NewRecorder()
+	allowedRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	allowedRequest.Header.Set("Origin", "https://client.home")
+	engine.ServeHTTP(allowed, allowedRequest)
+	assert.Equal(t, http.StatusOK, allowed.Code)
+	assert.Equal(t, "https://client.home", allowed.Header().Get("Access-Control-Allow-Origin"))
+	assert.Contains(t, allowed.Body.String(), `"scope":"lan-service"`)
+
+	disallowed := httptest.NewRecorder()
+	disallowedRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	disallowedRequest.Header.Set("Origin", "https://untrusted.home")
+	engine.ServeHTTP(disallowed, disallowedRequest)
+	assert.Equal(t, http.StatusForbidden, disallowed.Code)
+}
+
 func TestLocalCORSOnlyAllowsLoopbackOrigins(t *testing.T) {
 	engine := gin.New()
 	engine.Use(localSecurityHeaders())

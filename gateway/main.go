@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"embed"
@@ -30,10 +31,15 @@ import (
 const (
 	defaultHost       = "127.0.0.1"
 	defaultPort       = 8317
+	defaultLANHost    = "0.0.0.0"
+	defaultLANPort    = 8318
 	localTokenName    = "LocalRouter default"
 	adminTokenHeader  = "X-Local-Admin"
 	credentialDirMode = 0o700
 	credentialMode    = 0o600
+	serverScopeKey    = "localrouter.server-scope"
+	loopbackScope     = "loopback"
+	lanServiceScope   = "lan-service"
 )
 
 // The web console is a compiled local-only React application.
@@ -44,6 +50,11 @@ var webFiles embed.FS
 type runtimeConfig struct {
 	Host                string
 	Port                int
+	LANEnabled          bool
+	LANHost             string
+	LANPort             int
+	LANAllowedOrigins   []string
+	LANPublicBaseURL    string
 	ConfigDir           string
 	DataDir             string
 	StateDir            string
@@ -198,19 +209,18 @@ func main() {
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	engine := buildServer(runtime)
-	address := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
-	server := &http.Server{
-		Addr:              address,
-		Handler:           h2c.NewHandler(engine, &http2.Server{}),
-		ReadHeaderTimeout: 10 * time.Second,
+	servers := []namedHTTPServer{newHTTPServer("local", config.Host, config.Port, buildServer(runtime))}
+	if config.LANEnabled {
+		servers = append(servers, newHTTPServer("lan-service", config.LANHost, config.LANPort, buildLANServer(runtime)))
 	}
-
-	serverErrors := make(chan error, 1)
-	go func() {
-		fmt.Fprintln(os.Stderr, "LocalRouter native gateway listening on http://"+address)
-		serverErrors <- server.ListenAndServe()
-	}()
+	serverErrors := make(chan namedServerError, len(servers))
+	for _, configured := range servers {
+		configured := configured
+		go func() {
+			fmt.Fprintf(os.Stderr, "LocalRouter %s listener on http://%s\n", configured.name, configured.server.Addr)
+			serverErrors <- namedServerError{name: configured.name, err: configured.server.ListenAndServe()}
+		}()
+	}
 	runtime.protocols.startWorkflowScheduler(runtime)
 	defer runtime.protocols.stopWorkflowScheduler()
 
@@ -219,20 +229,36 @@ func main() {
 	select {
 	case sig := <-stop:
 		fmt.Fprintln(os.Stderr, "received signal "+sig.String()+", shutting down")
-	case serveErr := <-serverErrors:
-		if !errors.Is(serveErr, http.ErrServerClosed) {
-			fmt.Fprintln(os.Stderr, "HTTP server failed:", serveErr)
+	case serveFailure := <-serverErrors:
+		if !errors.Is(serveFailure.err, http.ErrServerClosed) {
+			fmt.Fprintf(os.Stderr, "LocalRouter %s listener failed: %v\n", serveFailure.name, serveFailure.err)
 		}
-		return
 	}
+	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelShutdown()
+	for _, configured := range servers {
+		if err := configured.server.Shutdown(shutdownContext); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintf(os.Stderr, "LocalRouter %s shutdown failed: %v\n", configured.name, err)
+		}
+	}
+}
 
-	shutdownDeadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(shutdownDeadline) {
-		if err := server.Close(); err == nil || errors.Is(err, http.ErrServerClosed) {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+type namedHTTPServer struct {
+	name   string
+	server *http.Server
+}
+
+type namedServerError struct {
+	name string
+	err  error
+}
+
+func newHTTPServer(name, host string, port int, handler http.Handler) namedHTTPServer {
+	return namedHTTPServer{name: name, server: &http.Server{
+		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
+		Handler:           h2c.NewHandler(handler, &http2.Server{}),
+		ReadHeaderTimeout: 10 * time.Second,
+	}}
 }
 
 func loadRuntimeConfig() (runtimeConfig, error) {
@@ -260,6 +286,39 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		port, err = strconv.Atoi(rawPort)
 		if err != nil || port < 1 || port > 65535 {
 			return runtimeConfig{}, fmt.Errorf("LOCAL_GATEWAY_PORT must be between 1 and 65535")
+		}
+	}
+	lanEnabled, err := parseEnvironmentBoolean("LOCAL_GATEWAY_LAN_ENABLED")
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+	lanHost := ""
+	lanPort := 0
+	var lanAllowedOrigins []string
+	lanPublicBaseURL := ""
+	if lanEnabled {
+		lanHost, err = normalizeLANHost(strings.TrimSpace(os.Getenv("LOCAL_GATEWAY_LAN_HOST")))
+		if err != nil {
+			return runtimeConfig{}, err
+		}
+		lanPort = defaultLANPort
+		rawLANPort := strings.TrimSpace(os.Getenv("LOCAL_GATEWAY_LAN_PORT"))
+		if rawLANPort != "" {
+			lanPort, err = strconv.Atoi(rawLANPort)
+			if err != nil || lanPort < 1 || lanPort > 65535 {
+				return runtimeConfig{}, errors.New("LOCAL_GATEWAY_LAN_PORT must be between 1 and 65535")
+			}
+		}
+		if lanPort == port {
+			return runtimeConfig{}, errors.New("LOCAL_GATEWAY_LAN_PORT must differ from LOCAL_GATEWAY_PORT")
+		}
+		lanAllowedOrigins, err = parseAllowedOrigins(os.Getenv("LOCAL_GATEWAY_LAN_ALLOWED_ORIGINS"))
+		if err != nil {
+			return runtimeConfig{}, err
+		}
+		lanPublicBaseURL, err = normalizePublicBaseURL(os.Getenv("LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL"))
+		if err != nil {
+			return runtimeConfig{}, err
 		}
 	}
 
@@ -319,6 +378,11 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 	return runtimeConfig{
 		Host:                host,
 		Port:                port,
+		LANEnabled:          lanEnabled,
+		LANHost:             lanHost,
+		LANPort:             lanPort,
+		LANAllowedOrigins:   lanAllowedOrigins,
+		LANPublicBaseURL:    lanPublicBaseURL,
 		ConfigDir:           configDir,
 		DataDir:             dataDir,
 		StateDir:            stateDir,
@@ -332,6 +396,18 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 	}, nil
 }
 
+func parseEnvironmentBoolean(name string) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+	return value, nil
+}
+
 func normalizeLoopbackHost(host string) (string, error) {
 	if host == "" || strings.EqualFold(host, "localhost") {
 		return defaultHost, nil
@@ -341,6 +417,56 @@ func normalizeLoopbackHost(host string) (string, error) {
 		return "", fmt.Errorf("LOCAL_GATEWAY_HOST must be a loopback IP, got %q", host)
 	}
 	return ip.String(), nil
+}
+
+func normalizeLANHost(host string) (string, error) {
+	if host == "" {
+		host = defaultLANHost
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return "", fmt.Errorf("LOCAL_GATEWAY_LAN_HOST must be an IP address, got %q", host)
+	}
+	if ip.IsLoopback() {
+		return "", fmt.Errorf("LOCAL_GATEWAY_LAN_HOST must not be loopback, got %q", host)
+	}
+	if !ip.IsUnspecified() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+		return "", fmt.Errorf("LOCAL_GATEWAY_LAN_HOST must be unspecified, private, or link-local, got %q", host)
+	}
+	return ip.String(), nil
+}
+
+func parseAllowedOrigins(raw string) ([]string, error) {
+	seen := make(map[string]bool)
+	origins := make([]string, 0)
+	for _, value := range strings.Split(raw, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		parsed, err := url.Parse(value)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+			return nil, fmt.Errorf("LOCAL_GATEWAY_LAN_ALLOWED_ORIGINS contains an invalid origin %q", value)
+		}
+		normalized := parsed.Scheme + "://" + parsed.Host
+		if !seen[normalized] {
+			seen[normalized] = true
+			origins = append(origins, normalized)
+		}
+	}
+	return origins, nil
+}
+
+func normalizePublicBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL must be an http(s) origin, got %q", raw)
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func initializeRuntime(config runtimeConfig) (localRuntime, error) {
@@ -532,7 +658,7 @@ func writeSecretAtomic(path string, secret string) error {
 
 func buildServer(runtime localRuntime) *gin.Engine {
 	engine := gin.New()
-	engine.Use(gin.Recovery(), localSecurityHeaders())
+	engine.Use(gin.Recovery(), serverScope(loopbackScope), localSecurityHeaders())
 
 	registerConsoleRoutes(engine, runtime)
 	registerLocalAdminRoutes(engine, runtime)
@@ -541,18 +667,59 @@ func buildServer(runtime localRuntime) *gin.Engine {
 	return engine
 }
 
+func buildLANServer(runtime localRuntime) *gin.Engine {
+	engine := gin.New()
+	engine.Use(gin.Recovery(), serverScope(lanServiceScope), lanSecurityHeaders(runtime.config.LANAllowedOrigins))
+
+	registerLANLandingRoutes(engine)
+	registerProtocolDocumentationRoutes(engine, runtime)
+	registerProtocolConsumerRoutes(engine, runtime)
+	registerRelayRoutesWithRuntime(engine, runtime)
+	return engine
+}
+
+func serverScope(scope string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(serverScopeKey, scope)
+		c.Next()
+	}
+}
+
+func requestServerScope(c *gin.Context) string {
+	if scope := c.GetString(serverScopeKey); scope != "" {
+		return scope
+	}
+	return loopbackScope
+}
+
 func localSecurityHeaders() gin.HandlerFunc {
+	return securityHeaders(loopbackOrigin, false)
+}
+
+func lanSecurityHeaders(allowedOrigins []string) gin.HandlerFunc {
+	allowed := make(map[string]bool, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		allowed[origin] = true
+	}
+	return securityHeaders(func(origin string) bool { return allowed[origin] }, true)
+}
+
+func securityHeaders(originAllowed func(string) bool, rejectDisallowed bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Referrer-Policy", "no-referrer")
 		origin := strings.TrimSpace(c.GetHeader("Origin"))
-		allowed := origin == "" || loopbackOrigin(origin)
+		allowed := origin == "" || originAllowed(origin)
 		if origin != "" && allowed {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Vary", "Origin")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version")
 			c.Header("Access-Control-Max-Age", "600")
+		}
+		if origin != "" && !allowed && rejectDisallowed {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
 		}
 		if c.Request.Method == http.MethodOptions && c.GetHeader("Access-Control-Request-Method") != "" {
 			if !allowed {
@@ -612,12 +779,33 @@ func registerConsoleRoutes(engine *gin.Engine, runtime localRuntime) {
 			"path_layout":        "xdg-v1",
 			"engine":             "localrouter-native",
 			"oauth":              "external-maintainer",
+			"lan_service":        lanServiceStatus(runtime.config),
 		})
 	})
 	engine.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexPage)
 	})
 	engine.GET("/assets/*filepath", gin.WrapH(assetServer))
+}
+
+func lanServiceStatus(config runtimeConfig) gin.H {
+	status := gin.H{"enabled": config.LANEnabled, "scope": lanServiceScope, "management_exposed": false}
+	if config.LANEnabled {
+		status["listen"] = net.JoinHostPort(config.LANHost, strconv.Itoa(config.LANPort))
+	}
+	return status
+}
+
+func registerLANLandingRoutes(engine *gin.Engine) {
+	engine.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "mode": lanServiceScope, "engine": "localrouter-native", "oauth": false})
+	})
+	engine.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"name": "LocalRouter", "scope": lanServiceScope, "console": "loopback-only",
+			"discovery": "/.well-known/localrouter.json", "authentication": "service-token-required",
+		})
+	})
 }
 
 func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
@@ -801,6 +989,7 @@ func localSummary(runtime localRuntime) gin.HandlerFunc {
 				"protocols_ready":    protocolReady,
 				"billing":            "usage-accounting",
 				"oauth":              "external-maintainer",
+				"lan_service":        lanServiceStatus(runtime.config),
 			},
 		})
 	}

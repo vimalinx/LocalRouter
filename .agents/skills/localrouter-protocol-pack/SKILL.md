@@ -5,21 +5,20 @@ description: Use when authoring, changing, releasing, diagnosing, or rolling bac
 
 # Maintain LocalRouter Protocol Packs
 
-Treat the loopback listener as consumer authority and a reviewed Pack draft as the authoring unit. A parseable file, healthy account, model list, or balance is not provider proof.
+Treat live discovery as consumer authority and a reviewed Pack draft as the authoring unit. Parseability, model lists, and balances are not provider proof.
 
 ## Start from the live contract
 
-1. Request `http://127.0.0.1:8317/.well-known/localrouter.json`.
-2. Follow its links. Before mutation choose an enabled maintenance Agent Token, explicit delegation for one `lr manage-*` change, or read-only discovery. Keep credentials private.
-   Password-free loopback console access is not Agent mutation authority; Agents still use `/manage/mcp`.
+1. Request configured discovery, defaulting to `http://127.0.0.1:8317/.well-known/localrouter.json`. Before sending a Token to non-loopback, require `scope=lan-service` and `maintenance.available=false`.
+2. Follow its links. Before mutation require an enabled maintenance Agent Token or explicit delegation for one `lr manage-*` change. Keep credentials private; an open loopback console grants no Agent authority.
 3. Classify the work before reading more detail:
    - **Use only:** call the already documented operation and do not edit the Pack.
-   - **Compatibility Pack:** standard OpenAI, Anthropic, or Gemini routing uses Channel Profile + Channels on `/v1` or `/v1beta`.
-   - **Pack change:** use the semantic tools at `maintenance.mcp` only through the authorized maintenance lane; LocalRouter owns draft paths, JSON/YAML formatting, validation, exact digests, installation, and local rollback.
-   - **Runtime change:** Go, WebUI, schema, or handlers require a build and restart plus any Pack release.
+   - **Compatibility Pack:** standard APIs use Channel Profile + Channels on `/v1` or `/v1beta`.
+   - **Pack change:** use authorized `maintenance.mcp`; LocalRouter owns formatting, validation, digests, installation, and rollback.
+   - **Runtime change:** Go, WebUI, schema, or handlers require build, restart, and any Pack release.
 4. Determine who owns registration, credential refresh, health, request-time selection, quota measurement, and upstream OAuth. Do not silently move ownership into LocalRouter.
 
-With a Pack argument, `lr` accepts bare `operation_id` or Pack-qualified `operation_key`; never turn dotted selectors into paths.
+With a Pack argument, `lr` accepts bare `operation_id` or Pack-qualified `operation_key`; dotted selectors are not paths.
 
 ## Load only the relevant detail
 
@@ -42,7 +41,7 @@ Authoritative schemas are `gateway/protocols/schema/protocol-pack-v2.schema.json
 
 ## Non-negotiable boundaries
 
-- Bind the gateway to loopback. Targets and adapter/module paths are operator-owned; request data never selects them.
+- Keep the operator gateway on loopback. An explicit LAN listener may expose only authenticated consumer routes and sanitized docs, never the console, `/local/status`, `/local/api`, or `/manage/mcp`. Request data never selects targets or adapter/module paths.
 - Keep credentials, cookies, locators, private upstream addresses, and pool contents out of Pack source, guides, logs, tests, and `.ai` project-visible notes. Installed protected material stays below `$XDG_DATA_HOME/localrouter/` with mode `0600`; isolated tests may set `LOCAL_GATEWAY_DATA_DIR`.
 - Keep registration, CAPTCHA, human OAuth consent, anti-bot challenges, payment, and account production outside the request path.
 - Use `pool.mode=external` when another gateway owns the complete pool. Use `pool.mode=local` only when LocalRouter owns request-time selection. An external maintainer may atomically update a private external-readonly source without transferring registration ownership.

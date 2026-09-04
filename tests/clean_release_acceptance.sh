@@ -31,6 +31,7 @@ go run github.com/zricethezav/gitleaks/v8@v8.28.0 git --staged --no-banner --red
 git -C "$release_root" -c user.name=LocalRouter -c user.email=release@local.invalid commit --quiet -m 'release candidate'
 
 "$release_root/tests/verify.sh"
+"$release_root/tests/docker_acceptance.sh"
 git -C "$release_root" diff --exit-code
 test -z "$(git -C "$release_root" status --short --untracked-files=all)"
 

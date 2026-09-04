@@ -4,6 +4,28 @@ All notable LocalRouter changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once a stable `1.0.0` contract is
 published.
 
+## 0.1.0-alpha.5 - 2026-09-04
+
+- Added an opt-in LAN service listener that exposes only authenticated consumer
+  routes and sanitized discovery while keeping the console, local API, and
+  maintenance MCP bound to loopback.
+- Added a pinned, non-root Docker image and hardened Compose deployment with a
+  read-only root filesystem, dropped capabilities, persistent private volumes,
+  graceful shutdown, configurable health checks, and fresh/migration guidance.
+- Hardened remote `lr` use with explicit LAN opt-in, service-only discovery
+  verification before reading a Token, loopback-only maintenance, bounded model
+  catalogue requests, and Pack-qualified exact model lookup.
+- Generalized dynamic model discovery for catalogue-backed and request-schema
+  enum inputs, including `model_cls`, media model catalogues, and compatibility
+  binding to every declared dynamic input.
+- Improved pooled readiness probes to try distinct credentials safely and
+  promptly recheck after unhealthy credentials enter cooldown.
+- Added request usage accounting, unified service management, retired Token
+  locator migration, and stale-draft rejection introduced after alpha.4.
+- Extended LAN, Docker, Protocol Pack, clean-source, release-archive, security,
+  and multi-transport acceptance, including physical LAN verification on a
+  second Linux host.
+
 ## 0.1.0-alpha.4 - 2026-09-03
 
 - Made the loopback Web console and `/local/api/*` password-free by default,

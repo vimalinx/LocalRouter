@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+unset LOCALROUTER_BASE_URL LOCALROUTER_DISCOVERY_URL LOCALROUTER_DOCS_URL \
+  LOCALROUTER_OPENAPI_URL LOCALROUTER_MCP_URL LOCALROUTER_MAINTENANCE_MCP_URL
+
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 bun install --cwd "$project_root/gateway/web-src" --frozen-lockfile
@@ -15,11 +18,14 @@ bash -n "$project_root/tools/protocol-pack-lifecycle.sh" \
   "$project_root/tools/lr" \
   "$project_root/tools/install-localrouter.sh" \
   "$project_root/tests/clean_release_acceptance.sh" \
+	"$project_root/tests/docker_acceptance.sh" \
   "$project_root/tests/release_artifact_acceptance.sh" \
   "$project_root/tests/xdg_install_acceptance.sh" \
+	"$project_root/tests/lan_service_acceptance.sh" \
   "$project_root/tests/protocol_e2e.sh"
 "$project_root/tests/agent_skill_acceptance.sh"
 "$project_root/tests/smoke_local_gateway.sh"
+"$project_root/tests/lan_service_acceptance.sh"
 "$project_root/tests/e2e_relay.sh"
 "$project_root/tests/protocol_e2e.sh"
 "$project_root/tests/universal_service_matrix_acceptance.sh"

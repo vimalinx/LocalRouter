@@ -1,0 +1,9 @@
+# Optional override for migrating an existing XDG installation. Stop the
+# systemd service before using the same SQLite/data/state directories here.
+services:
+  localrouter:
+    volumes:
+      - ${LOCALROUTER_CONFIG_DIR:?set the existing absolute config directory}:/var/lib/localrouter/config
+      - ${LOCALROUTER_DATA_DIR:?set the existing absolute data directory}:/var/lib/localrouter/data
+      - ${LOCALROUTER_STATE_DIR:?set the existing absolute state directory}:/var/lib/localrouter/state
+      - ${LOCALROUTER_CACHE_DIR:?set the existing absolute cache directory}:/var/lib/localrouter/cache

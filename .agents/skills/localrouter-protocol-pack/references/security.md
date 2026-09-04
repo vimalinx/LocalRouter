@@ -4,9 +4,10 @@ Read this reference for authentication, targets, adapters, forwarded headers, un
 
 ## Trust boundaries
 
-- LocalRouter listens only on a loopback IP. Do not expose its admin plane on a non-loopback address.
+- LocalRouter's complete operator listener stays on a loopback IP. An optional private-LAN listener may expose only Service-Token-authenticated consumer routes plus sanitized discovery/docs. Do not register or proxy the console, `/local/status`, `/local/api`, or `/manage/mcp` on that listener.
 - Public API Tokens authorize consumer surfaces only. The human console and `/local/api` use password-free loopback access by default and may be switched to the administrator credential by the operator. `/manage/mcp` still requires that separate administrator credential or an explicitly enabled maintenance-only Agent Token. A password-free console is never implicit Agent mutation authority.
 - Provider targets are operator-owned Pack constants. Client input must never become a target URL, DNS name, socket path, OAuth token URL, adapter path, or WASM module path. `target_selector` accepts credential metadata only as a lookup key into a Pack-owned map of fixed target names; an unmapped value is ineligible rather than interpreted as an address.
+- Workflow callback base URLs are operator-owned. On a LAN listener, use the configured private bind address or an explicit `LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL`; never derive callbacks from an untrusted request `Host` or forwarded header.
 - Human OAuth consent, CAPTCHA, account registration, anti-bot handling, and payment occur outside the request path.
 
 ## Secrets
@@ -36,4 +37,4 @@ Read this reference for authentication, targets, adapters, forwarded headers, un
 
 ## Security acceptance
 
-Verify loopback binding, the advertised console-auth switch and its default-off state, `/manage/mcp` administrator/API token separation, target immutability, path allowlists, file owner/modes, symlink rejection, sanitized management output, bounded payload behavior, no secret leakage, and safe unknown outcomes. A successful upstream response does not replace this review.
+Verify operator loopback binding; optional LAN listener private-address validation, exact Origin allowlist, Service Token enforcement and absence of all management routes; the advertised console-auth switch and its default-off state; `/manage/mcp` administrator/API token separation; target immutability, path allowlists, file owner/modes, symlink rejection, sanitized management output, bounded payload behavior, no secret leakage, and safe unknown outcomes. A successful upstream response does not replace this review.

@@ -1,0 +1,44 @@
+services:
+  localrouter:
+    build:
+      context: .
+      args:
+        VCS_REF: ${LOCALROUTER_VCS_REF:-none}
+        BUILD_DATE: ${LOCALROUTER_BUILD_DATE:-unknown}
+    image: ${LOCALROUTER_IMAGE:-localrouter:dev}
+    network_mode: host
+    environment:
+      LOCAL_GATEWAY_HOST: 127.0.0.1
+      LOCAL_GATEWAY_PORT: ${LOCALROUTER_LOCAL_PORT:-8317}
+      LOCAL_GATEWAY_LAN_ENABLED: "true"
+      LOCAL_GATEWAY_LAN_HOST: ${LOCALROUTER_LAN_HOST:?set LOCALROUTER_LAN_HOST to this machine's private LAN IP}
+      LOCAL_GATEWAY_LAN_PORT: ${LOCALROUTER_LAN_PORT:-8318}
+      LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL: http://${LOCALROUTER_LAN_HOST:?set LOCALROUTER_LAN_HOST to this machine's private LAN IP}:${LOCALROUTER_LAN_PORT:-8318}
+      LOCAL_GATEWAY_LAN_ALLOWED_ORIGINS: ${LOCALROUTER_LAN_ALLOWED_ORIGINS:-}
+    volumes:
+      - localrouter-config:/var/lib/localrouter/config
+      - localrouter-data:/var/lib/localrouter/data
+      - localrouter-state:/var/lib/localrouter/state
+      - localrouter-cache:/var/lib/localrouter/cache
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 35s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${LOCAL_GATEWAY_PORT}/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 6
+
+volumes:
+  localrouter-config:
+  localrouter-data:
+  localrouter-state:
+  localrouter-cache:

@@ -4,14 +4,14 @@
 
 # LocalRouter
 
-**轻量、好看、只运行在本机的通用 AI / API 网关**
+**轻量、好看的本机优先 AI / API 网关**
 
-把模型 API、普通 REST、SSE、文件、WebSocket、gRPC、异步任务和账号池，收进一个可发现、可配置、可回滚的本机入口。
+把模型 API、普通 REST、SSE、文件、WebSocket、gRPC、异步任务和账号池，收进一个可发现、可配置、可回滚的本机入口，并可显式向可信局域网开放仅限调用的服务面。
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-6b7280)
 ![Go](https://img.shields.io/badge/Go-1.25.13%2B-64748b)
 ![React](https://img.shields.io/badge/React-19-64748b)
-![Network](https://img.shields.io/badge/listen-loopback_only-5f8f7b)
+![Network](https://img.shields.io/badge/network-loopback%20%2B%20opt--in%20LAN-5f8f7b)
 ![Runtime](https://img.shields.io/badge/runtime-single_binary-7c5ce7)
 
 [快速开始](#一分钟启动) · [界面预览](#界面预览) · [能力一览](#能做什么) · [Agent 接入](#agent-如何使用和维护) · [开发文档](#开发与验证)
@@ -28,7 +28,7 @@
 
 <p align="center"><sub>运行概览使用本机合成数据，点击图片可查看原尺寸。</sub></p>
 
-## 一个地址，接住本机所有 API
+## 一个运行时，接住本机和可信局域网 API
 
 LocalRouter 用自己的 Go 运行时管理本地 SQLite 渠道与 Token、同模型多渠道选路、流式透传、请求日志、声明式 Protocol Pack、账号池、异步工作流、Agent 文档和哈希绑定发布。编译与运行不依赖外部网关源码。
 
@@ -58,6 +58,8 @@ cd LocalRouter
 
 - 控制台　<http://127.0.0.1:8317/>
 - Agent 文档　<http://127.0.0.1:8317/docs>
+
+需要 Docker 或让其他局域网设备调用时，使用 [Docker 与 LAN 部署指南](docs/DOCKER.md)。局域网监听器只提供要求 Service Token 的调用面，控制台和维护接口仍留在本机回环地址。
 
 <details>
 <summary><strong>安装器具体做了什么</strong></summary>
@@ -167,7 +169,7 @@ Protocol Pack 不限定 LLM，也不假设请求或响应一定是 JSON。仓库
        渠道 / 本地号池 / 外部网关
 ```
 
-LocalRouter 强制监听回环 IP。请求参数不能选择任意上游地址、认证端点、adapter 路径或 WASM 模块。
+LocalRouter 的完整操作者入口强制监听回环 IP。可选 LAN 服务监听器只注册经过 Service Token 保护的消费路由，不注册控制台、`/local/api` 或 `/manage/mcp`。请求参数不能选择任意上游地址、认证端点、adapter 路径或 WASM 模块。
 
 同一个模型仍可配置多条 `/v1` 兼容渠道，但 Agent 能力面不会把这些供应商折叠成一个条目。每个 Pack 和 operation 都保留独立 `operation_key`、地址契约、模型映射、价格、readiness 与号池状态。只有同一供应商、同一调用契约下的多枚凭据才进入该 Pack 自己的号池做轮换；跨供应商能力只以共享语义标签并列发现，由 Agent 明确选择。
 
@@ -186,6 +188,18 @@ LocalRouter 强制监听回环 IP。请求参数不能选择任意上游地址�
 | 号池目录 | `http://127.0.0.1:8317/docs/pools/index.json` |
 
 `/doc` 是 `/docs` 的永久重定向别名。
+
+## 可选局域网服务入口
+
+在 `config.env` 中显式配置私有地址即可让局域网设备使用消费 API：
+
+```text
+LOCAL_GATEWAY_LAN_ENABLED=true
+LOCAL_GATEWAY_LAN_HOST=192.168.1.10
+LOCAL_GATEWAY_LAN_PORT=8318
+```
+
+局域网入口提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent`、发现和脱敏文档。它不提供控制台、`/local/status`、`/local/api` 或 `/manage/mcp`。应为每台设备或 Agent 签发独立 Service Token，并通过主机防火墙把端口限制在预期私有网段。浏览器客户端还需配置精确的 `LOCAL_GATEWAY_LAN_ALLOWED_ORIGINS`；命令行与 Agent 客户端不需要该设置。
 
 ## 接入已有的本机上游
 
@@ -316,6 +330,7 @@ lr manage-call localrouter_draft_review '{"draft_id":"agent-change"}'
 | 变量 | 默认值/用途 |
 |---|---|
 | `LOCALROUTER_BASE_URL` | `http://127.0.0.1:8317` |
+| `LOCALROUTER_ALLOW_LAN` | 默认 `false`；远端客户端显式接受经过发现验证的 LAN service-only 地址 |
 | `LOCALROUTER_DISCOVERY_URL` | `/.well-known/localrouter.json` 的完整地址 |
 | `LOCALROUTER_DOCS_URL` | 文档首页 |
 | `LOCALROUTER_OPENAPI_URL` | 汇总 OpenAPI |
@@ -325,7 +340,7 @@ lr manage-call localrouter_draft_review '{"draft_id":"agent-change"}'
 | `LOCALROUTER_MAINTAINER_TOKEN_FILE` | 可选；显式指定已授权 Agent 的维护专用 Token locator；无默认值 |
 | `LOCALROUTER_ADMIN_TOKEN_FILE` | 默认 `$XDG_DATA_HOME/localrouter/admin-token`；控制台密码保护开启时用于 `/local/api/*`，并始终供人工 `lr manage-*` 使用；不交给消费型 Agent |
 
-`lr` 会拒绝非回环 Base URL、符号链接 Token 文件、错误所有者以及非 `0600` 权限，避免环境变量被篡改后把 Token 发往外部地址。
+`lr` 默认拒绝非回环 Base URL。使用操作者批准的 LAN 地址时，客户端还必须设置 `LOCALROUTER_ALLOW_LAN=true`；`lr` 会先无密钥读取 discovery，确认 `scope=lan-service` 且维护面不可用，再读取并发送 Service Token。维护 URL始终只允许回环地址。符号链接 Token 文件、错误所有者以及非 `0600` 权限仍会被拒绝。
 
 `/p/<pack>` 是 LocalRouter 给每个独立 Protocol Pack 保留的挂载命名空间，用来避免不同 Pack 的 `/models`、`/chat/completions` 等路由互相覆盖。满足 OpenAI 模型与聊天契约的 Pack 还会自动发布 `/p/<pack>/v1` 兼容 Base URL。
 
@@ -348,6 +363,7 @@ make -C gateway web-test
 go -C gateway test ./...
 go -C gateway vet ./...
 ./tests/verify.sh
+make docker-test
 ```
 
 发布前运行完全隔离的洁净发行门禁。
@@ -364,6 +380,7 @@ go -C gateway vet ./...
 - [Protocol Pack v3](docs/PROTOCOL-PACK-V3.md)
 - [协议与号池架构](docs/PROTOCOL-ARCHITECTURE.md)
 - [开源发行门禁](docs/OPEN_SOURCE_RELEASE.md)
+- [Docker 与 LAN 部署](docs/DOCKER.md)
 - [历史来源与独立边界](PROVENANCE.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)

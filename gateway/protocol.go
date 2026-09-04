@@ -142,10 +142,12 @@ type protocolCallContract struct {
 }
 
 type protocolDynamicInput struct {
-	SourceOperationKey string `json:"source_operation_key,omitempty"`
-	SourceCallURL      string `json:"source_call_url,omitempty"`
-	Extract            string `json:"extract,omitempty"`
-	Rule               string `json:"rule"`
+	SourceOperationKey string   `json:"source_operation_key,omitempty"`
+	SourceCallURL      string   `json:"source_call_url,omitempty"`
+	Extract            string   `json:"extract,omitempty"`
+	SourceKind         string   `json:"source_kind,omitempty"`
+	AllowedValues      []string `json:"allowed_values,omitempty"`
+	Rule               string   `json:"rule"`
 }
 
 // protocolPublicRoute publishes the validated route plus its fully resolved
@@ -241,21 +243,81 @@ func publishProtocolRoute(packID, mount string, routes []protocolRoute, route pr
 	if json.Unmarshal(route.RequestBody, &example) != nil {
 		return published
 	}
-	if _, hasModel := example["model"]; !hasModel {
+	dynamicField := ""
+	catalogCapabilities := []string(nil)
+	extract := ""
+	if _, hasModel := example["model"]; hasModel {
+		dynamicField = "model"
+		catalogCapabilities = []string{"ai.models", "openai.models", "media.models"}
+		extract = "data[].id"
+	} else if _, hasModelClass := example["model_cls"]; hasModelClass {
+		dynamicField = "model_cls"
+		catalogCapabilities = []string{"media.models"}
+		extract = "models[].model_cls"
+	}
+	if dynamicField == "" {
 		return published
 	}
-	input := protocolDynamicInput{Rule: "choose a currently advertised model ID; request_example.model is not availability evidence"}
+	input := protocolDynamicInput{Rule: "choose a currently advertised model ID; request_example." + dynamicField + " is not availability evidence"}
 	for _, candidate := range routes {
-		if candidate.OperationID == route.OperationID || (!containsString(candidate.Capabilities, "ai.models") && !containsString(candidate.Capabilities, "openai.models")) {
+		if candidate.OperationID == route.OperationID || !containsAnyString(candidate.Capabilities, catalogCapabilities) {
 			continue
 		}
 		input.SourceOperationKey = packID + "." + candidate.OperationID
 		input.SourceCallURL = mount + candidate.Path
-		input.Extract = "data[].id"
+		input.Extract = extract
+		input.SourceKind = "catalog-operation"
 		break
 	}
-	published.DynamicInputs = map[string]protocolDynamicInput{"model": input}
+	if input.SourceOperationKey == "" {
+		input.AllowedValues = protocolSchemaStringEnum(route.RequestSchema, dynamicField)
+		if len(input.AllowedValues) > 0 {
+			input.SourceKind = "request-schema-enum"
+			input.Extract = "request_schema.properties." + dynamicField + ".enum[]"
+			input.Rule = "choose one model ID declared by the current versioned request schema; refresh discovery when the contract digest changes"
+		}
+	}
+	published.DynamicInputs = map[string]protocolDynamicInput{dynamicField: input}
 	return published
+}
+
+func protocolSchemaStringEnum(raw json.RawMessage, field string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Enum []any `json:"enum"`
+		} `json:"properties"`
+	}
+	if json.Unmarshal(raw, &schema) != nil {
+		return nil
+	}
+	property, ok := schema.Properties[field]
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]bool)
+	values := make([]string, 0, len(property.Enum))
+	for _, rawValue := range property.Enum {
+		value, ok := rawValue.(string)
+		value = strings.TrimSpace(value)
+		if !ok || value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	return values
+}
+
+func containsAnyString(values, candidates []string) bool {
+	for _, candidate := range candidates {
+		if containsString(values, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 // protocolAdminView extends the public Pack view with a management-only,
@@ -866,6 +928,12 @@ func (registry *protocolRegistry) counts() (int, int) {
 }
 
 func registerProtocolRoutes(engine *gin.Engine, runtime localRuntime) {
+	registerProtocolDocumentationRoutes(engine, runtime)
+	registerProtocolConsumerRoutes(engine, runtime)
+	registerProtocolMaintenanceRoutes(engine, runtime)
+}
+
+func registerProtocolDocumentationRoutes(engine *gin.Engine, runtime localRuntime) {
 	engine.GET("/.well-known/localrouter.json", runtime.protocols.handleDiscovery(runtime))
 	engine.GET("/doc", func(c *gin.Context) { c.Redirect(http.StatusPermanentRedirect, "/docs") })
 	engine.GET("/docs", runtime.protocols.handleDocsHTML)
@@ -881,6 +949,9 @@ func registerProtocolRoutes(engine *gin.Engine, runtime localRuntime) {
 	engine.GET("/docs/packs/:id/guide.md", runtime.protocols.handlePackMarkdown)
 	engine.GET("/docs/packs/:id/guides/:guide", runtime.protocols.handleGuideMarkdown)
 	engine.GET("/docs/packs/:id/examples.json", runtime.protocols.handleExamples)
+}
+
+func registerProtocolConsumerRoutes(engine *gin.Engine, runtime localRuntime) {
 	agent := engine.Group("/agent")
 	agent.Use(localAPITokenAuth(runtime))
 	agent.GET("/whoami", handleAgentWhoAmI(runtime))
@@ -892,9 +963,6 @@ func registerProtocolRoutes(engine *gin.Engine, runtime localRuntime) {
 	mcp := engine.Group("/mcp")
 	mcp.Use(localAPITokenAuth(runtime))
 	mcp.POST("", runtime.protocols.handleMCP(runtime))
-	maintenance := engine.Group("/manage/mcp")
-	maintenance.Use(localMaintenanceAuth(runtime))
-	maintenance.POST("", runtime.protocols.handleMaintenanceMCP())
 	workflow := engine.Group("/w")
 	workflow.Use(localAPITokenAuth(runtime))
 	workflow.POST("/:protocol/:workflow", runtime.protocols.handleWorkflowCreate(runtime))
@@ -906,6 +974,12 @@ func registerProtocolRoutes(engine *gin.Engine, runtime localRuntime) {
 	proxy.Use(localAPITokenAuth(runtime))
 	proxy.Any("/:protocol", runtime.protocols.handleProxy)
 	proxy.Any("/:protocol/*path", runtime.protocols.handleProxy)
+}
+
+func registerProtocolMaintenanceRoutes(engine *gin.Engine, runtime localRuntime) {
+	maintenance := engine.Group("/manage/mcp")
+	maintenance.Use(localMaintenanceAuth(runtime))
+	maintenance.POST("", runtime.protocols.handleMaintenanceMCP())
 }
 
 func localMaintenanceAuth(runtime localRuntime) gin.HandlerFunc {

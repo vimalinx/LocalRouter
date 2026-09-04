@@ -5,7 +5,8 @@ base_url="${LOCALROUTER_BASE_URL:-http://127.0.0.1:8317}"
 base_url="${base_url%/}"
 discovery_url="${LOCALROUTER_DISCOVERY_URL:-$base_url/.well-known/localrouter.json}"
 mcp_url="${LOCALROUTER_MCP_URL:-$base_url/mcp}"
-maintenance_mcp_url="${LOCALROUTER_MAINTENANCE_MCP_URL:-$base_url/manage/mcp}"
+maintenance_mcp_url="${LOCALROUTER_MAINTENANCE_MCP_URL:-http://127.0.0.1:8317/manage/mcp}"
+allow_lan="${LOCALROUTER_ALLOW_LAN:-false}"
 xdg_data_home="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
 [[ "$xdg_data_home" = /* ]] || xdg_data_home="$HOME/.local/share"
 default_api_token_file="$xdg_data_home/localrouter/api-token"
@@ -84,6 +85,12 @@ An operator can enable password protection and choose a custom password in
 Run Overview. This does not remove the separate administrator credential used
 by the delegated /manage/mcp operator lane.
 
+For an operator-approved private LAN service listener, set
+LOCALROUTER_ALLOW_LAN=true and point LOCALROUTER_BASE_URL at its advertised
+address. Before reading a Service Token, lr verifies that discovery reports
+scope=lan-service and maintenance.available=false. Maintenance URLs remain
+loopback-only.
+
 operation_id is a semantic selector for lr/Agent/MCP commands, not an HTTP URL.
 Where a command already takes <pack>, <operation> may be either the bare
 operation_id or the published pack-qualified operation_key.
@@ -128,6 +135,46 @@ validate_loopback_url() {
   esac
 }
 
+url_origin() {
+  local candidate_url="$1"
+  case "$candidate_url" in
+    http://*|https://*) ;;
+    *) fail "LocalRouter URL must use http or https: $candidate_url" ;;
+  esac
+  local authority="${candidate_url#*://}"
+  authority="${authority%%/*}"
+  [[ -n "$authority" && "$authority" != *"@"* ]] || fail "LocalRouter URL authority is invalid: $candidate_url"
+  printf '%s://%s\n' "${candidate_url%%://*}" "$authority"
+}
+
+service_url_is_loopback=true
+validate_service_urls() {
+  case "$base_url" in
+    http://127.0.0.1:*|http://\[::1\]:*) ;;
+    *)
+      service_url_is_loopback=false
+      [[ "$allow_lan" == "true" ]] || fail "refusing non-loopback LocalRouter URL without LOCALROUTER_ALLOW_LAN=true: $base_url"
+      ;;
+  esac
+  local base_origin discovery_origin mcp_origin
+  base_origin="$(url_origin "$base_url")"
+  discovery_origin="$(url_origin "$discovery_url")"
+  mcp_origin="$(url_origin "$mcp_url")"
+  [[ "$discovery_origin" == "$base_origin" ]] || fail "discovery URL must share the LocalRouter service origin"
+  [[ "$mcp_origin" == "$base_origin" ]] || fail "MCP URL must share the LocalRouter service origin"
+}
+
+lan_contract_verified=false
+verify_lan_contract() {
+  [[ "$service_url_is_loopback" == "false" ]] || return 0
+  [[ "$lan_contract_verified" == "false" ]] || return 0
+  local contract
+  contract="$(curl --noproxy '*' --fail-with-body --silent --show-error "$discovery_url")" || report_curl_failure "$?"
+  jq -e '.scope == "lan-service" and .maintenance.available == false and .maintenance.scope == "loopback"' >/dev/null <<<"$contract" ||
+    fail "refusing to send a Service Token because discovery is not a service-only LAN contract"
+  lan_contract_verified=true
+}
+
 discovery() {
   curl --noproxy '*' --fail-with-body --silent --show-error "$discovery_url"
 }
@@ -165,10 +212,17 @@ bearer_request() {
   local method="$2"
   local request_url="$3"
   local body="${4:-}"
+  local max_time_seconds="${5:-}"
   local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --request "$method")
+  if [[ -n "$max_time_seconds" ]]; then
+    [[ "$max_time_seconds" =~ ^[0-9]+$ ]] && ((10#$max_time_seconds >= 1 && 10#$max_time_seconds <= 120)) ||
+      fail "request timeout must be between 1 and 120 seconds"
+    curl_arguments+=(--connect-timeout 5 --max-time "$max_time_seconds")
+  fi
   if [[ -n "$body" && "$method" != "GET" && "$method" != "HEAD" ]]; then
     curl_arguments+=(--header 'Content-Type: application/json' --data-binary @-)
   fi
+  verify_lan_contract
   read_bearer_token "$token_file"
   if [[ -n "$body" && "$method" != "GET" && "$method" != "HEAD" ]]; then
     curl "${curl_arguments[@]}" "$request_url" 3< <(curl_config_with_auth) <<<"$body" || report_curl_failure "$?"
@@ -224,11 +278,11 @@ command_status() {
   discovery_json="$(discovery)"
   jq -n --argjson health "$health_json" --argjson contract "$discovery_json" '{
     health: $health,
-    console: {
-      url: "/",
+    console: (if $contract.scope == "loopback" then {
+      available: true, url: "/",
       auth_enabled: ($contract.maintenance.console_auth.enabled // false),
       default_auth_enabled: ($contract.maintenance.console_auth.default_enabled // false)
-    },
+    } else {available:false, url:null, scope:"loopback-only"} end),
     compatibility_packs: [$contract.compatibility_packs[]? | {
       id, kind, status, ready, mounts,
       operations: (.routes | length),
@@ -341,6 +395,15 @@ command_find_model() {
   local search_text="${1:-}"
   local result_limit="${2:-20}"
   local exact_only="${3:-false}"
+  local requested_pack=""
+  if [[ "$exact_only" == "true" && "$search_text" == *:* ]]; then
+    requested_pack="${search_text%%:*}"
+    [[ "$requested_pack" =~ ^[a-z0-9][a-z0-9._-]*$ && -n "${search_text#*:}" ]] ||
+      fail "exact model selection must use <pack>:<model-id>"
+  fi
+  local catalog_timeout="${LOCALROUTER_MODEL_CATALOG_TIMEOUT_SECONDS:-10}"
+  [[ "$catalog_timeout" =~ ^[0-9]+$ ]] && ((10#$catalog_timeout >= 1 && 10#$catalog_timeout <= 120)) ||
+    fail "LOCALROUTER_MODEL_CATALOG_TIMEOUT_SECONDS must be between 1 and 120"
   local contract search_tmp model_rows source_rows failure_rows
   contract="$(discovery)"
   search_tmp="$(mktemp -d "${TMPDIR:-/tmp}/localrouter-model-search.XXXXXX")"
@@ -351,30 +414,62 @@ command_find_model() {
   : >"$model_rows"
   : >"$source_rows"
   : >"$failure_rows"
+  jq -c --arg requested_pack "$requested_pack" '
+    .protocols[] as $protocol
+    | select($protocol.ready == true)
+    | select($requested_pack == "" or $protocol.id == $requested_pack)
+    | $protocol.routes[] as $route
+    | $route.dynamic_inputs[]?
+    | select(.source_kind == "request-schema-enum")
+    | (.allowed_values // [])[]
+    | {
+        id: ., pack: $protocol.id, pack_name: $protocol.name,
+        pack_description: $protocol.description,
+        source_kind: "request-schema-enum", source_operation_key: null,
+        model_key: ($protocol.id + ":" + .)
+      }
+  ' <<<"$contract" >>"$model_rows"
+  jq -c --arg requested_pack "$requested_pack" '
+    .protocols[] as $protocol
+    | select($protocol.ready == true)
+    | select($requested_pack == "" or $protocol.id == $requested_pack)
+    | $protocol.routes[] as $route
+    | $route.dynamic_inputs[]?
+    | select(.source_kind == "request-schema-enum" and ((.allowed_values // []) | length) > 0)
+    | {
+        pack: $protocol.id, operation_key: $route.operation_key,
+        call_url: null, status: "contract", source_kind: "request-schema-enum",
+        models: (.allowed_values | length)
+      }
+  ' <<<"$contract" >>"$source_rows"
   while IFS=$'\t' read -r pack_id pack_name pack_description operation_key call_url; do
     [[ -n "$pack_id" ]] || continue
     local response parsed
-    if response="$(authenticated_request GET "$base_url$call_url" 2>/dev/null)" && parsed="$(jq -c '
+    if response="$(authenticated_request GET "$base_url$call_url" '' "$catalog_timeout" 2>/dev/null)" && parsed="$(jq -c '
       if (.data | type) == "array" then .data
       elif (.models | type) == "array" then .models
       else [] end
       | map(
           if type == "string" then {id: .}
-          elif type == "object" then {id: (.id // .name // .model // ""), owned_by: (.owned_by // .provider // null)}
+          elif type == "object" then . + {
+            id: (.id // .model_cls // .model // (if (.name | type) == "string" then .name else "" end)),
+            owned_by: (.owned_by // .provider // .task // null)
+          }
           else {id: ""} end
         )
-      | map(select(.id != ""))
+      | map(select((.id | type) == "string" and .id != ""))
     ' <<<"$response")"; then
       jq -cn --arg pack "$pack_id" --arg operation_key "$operation_key" --arg call_url "$call_url" --argjson count "$(jq 'length' <<<"$parsed")" '{pack:$pack,operation_key:$operation_key,call_url:$call_url,status:"ok",models:$count}' >>"$source_rows"
-      jq -c --arg pack "$pack_id" --arg pack_name "$pack_name" --arg description "$pack_description" --arg operation_key "$operation_key" '.[] | . + {pack:$pack,pack_name:$pack_name,pack_description:$description,operation_key:$operation_key,model_key:($pack + ":" + .id)}' <<<"$parsed" >>"$model_rows"
+      jq -c --arg pack "$pack_id" --arg pack_name "$pack_name" --arg description "$pack_description" --arg operation_key "$operation_key" '.[] | . + {pack:$pack,pack_name:$pack_name,pack_description:$description,operation_key:$operation_key,source_kind:"catalog-operation",model_key:($pack + ":" + .id)}' <<<"$parsed" >>"$model_rows"
     else
       jq -cn --arg pack "$pack_id" --arg operation_key "$operation_key" --arg call_url "$call_url" '{pack:$pack,operation_key:$operation_key,call_url:$call_url,reason:"model catalog call failed"}' >>"$failure_rows"
     fi
-  done < <(jq -r '
+  done < <(jq -r --arg requested_pack "$requested_pack" '
     .protocols[] as $protocol
     | select($protocol.ready == true)
+    | select($requested_pack == "" or $protocol.id == $requested_pack)
     | $protocol.routes[]
-    | select((.capabilities // []) | any(. == "ai.models" or . == "openai.models"))
+    | select((.capabilities // []) | any(. == "ai.models" or . == "openai.models" or . == "media.models"))
     | select((.methods // []) | index("GET"))
     | [$protocol.id, $protocol.name, $protocol.description, .operation_key, .call_url] | @tsv
   ' <<<"$contract")
@@ -395,7 +490,7 @@ command_find_model() {
       | ($query | words) as $terms
       | ($terms | map(select(. != "free" and . != "quota" and . != "coding" and . != "omp"))) as $specific_terms
       | (if ($specific_terms | length) > 0 then $specific_terms else $terms end) as $identity_terms
-      | ($models | map(
+      | ($models | unique_by(.model_key) | map(
           ([.pack, .id, (.owned_by // "")] | join(" ") | ascii_downcase) as $identity_haystack
           | ([.pack_description] | join(" ") | ascii_downcase) as $context_haystack
           | ([ $identity_terms[] | . as $term | select($identity_haystack | contains($term)) ] | length) as $identity_score
@@ -408,7 +503,10 @@ command_find_model() {
                 $contract.protocols[]
                 | select(.id == $model.pack and .ready == true)
                 | .routes[]
-                | select(.dynamic_inputs.model.source_operation_key == $model.operation_key)
+                | select(any(.dynamic_inputs[]?;
+                    (.source_kind == "catalog-operation" and .source_operation_key == $model.operation_key)
+                    or (.source_kind == "request-schema-enum" and ((.allowed_values // []) | index($model.id) != null))
+                  ))
                 | {operation_key, operation_id, methods, call_url, summary}
               ]
             }
@@ -1002,9 +1100,7 @@ command_env() {
 require_command curl
 require_command jq
 require_command stat
-validate_loopback_url "$base_url"
-validate_loopback_url "$discovery_url"
-validate_loopback_url "$mcp_url"
+validate_service_urls
 validate_loopback_url "$maintenance_mcp_url"
 
 command_name="${1:-help}"

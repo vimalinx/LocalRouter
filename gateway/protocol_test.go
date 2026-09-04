@@ -212,6 +212,55 @@ Use the generated operation contract before calling search.
 	assert.Equal(t, "/docs", docAlias.Header().Get("Location"))
 }
 
+func TestPublishProtocolRouteLinksMediaModelClassToCatalog(t *testing.T) {
+	routes := []protocolRoute{
+		{
+			OperationID:  "models.list",
+			Capabilities: []string{"media.models"},
+			Methods:      []string{http.MethodGet},
+			Path:         "/models",
+			Summary:      "List media models",
+		},
+		{
+			OperationID:  "tasks.create",
+			Capabilities: []string{"media.generate"},
+			Methods:      []string{http.MethodPost},
+			Path:         "/tasks",
+			Summary:      "Create media task",
+			RequestBody:  json.RawMessage(`{"task":"t2v","model_cls":"fixture-video"}`),
+		},
+	}
+
+	published := publishProtocolRoute("media", "/p/media", routes, routes[1])
+	require.Contains(t, published.DynamicInputs, "model_cls")
+	assert.Equal(t, "media.models.list", published.DynamicInputs["model_cls"].SourceOperationKey)
+	assert.Equal(t, "/p/media/models", published.DynamicInputs["model_cls"].SourceCallURL)
+	assert.Equal(t, "models[].model_cls", published.DynamicInputs["model_cls"].Extract)
+}
+
+func TestPublishProtocolRouteUsesExplicitModelEnumWithoutCatalog(t *testing.T) {
+	route := protocolRoute{
+		OperationID:  "video.create",
+		Capabilities: []string{"video.generate"},
+		Methods:      []string{http.MethodPost},
+		Path:         "/video",
+		Summary:      "Create video",
+		RequestBody:  json.RawMessage(`{"model":"v6","prompt":"fixture"}`),
+		RequestSchema: json.RawMessage(`{
+			"type":"object",
+			"required":["model","prompt"],
+			"properties":{"model":{"type":"string","enum":["v6"]},"prompt":{"type":"string"}}
+		}`),
+	}
+
+	published := publishProtocolRoute("video", "/p/video", []protocolRoute{route}, route)
+	require.Contains(t, published.DynamicInputs, "model")
+	assert.Equal(t, "request-schema-enum", published.DynamicInputs["model"].SourceKind)
+	assert.Equal(t, []string{"v6"}, published.DynamicInputs["model"].AllowedValues)
+	assert.Equal(t, "request_schema.properties.model.enum[]", published.DynamicInputs["model"].Extract)
+	assert.Empty(t, published.DynamicInputs["model"].SourceOperationKey)
+}
+
 func TestProtocolActivationPersistsWithoutChangingPackDefinition(t *testing.T) {
 	t.Parallel()
 

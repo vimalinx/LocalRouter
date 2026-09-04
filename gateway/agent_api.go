@@ -124,12 +124,16 @@ func decodeAgentRequest(c *gin.Context, destination any) error {
 
 func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
+	console := "/#tokens"
+	if requestServerScope(c) == lanServiceScope {
+		console = "loopback-only"
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "localrouter.agent.contract", "schema_version": agentContractSchemaVersion,
 		"contract_digest": registry.currentDigest(),
 		"authentication":  gin.H{"type": "bearer", "header": "Authorization", "token_purpose": "service-call-only"},
 		"identity": gin.H{
-			"binding": "service-token", "registration": "operator-issued", "console": "/#tokens",
+			"binding": "service-token", "registration": "operator-issued", "console": console,
 			"required_fields": []string{"agent_code", "agent_name", "workspace"},
 			"whoami":          "/agent/whoami", "secret_values_returned": false,
 		},
@@ -494,8 +498,24 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		} else {
 			addCheck("request_schema", "pass", descriptor.SchemaSource+" request schema accepts the input", false)
 		}
-		if dynamicModel, dynamic := descriptor.DynamicInputs["model"]; dynamic && modelName != "" {
-			addCheck("dynamic_inputs", "warn", "preflight does not call the upstream catalog; first require an exact live match for "+descriptor.Pack+":"+modelName+" from "+dynamicModel.SourceOperationKey, false)
+		dynamicFields := make([]string, 0, len(descriptor.DynamicInputs))
+		mappedInput, _ := input.(map[string]any)
+		for field := range descriptor.DynamicInputs {
+			dynamicFields = append(dynamicFields, field)
+		}
+		sort.Strings(dynamicFields)
+		for _, field := range dynamicFields {
+			value, _ := mappedInput[field].(string)
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			dynamic := descriptor.DynamicInputs[field]
+			source := dynamic.SourceOperationKey
+			if dynamic.SourceKind == "request-schema-enum" {
+				source = "the current versioned request schema enum"
+			}
+			addCheck("dynamic_inputs."+field, "warn", "preflight does not refresh model discovery; first require an exact match for "+descriptor.Pack+":"+value+" from "+source, false)
 		}
 		if len(descriptor.Pricing) == 0 {
 			addCheck("pricing", "warn", "operation price is unknown", false)
@@ -732,8 +752,13 @@ func agentInputModel(input any) string {
 	if !ok {
 		return ""
 	}
-	model, _ := mapped["model"].(string)
-	return strings.TrimSpace(model)
+	for _, field := range []string{"model", "model_cls"} {
+		model, _ := mapped[field].(string)
+		if model = strings.TrimSpace(model); model != "" {
+			return model
+		}
+	}
+	return ""
 }
 
 func operationAliases(pricing []protocolPricingEntry, capabilities []string) []string {

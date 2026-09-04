@@ -6,6 +6,7 @@ Read this reference before planning, applying, restarting runtime code, or claim
 
 - **Pack-only:** top-level Pack JSON, authored guides, catalogs, and Pack WASM modules use the draft/digest lifecycle. No process restart is required.
 - **Runtime:** Go handlers/runtime schemas require Go tests, build, controlled restart, listener verification, and then Pack lifecycle if managed files also changed.
+- **LAN/container runtime:** additionally verify the operator listener remains loopback-only, the LAN listener omits all management routes, Service Tokens and Origin policy are enforced, container state persists across recreation, and no native/container process shares the same SQLite state concurrently.
 - **WebUI:** source requires tests, typecheck, build into embedded assets, Go rebuild, controlled restart, and rendered browser acceptance.
 - **External maintainer:** pool scripts/services are outside Pack rollback. Test their file format, permissions, atomic write, timers, and real read-only provider behavior separately.
 

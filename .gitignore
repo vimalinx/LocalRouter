@@ -1,6 +1,7 @@
 # Local runtime state and evidence
 .ai/
 .workspace/
+.env
 gateway/data/
 gateway/logs/
 gateway/state-locks/

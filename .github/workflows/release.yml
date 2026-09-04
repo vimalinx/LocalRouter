@@ -24,6 +24,7 @@ jobs:
           bun-version: 1.3.14
       - run: test "v$(tr -d '\n' < VERSION)" = "$GITHUB_REF_NAME"
       - run: ./tests/verify.sh
+      - run: ./tests/docker_acceptance.sh
       - run: go run github.com/zricethezav/gitleaks/v8@v8.28.0 git --no-banner --redact=100 .
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
         working-directory: gateway

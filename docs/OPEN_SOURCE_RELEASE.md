@@ -9,6 +9,7 @@ local runtime state.
 - Protocol Pack schemas, examples, guides, tests, and Agent Skill
 - native gateway source with no vendored reference-gateway repository
 - XDG installer, user systemd unit, Release archive configuration and CI workflows
+- reproducible Dockerfile, hardened Linux host-network Compose deployment, LAN service isolation tests, and migration documentation
 - AGPL license, notices, provenance, security policy, and dependency inventory
 
 ## Excluded
@@ -37,6 +38,9 @@ local runtime state.
 9. A pinned GoReleaser snapshot produces verified amd64 and arm64 archives;
    checksums, CPU architecture, required legal/installer files, global Agent
    Skill installation, and the archive-only install path all pass.
+10. `tests/docker_acceptance.sh` builds the pinned multi-stage image, verifies
+    non-root/read-only execution, LAN management-route absence, graceful
+    shutdown and persistent Token state without contacting a provider.
 
 Run the complete clean-source gate with:
 

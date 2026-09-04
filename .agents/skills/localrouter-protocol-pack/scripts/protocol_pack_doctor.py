@@ -406,13 +406,22 @@ class Doctor:
             if request_example is not None and route.get("request_example_role") != "illustrative-shape":
                 contract_ok = False
                 invocation_failures.append(f"{operation_id}:request-example-role")
-            if isinstance(request_example, dict) and "model" in request_example:
-                model_input = (route.get("dynamic_inputs") or {}).get("model") or {}
+            dynamic_field = next(
+                (
+                    field
+                    for field in ("model", "model_cls")
+                    if isinstance(request_example, dict) and field in request_example
+                ),
+                None,
+            )
+            if dynamic_field is not None:
+                model_input = (route.get("dynamic_inputs") or {}).get(dynamic_field) or {}
                 if not isinstance(model_input.get("rule"), str) or not model_input.get("rule"):
                     contract_ok = False
                     invocation_failures.append(f"{operation_id}:dynamic-model")
+                source_kind = model_input.get("source_kind")
                 source_key = model_input.get("source_operation_key")
-                if isinstance(source_key, str):
+                if source_kind == "catalog-operation" and isinstance(source_key, str):
                     source_operation = source_key.removeprefix(f"{pack_id}.")
                     source_route = next(
                         (
@@ -427,10 +436,34 @@ class Doctor:
                         not isinstance(source_route, dict)
                         or model_input.get("source_call_url")
                         != source_route.get("call_url")
-                        or model_input.get("extract") != "data[].id"
+                        or model_input.get("extract")
+                        != (
+                            "models[].model_cls"
+                            if dynamic_field == "model_cls"
+                            else "data[].id"
+                        )
                     ):
                         contract_ok = False
                         invocation_failures.append(f"{operation_id}:dynamic-model-source")
+                elif source_kind == "request-schema-enum":
+                    request_schema = route.get("request_schema") or {}
+                    properties = request_schema.get("properties") or {}
+                    field_schema = properties.get(dynamic_field) or {}
+                    enum_values = field_schema.get("enum")
+                    allowed_values = model_input.get("allowed_values")
+                    if (
+                        not isinstance(enum_values, list)
+                        or not enum_values
+                        or not all(isinstance(value, str) for value in enum_values)
+                        or allowed_values != enum_values
+                        or model_input.get("source_operation_key") not in (None, "")
+                        or model_input.get("source_call_url") not in (None, "")
+                    ):
+                        contract_ok = False
+                        invocation_failures.append(f"{operation_id}:dynamic-model-enum")
+                else:
+                    contract_ok = False
+                    invocation_failures.append(f"{operation_id}:dynamic-model-source")
         for guide in guides:
             if not isinstance(guide, dict):
                 contract_ok = False

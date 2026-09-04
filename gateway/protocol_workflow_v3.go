@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -210,9 +212,10 @@ func (registry *protocolRegistry) handleGraphWorkflowCreate(c *gin.Context, runt
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot allocate callback token"})
 		return
 	}
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
+	callbackBaseURL, err := workflowCallbackBaseURL(c, runtime)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"success": false, "message": err.Error()})
+		return
 	}
 	now := time.Now().UTC()
 	job := protocolWorkflowJob{
@@ -221,7 +224,7 @@ func (registry *protocolRegistry) handleGraphWorkflowCreate(c *gin.Context, runt
 		CreatedAt: now, UpdatedAt: now, NextPollAt: now,
 		Input: append(json.RawMessage(nil), body...), Context: make(map[string]json.RawMessage),
 		CurrentStep: workflow.InitialStep, CallbackToken: callbackToken,
-		CallbackURL:  fmt.Sprintf("%s://%s/w/callback/%s/%s/%s/%s", scheme, c.Request.Host, definition.ID, workflow.ID, jobID, callbackToken),
+		CallbackURL:  fmt.Sprintf("%s/w/callback/%s/%s/%s/%s", callbackBaseURL, definition.ID, workflow.ID, jobID, callbackToken),
 		OwnerTokenID: c.GetInt(tokenPolicyContextID),
 	}
 	registry.workflowMu.Lock()
@@ -247,6 +250,20 @@ func (registry *protocolRegistry) handleGraphWorkflowCreate(c *gin.Context, runt
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
+}
+
+func workflowCallbackBaseURL(c *gin.Context, runtime localRuntime) (string, error) {
+	if requestServerScope(c) == lanServiceScope {
+		if runtime.config.LANPublicBaseURL != "" {
+			return runtime.config.LANPublicBaseURL, nil
+		}
+		ip := net.ParseIP(runtime.config.LANHost)
+		if ip == nil || ip.IsUnspecified() {
+			return "", errors.New("LAN workflows require LOCAL_GATEWAY_LAN_PUBLIC_BASE_URL when the LAN listener uses an unspecified address")
+		}
+		return "http://" + net.JoinHostPort(runtime.config.LANHost, strconv.Itoa(runtime.config.LANPort)), nil
+	}
+	return "http://" + net.JoinHostPort(runtime.config.Host, strconv.Itoa(runtime.config.Port)), nil
 }
 
 func (registry *protocolRegistry) handleGraphWorkflowGet(c *gin.Context, runtime localRuntime, definition protocolDefinition, workflow protocolWorkflow) {

@@ -94,6 +94,46 @@ func TestProtocolV3ExpressionsTargetsHMACAndReadiness(t *testing.T) {
 	assert.Equal(t, int32(1), probeCount.Load(), "readiness probe should be cached")
 }
 
+func TestProtocolV3ReadinessProbeTriesAnotherPooledCredential(t *testing.T) {
+	t.Parallel()
+	var probeCount atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		probeCount.Add(1)
+		if request.Header.Get("Authorization") == "Bearer good-secret" {
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"current-user"}`))
+			return
+		}
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"error":"invalid token"}`))
+	}))
+	defer upstream.Close()
+
+	protocolDir, dataDir := t.TempDir(), t.TempDir()
+	writeProtocolPool(t, dataDir, "probe", protocolCredentialFile{SchemaVersion: "1", Credentials: []protocolCredential{
+		{ID: "bad", Secret: "bad-secret"},
+		{ID: "good", Secret: "good-secret"},
+	}})
+	writeProtocolDefinition(t, protocolDir, protocolDefinition{
+		SchemaVersion: protocolSchemaVersionV3, ID: "probe", Name: "Probe", Description: "Pooled readiness probe", Enabled: true,
+		BaseURL: upstream.URL,
+		Auth:    protocolAuth{Type: "bearer"},
+		Pool: &protocolPoolConfig{
+			Mode: "local", CredentialsFile: "protocol-pools/probe.json", Strategy: "least-inflight", MaxAttempts: 2,
+			MaxInFlightPerCredential: 1, InFlightLeaseSeconds: 30, UnauthorizedAction: "cooldown", UnauthorizedCooldownSeconds: 60,
+		},
+		Readiness: &protocolReadinessConfig{Mode: "probe", Path: "/health", Expression: `body.id == "current-user"`},
+		Routes:    []protocolRoute{{OperationID: "read", Methods: []string{http.MethodGet}, Path: "/read", Summary: "Read"}},
+	})
+	registry, err := newProtocolRegistry(protocolDir, dataDir)
+	require.NoError(t, err)
+
+	ready, status := registry.readiness(registry.templates["probe"])
+	require.True(t, ready)
+	assert.Equal(t, "ready", status)
+	assert.Equal(t, int32(2), probeCount.Load())
+}
+
 func TestProtocolV3SupplierProfilePreservesRawQueryAndCustomizesHeaders(t *testing.T) {
 	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
