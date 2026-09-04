@@ -194,6 +194,9 @@ export type ProtocolDraft = {
   id: string
   updated_at: string
   digest?: string
+  base_digest?: string
+  live_digest: string
+  stale: boolean
   valid: boolean
   error?: string
   files: string[]

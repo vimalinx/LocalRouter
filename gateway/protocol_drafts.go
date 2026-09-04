@@ -18,16 +18,25 @@ import (
 )
 
 const maxProtocolDraftFileBytes = 2 << 20
+const protocolDraftBaseDigestFile = ".localrouter-base-digest"
+
+var (
+	errProtocolDraftBaseUnknown = errors.New("draft base digest is missing or invalid")
+	errProtocolDraftStale       = errors.New("draft base digest no longer matches live configuration")
+)
 
 type protocolDraftView struct {
-	ID        string                     `json:"id"`
-	UpdatedAt time.Time                  `json:"updated_at"`
-	Digest    string                     `json:"digest,omitempty"`
-	Valid     bool                       `json:"valid"`
-	Error     string                     `json:"error,omitempty"`
-	Files     []string                   `json:"files"`
-	Protocols []protocolCandidateSummary `json:"protocols,omitempty"`
-	Impact    protocolDraftImpact        `json:"impact"`
+	ID         string                     `json:"id"`
+	UpdatedAt  time.Time                  `json:"updated_at"`
+	Digest     string                     `json:"digest,omitempty"`
+	BaseDigest string                     `json:"base_digest,omitempty"`
+	LiveDigest string                     `json:"live_digest"`
+	Stale      bool                       `json:"stale"`
+	Valid      bool                       `json:"valid"`
+	Error      string                     `json:"error,omitempty"`
+	Files      []string                   `json:"files"`
+	Protocols  []protocolCandidateSummary `json:"protocols,omitempty"`
+	Impact     protocolDraftImpact        `json:"impact"`
 }
 
 type protocolDraftFileChange struct {
@@ -58,6 +67,62 @@ type protocolDraftImpact struct {
 
 func (registry *protocolRegistry) draftBase() string {
 	return filepath.Join(registry.stateDir, "protocol-drafts")
+}
+
+func readProtocolDraftBaseDigest(root string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(root, protocolDraftBaseDigestFile))
+	if err != nil {
+		return "", errProtocolDraftBaseUnknown
+	}
+	digest := strings.TrimSpace(string(data))
+	if !validProtocolDigest(digest) {
+		return "", errProtocolDraftBaseUnknown
+	}
+	return digest, nil
+}
+
+func writeProtocolDraftBaseDigest(root, digest string) error {
+	if !validProtocolDigest(digest) {
+		return errProtocolDraftBaseUnknown
+	}
+	temporary, err := os.CreateTemp(root, ".localrouter-base-digest-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.WriteString(digest + "\n"); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, filepath.Join(root, protocolDraftBaseDigestFile))
+}
+
+func (registry *protocolRegistry) seedProtocolDraft(root string) error {
+	baseDigest := registry.currentDigest()
+	if err := copyProtocolDraftTree(registry.dir, root); err != nil {
+		return err
+	}
+	return writeProtocolDraftBaseDigest(root, baseDigest)
+}
+
+func (registry *protocolRegistry) currentProtocolDraftBase(root string) (string, string, error) {
+	liveDigest := registry.currentDigest()
+	baseDigest, err := readProtocolDraftBaseDigest(root)
+	if err != nil {
+		return "", liveDigest, errProtocolDraftBaseUnknown
+	}
+	if baseDigest != liveDigest {
+		return baseDigest, liveDigest, errProtocolDraftStale
+	}
+	return baseDigest, liveDigest, nil
 }
 
 func (registry *protocolRegistry) invalidateDraftPlanLocked(id string) {
@@ -131,7 +196,13 @@ func protocolDraftRelativePath(raw string, write bool) (string, bool) {
 }
 
 func (registry *protocolRegistry) draftView(id, root string) protocolDraftView {
-	view := protocolDraftView{ID: id, Files: []string{}, Impact: registry.protocolDraftImpact(root)}
+	view := protocolDraftView{ID: id, LiveDigest: registry.currentDigest(), Files: []string{}, Impact: registry.protocolDraftImpact(root)}
+	if baseDigest, err := readProtocolDraftBaseDigest(root); err == nil {
+		view.BaseDigest = baseDigest
+		view.Stale = baseDigest != view.LiveDigest
+	} else {
+		view.Stale = true
+	}
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() {
 			return walkErr
@@ -502,7 +573,7 @@ func (registry *protocolRegistry) handleDraftCreate(c *gin.Context) {
 		c.JSON(status, gin.H{"success": false, "message": "draft already exists or cannot be created"})
 		return
 	}
-	if err := copyProtocolDraftTree(registry.dir, root); err != nil {
+	if err := registry.seedProtocolDraft(root); err != nil {
 		_ = os.RemoveAll(root)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot seed draft"})
 		return
@@ -625,12 +696,23 @@ func (registry *protocolRegistry) handleDraftValidate(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "unknown draft"})
 		return
 	}
+	baseDigest, liveDigest, baseErr := registry.currentProtocolDraftBase(root)
+	if baseErr != nil {
+		code := "draft_base_unknown"
+		message := "draft predates version-bound drafts and cannot be safely released"
+		if errors.Is(baseErr, errProtocolDraftStale) {
+			code = "stale_draft"
+			message = "live configuration changed after this draft was opened"
+		}
+		c.JSON(http.StatusConflict, gin.H{"success": false, "code": code, "message": message, "base_digest": baseDigest, "live_digest": liveDigest, "next_action": "Open a new draft from current live configuration and reapply only the intended changes."})
+		return
+	}
 	candidate, err := registry.readProtocolCandidate(root)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"draft_id": c.Param("id"), "digest": candidate.Digest, "protocols": summarizeProtocolCandidate(candidate)}})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"draft_id": c.Param("id"), "digest": candidate.Digest, "base_digest": baseDigest, "protocols": summarizeProtocolCandidate(candidate)}})
 }
 
 func (registry *protocolRegistry) handleDraftPlan(c *gin.Context) {
@@ -641,21 +723,29 @@ func (registry *protocolRegistry) handleDraftPlan(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "unknown draft"})
 		return
 	}
+	baseDigest, liveDigest, baseErr := registry.currentProtocolDraftBase(root)
+	if baseErr != nil {
+		code := "draft_base_unknown"
+		message := "draft predates version-bound drafts and cannot be safely released"
+		if errors.Is(baseErr, errProtocolDraftStale) {
+			code = "stale_draft"
+			message = "live configuration changed after this draft was opened"
+		}
+		c.JSON(http.StatusConflict, gin.H{"success": false, "code": code, "message": message, "base_digest": baseDigest, "live_digest": liveDigest, "next_action": "Open a new draft from current live configuration and reapply only the intended changes."})
+		return
+	}
 	candidate, err := registry.readProtocolCandidate(root)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	registry.mu.RLock()
-	liveDigest := registry.liveDigest
-	registry.mu.RUnlock()
 	ids := make([]string, 0, len(candidate.Definitions))
 	for id := range candidate.Definitions {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	files, _ := protocolManagedFiles(root, candidate.Definitions)
-	plan := protocolPackPlan{Digest: candidate.Digest, LiveDigest: liveDigest, CreatedAt: time.Now().UTC(), Protocols: ids, DraftID: c.Param("id"), Files: files}
+	plan := protocolPackPlan{Digest: candidate.Digest, BaseDigest: baseDigest, LiveDigest: liveDigest, CreatedAt: time.Now().UTC(), Protocols: ids, DraftID: c.Param("id"), Files: files}
 	registry.pendingPlan = &plan
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": plan})
 }

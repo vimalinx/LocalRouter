@@ -39,6 +39,8 @@ For repository authoring:
 
 For a port-only draft, use `localrouter_draft_review`, pass its exact digest to `localrouter_draft_plan`, then pass the plan digest to `localrouter_draft_apply`. The candidate and live base must still match the plan. Digest drift requires another review; never overwrite a newer live release.
 
+Each new draft records the live digest it was seeded from. If another release changes live before review or plan, LocalRouter returns `stale_draft` and blocks the old full-tree snapshot; if the base marker is absent or invalid, it returns `draft_base_unknown`. Open a fresh draft from current live and reapply only the intended edits. After a successful apply, LocalRouter advances that draft's base marker to the installed digest so deliberate successive releases from the same draft remain safe.
+
 Apply captures an immutable revision before atomically replacing live managed files, re-reads the installed tree, and verifies its digest. A local verification failure preserves the draft and automatically attempts the previous revision. Read the structured rollback result before any retry. Do not use the legacy reload endpoint for Agent-managed releases.
 
 ## After apply or runtime restart

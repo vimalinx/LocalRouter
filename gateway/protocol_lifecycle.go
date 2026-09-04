@@ -26,6 +26,7 @@ type protocolCandidate struct {
 
 type protocolPackPlan struct {
 	Digest     string    `json:"digest"`
+	BaseDigest string    `json:"base_digest,omitempty"`
 	LiveDigest string    `json:"live_digest"`
 	CreatedAt  time.Time `json:"created_at"`
 	Protocols  []string  `json:"protocols"`
@@ -322,6 +323,14 @@ func (registry *protocolRegistry) applyPlannedProtocolDigest(digest string) (any
 			failure := maintenanceFailure(registry, "draft_missing", "apply", "planned draft no longer exists", false, false)
 			return nil, &failure
 		}
+		baseDigest, _, err := registry.currentProtocolDraftBase(sourceRoot)
+		if err != nil || baseDigest != plan.BaseDigest {
+			failure := maintenanceFailure(registry, "draft_base_changed_after_plan", "apply", "draft base changed after plan; open a new draft from current live configuration", false, true)
+			failure.BaseDigest = baseDigest
+			failure.LiveDigest = registry.currentDigest()
+			failure.NextAction = "Open a new draft from current live configuration and reapply only the intended changes."
+			return nil, &failure
+		}
 	}
 	candidate, err := registry.readProtocolCandidate(sourceRoot)
 	if err != nil {
@@ -362,11 +371,19 @@ func (registry *protocolRegistry) applyPlannedProtocolDigest(digest string) (any
 	registry.readinessCache = make(map[string]protocolReadinessRuntime)
 	registry.readinessMu.Unlock()
 	registry.pendingPlan = nil
-	return gin.H{
+	result := gin.H{
 		"receipt": "PAP-" + time.Now().UTC().Format("20060102T150405Z") + "-" + candidate.Digest[:8],
 		"digest":  candidate.Digest, "previous_digest": previousDigest, "verified": true,
 		"protocols": registry.views(),
-	}, nil
+	}
+	if plan.DraftID != "" {
+		draftBaseUpdated := writeProtocolDraftBaseDigest(sourceRoot, candidate.Digest) == nil
+		result["draft_base_updated"] = draftBaseUpdated
+		if !draftBaseUpdated {
+			result["next_action"] = "The release succeeded, but this draft cannot be reused safely; open a new draft from current live configuration."
+		}
+	}
+	return result, nil
 }
 
 func (registry *protocolRegistry) verifyInstalledProtocolCandidate(digest string) error {

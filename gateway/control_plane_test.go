@@ -67,6 +67,9 @@ func TestProtocolDraftValidatePlanApplyAndDelete(t *testing.T) {
 		Data protocolDraftView `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(updated.Body.Bytes(), &updatedEnvelope))
+	require.NotEmpty(t, updatedEnvelope.Data.BaseDigest)
+	assert.Equal(t, updatedEnvelope.Data.BaseDigest, updatedEnvelope.Data.LiveDigest)
+	assert.False(t, updatedEnvelope.Data.Stale)
 	require.Equal(t, 1, updatedEnvelope.Data.Impact.ChangedFiles)
 	require.Len(t, updatedEnvelope.Data.Impact.Protocols, 1)
 	assert.Equal(t, "demo", updatedEnvelope.Data.Impact.Protocols[0].ID)
@@ -101,6 +104,7 @@ func TestProtocolDraftValidatePlanApplyAndDelete(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(planned.Body.Bytes(), &envelope))
 	require.Equal(t, "change", envelope.Data.DraftID)
+	require.Equal(t, updatedEnvelope.Data.BaseDigest, envelope.Data.BaseDigest)
 	applied := performJSON(engine, http.MethodPost, "/apply", `{"digest":"`+envelope.Data.Digest+`"}`)
 	require.Equal(t, http.StatusOK, applied.Code, applied.Body.String())
 	guideBytes, err := os.ReadFile(filepath.Join(protocolDir, "demo", "guides", "usage.md"))
@@ -108,6 +112,98 @@ func TestProtocolDraftValidatePlanApplyAndDelete(t *testing.T) {
 	assert.Contains(t, string(guideBytes), "Updated Usage")
 	deleted := performJSON(engine, http.MethodDelete, "/drafts/change", "")
 	assert.Equal(t, http.StatusOK, deleted.Code)
+}
+
+func TestProtocolDraftRejectsStaleSnapshotAndRemainsReusableAfterApply(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"ok":true}`)) }))
+	defer upstream.Close()
+	protocolDir, dataDir := t.TempDir(), t.TempDir()
+	writeControlPlanePack(t, protocolDir, upstream.URL)
+	registry, err := newProtocolRegistry(protocolDir, dataDir)
+	require.NoError(t, err)
+
+	older, failure := registry.maintenanceOpenDraft("older")
+	require.Nil(t, failure)
+	newer, failure := registry.maintenanceOpenDraft("newer")
+	require.Nil(t, failure)
+	require.Equal(t, older.BaseDigest, newer.BaseDigest)
+	require.False(t, older.Stale)
+
+	newerRoot, ok := registry.protocolDraftRoot(newer.ID)
+	require.True(t, ok)
+	demoData, err := os.ReadFile(filepath.Join(newerRoot, "demo.json"))
+	require.NoError(t, err)
+	laterData := strings.Replace(string(demoData), `"id":"demo"`, `"id":"later"`, 1)
+	laterData = strings.Replace(laterData, `"name":"Demo"`, `"name":"Later Pack"`, 1)
+	require.NoError(t, os.WriteFile(filepath.Join(newerRoot, "later.json"), []byte(laterData), 0o600))
+
+	reviewed, failure := registry.maintenanceReviewDraft(newer.ID)
+	require.Nil(t, failure)
+	digest := reviewed.(gin.H)["digest"].(string)
+	plan, failure := registry.maintenancePlanDraft(newer.ID, digest)
+	require.Nil(t, failure)
+	require.Equal(t, newer.BaseDigest, plan.BaseDigest)
+	applied, failure := registry.applyPlannedProtocolDigest(digest)
+	require.Nil(t, failure)
+	assert.Equal(t, true, applied.(gin.H)["draft_base_updated"])
+	assert.FileExists(t, filepath.Join(protocolDir, "later.json"))
+
+	reusable := registry.draftView(newer.ID, newerRoot)
+	assert.False(t, reusable.Stale)
+	assert.Equal(t, registry.currentDigest(), reusable.BaseDigest)
+	_, failure = registry.maintenancePatchPack(newer.ID, "demo", map[string]any{"description": "Second release from same draft"})
+	require.Nil(t, failure)
+	reviewed, failure = registry.maintenanceReviewDraft(newer.ID)
+	require.Nil(t, failure)
+	digest = reviewed.(gin.H)["digest"].(string)
+	_, failure = registry.maintenancePlanDraft(newer.ID, digest)
+	require.Nil(t, failure)
+	_, failure = registry.applyPlannedProtocolDigest(digest)
+	require.Nil(t, failure)
+	liveDemo, err := os.ReadFile(filepath.Join(protocolDir, "demo.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(liveDemo), "Second release from same draft")
+
+	_, failure = registry.maintenanceReviewDraft(older.ID)
+	require.NotNil(t, failure)
+	assert.Equal(t, "stale_draft", failure.Code)
+	assert.Equal(t, older.BaseDigest, failure.BaseDigest)
+	assert.Equal(t, registry.currentDigest(), failure.LiveDigest)
+	assert.Contains(t, failure.NextAction, "Open a new draft")
+	assert.FileExists(t, filepath.Join(protocolDir, "later.json"))
+
+	engine := gin.New()
+	engine.POST("/drafts/:id/validate", registry.handleDraftValidate)
+	engine.POST("/drafts/:id/plan", registry.handleDraftPlan)
+	for _, path := range []string{"/drafts/older/validate", "/drafts/older/plan"} {
+		response := performJSON(engine, http.MethodPost, path, "")
+		require.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+		var payload struct {
+			Code string `json:"code"`
+		}
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+		assert.Equal(t, "stale_draft", payload.Code)
+	}
+}
+
+func TestProtocolDraftWithoutBaseMetadataCannotBeReleased(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"ok":true}`)) }))
+	defer upstream.Close()
+	protocolDir, dataDir := t.TempDir(), t.TempDir()
+	writeControlPlanePack(t, protocolDir, upstream.URL)
+	registry, err := newProtocolRegistry(protocolDir, dataDir)
+	require.NoError(t, err)
+	view, failure := registry.maintenanceOpenDraft("legacy")
+	require.Nil(t, failure)
+	root, ok := registry.protocolDraftRoot(view.ID)
+	require.True(t, ok)
+	require.NoError(t, os.Remove(filepath.Join(root, protocolDraftBaseDigestFile)))
+
+	_, failure = registry.maintenanceReviewDraft(view.ID)
+	require.NotNil(t, failure)
+	assert.Equal(t, "draft_base_unknown", failure.Code)
+	assert.Empty(t, failure.BaseDigest)
+	assert.Equal(t, registry.currentDigest(), failure.LiveDigest)
 }
 
 func TestProtocolDraftImpactLinksRuntimePoolWithoutClaimingPoolConfigChange(t *testing.T) {

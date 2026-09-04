@@ -9,6 +9,9 @@ const draft: ProtocolDraft = {
   id: 'agent-change',
   updated_at: '2026-08-30T00:00:00Z',
   digest: 'a'.repeat(64),
+  base_digest: 'b'.repeat(64),
+  live_digest: 'b'.repeat(64),
+  stale: false,
   valid: true,
   files: ['video.json', 'video/guides/usage.md', 'schema/protocol-pack-v3.schema.json'],
   protocols: [{ id: 'video', name: 'Video Jobs', routes: 2, guides: 1, workflows: 0, pool_mode: 'local' }],
@@ -76,5 +79,19 @@ describe('ControlPlanePage', () => {
     await user.click(within(sheet).getByRole('button', { name: 'schema/protocol-pack-v3.schema.json' }))
     expect(within(sheet).getByRole('textbox', { name: '查看 schema/protocol-pack-v3.schema.json' })).toHaveAttribute('readonly')
     expect(within(sheet).getByText('只读')).toBeVisible()
+  })
+
+  it('marks stale drafts and disables release actions', () => {
+    const staleDraft: ProtocolDraft = {
+      ...draft,
+      id: 'stale-change',
+      base_digest: 'c'.repeat(64),
+      stale: true,
+    }
+    render(<ControlPlanePage adminToken='admin' drafts={[staleDraft]} revisions={[]} protocols={[protocol]} onChanged={vi.fn().mockResolvedValue(undefined)} />)
+
+    expect(screen.getByText('已过期')).toBeVisible()
+    expect(screen.getByRole('button', { name: '校验' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '计划' })).toBeDisabled()
   })
 })

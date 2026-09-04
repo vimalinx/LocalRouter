@@ -29,8 +29,10 @@ type maintenanceToolFailure struct {
 	Code           string                       `json:"code"`
 	Stage          string                       `json:"stage"`
 	Message        string                       `json:"message"`
+	NextAction     string                       `json:"next_action,omitempty"`
 	Retryable      bool                         `json:"retryable"`
 	DraftPreserved bool                         `json:"draft_preserved,omitempty"`
+	BaseDigest     string                       `json:"base_digest,omitempty"`
 	LiveDigest     string                       `json:"live_digest,omitempty"`
 	Issues         []maintenanceValidationIssue `json:"issues,omitempty"`
 	Rollback       *struct {
@@ -68,7 +70,7 @@ func maintenanceString(description string) gin.H {
 func maintenanceTools() []maintenanceToolDefinition {
 	return []maintenanceToolDefinition{
 		{Name: "localrouter_status", Description: "Inspect live Pack, pool and draft status without revealing secrets or private locators.", InputSchema: maintenanceObjectSchema(gin.H{}), ReadOnly: true},
-		{Name: "localrouter_draft_open", Description: "Open an idempotent draft seeded from the live configuration. LocalRouter owns paths and file layout.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Stable lowercase draft id")}, "draft_id")},
+		{Name: "localrouter_draft_open", Description: "Open an idempotent draft seeded from and version-bound to the live configuration. LocalRouter owns paths and file layout.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Stable lowercase draft id")}, "draft_id")},
 		{Name: "localrouter_draft_get_pack", Description: "Read the editable semantic content of one Pack in a draft. Protected operational locators are omitted and preserved by patches.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id"), "pack_id": maintenanceString("Pack id")}, "draft_id", "pack_id"), ReadOnly: true},
 		{Name: "localrouter_draft_put_pack", Description: "Create or update a canonical v3 Pack core. Omitted authentication defaults explicitly to none; existing operations, profiles, workflows and pricing are preserved.", InputSchema: maintenancePutPackSchema()},
 		{Name: "localrouter_draft_put_operation", Description: "Create or replace one operation by operation_id. LocalRouter supplies safe transport, retry and draft-availability defaults and validates the complete Pack before writing.", InputSchema: maintenancePutOperationSchema()},
@@ -84,8 +86,8 @@ func maintenanceTools() []maintenanceToolDefinition {
 		}, "draft_id", "pack_id", "id", "title", "summary", "status", "operations", "markdown")},
 		{Name: "localrouter_draft_delete_guide", Description: "Remove one authored Agent guide from a draft without constructing its file path.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id"), "pack_id": maintenanceString("Pack id"), "guide_id": maintenanceString("Guide id")}, "draft_id", "pack_id", "guide_id"), Destructive: true},
 		{Name: "localrouter_draft_delete_pack", Description: "Remove a Pack definition and its authored guides from a draft.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id"), "pack_id": maintenanceString("Pack id")}, "draft_id", "pack_id"), Destructive: true},
-		{Name: "localrouter_draft_review", Description: "Validate the complete draft and return exact file, protocol section and pool impact plus the immutable digest to review.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id")}, "draft_id"), ReadOnly: true},
-		{Name: "localrouter_draft_plan", Description: "Create a release plan only when the supplied reviewed digest still exactly matches the draft.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id"), "reviewed_digest": maintenanceString("Digest returned by localrouter_draft_review")}, "draft_id", "reviewed_digest")},
+		{Name: "localrouter_draft_review", Description: "Validate a non-stale draft and return exact file, protocol section and pool impact plus the immutable digest to review.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id")}, "draft_id"), ReadOnly: true},
+		{Name: "localrouter_draft_plan", Description: "Create a release plan only when the supplied reviewed digest still exactly matches the draft and its base still matches live.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id"), "reviewed_digest": maintenanceString("Digest returned by localrouter_draft_review")}, "draft_id", "reviewed_digest")},
 		{Name: "localrouter_draft_apply", Description: "Apply the exact planned digest, verify the installed live tree, and automatically restore the previous revision if local verification fails.", InputSchema: maintenanceObjectSchema(gin.H{"digest": maintenanceString("Exact digest returned by localrouter_draft_plan")}, "digest"), Destructive: true},
 		{Name: "localrouter_draft_abort", Description: "Discard a draft without changing the live configuration.", InputSchema: maintenanceObjectSchema(gin.H{"draft_id": maintenanceString("Draft id")}, "draft_id"), Destructive: true},
 		{Name: "localrouter_history", Description: "List immutable Pack revisions and identify the live digest.", InputSchema: maintenanceObjectSchema(gin.H{}), ReadOnly: true},
@@ -448,13 +450,31 @@ func (registry *protocolRegistry) maintenanceOpenDraft(id string) (protocolDraft
 		failure := maintenanceFailure(registry, "draft_create_failed", "draft", "cannot create draft", true, false)
 		return protocolDraftView{}, &failure
 	}
-	if err := copyProtocolDraftTree(registry.dir, root); err != nil {
+	if err := registry.seedProtocolDraft(root); err != nil {
 		_ = os.RemoveAll(root)
 		failure := maintenanceFailure(registry, "draft_seed_failed", "draft", "cannot seed draft from live configuration", true, false)
 		return protocolDraftView{}, &failure
 	}
 	view := registry.draftView(id, root)
 	return view, nil
+}
+
+func (registry *protocolRegistry) maintenanceDraftBaseFailure(root, stage string) *maintenanceToolFailure {
+	baseDigest, liveDigest, err := registry.currentProtocolDraftBase(root)
+	if err == nil {
+		return nil
+	}
+	code := "draft_base_unknown"
+	message := "draft predates version-bound drafts and cannot be safely released"
+	if errors.Is(err, errProtocolDraftStale) {
+		code = "stale_draft"
+		message = "live configuration changed after this draft was opened"
+	}
+	failure := maintenanceFailure(registry, code, stage, message, false, true)
+	failure.BaseDigest = baseDigest
+	failure.LiveDigest = liveDigest
+	failure.NextAction = "Open a new draft from current live configuration and reapply only the intended changes."
+	return &failure
 }
 
 func maintenanceProtectedKey(key string) bool {
@@ -698,13 +718,17 @@ func (registry *protocolRegistry) maintenanceReviewDraft(draftID string) (any, *
 		failure := maintenanceFailure(registry, "unknown_draft", "validation", "unknown draft", false, false)
 		return nil, &failure
 	}
+	if failure := registry.maintenanceDraftBaseFailure(root, "review"); failure != nil {
+		return nil, failure
+	}
 	candidate, err := registry.readProtocolCandidate(root)
 	if err != nil {
 		failure := maintenanceFailure(registry, "draft_invalid", "validation", err.Error(), false, true)
 		attachMaintenanceValidationIssue(&failure, err)
 		return nil, &failure
 	}
-	return gin.H{"draft_id": draftID, "digest": candidate.Digest, "protocols": summarizeProtocolCandidate(candidate), "impact": registry.protocolDraftImpact(root), "next_action": "Review impact.files, impact.protocols and impact.pool_ids, then pass this exact digest to localrouter_draft_plan."}, nil
+	baseDigest, _, _ := registry.currentProtocolDraftBase(root)
+	return gin.H{"draft_id": draftID, "digest": candidate.Digest, "base_digest": baseDigest, "protocols": summarizeProtocolCandidate(candidate), "impact": registry.protocolDraftImpact(root), "next_action": "Review impact.files, impact.protocols and impact.pool_ids, then pass this exact digest to localrouter_draft_plan."}, nil
 }
 
 func (registry *protocolRegistry) maintenancePlanDraft(draftID, reviewedDigest string) (protocolPackPlan, *maintenanceToolFailure) {
@@ -718,6 +742,9 @@ func (registry *protocolRegistry) maintenancePlanDraft(draftID, reviewedDigest s
 	if !ok {
 		failure := maintenanceFailure(registry, "unknown_draft", "plan", "unknown draft", false, false)
 		return protocolPackPlan{}, &failure
+	}
+	if failure := registry.maintenanceDraftBaseFailure(root, "plan"); failure != nil {
+		return protocolPackPlan{}, failure
 	}
 	candidate, err := registry.readProtocolCandidate(root)
 	if err != nil {
@@ -735,7 +762,8 @@ func (registry *protocolRegistry) maintenancePlanDraft(draftID, reviewedDigest s
 	}
 	sort.Strings(ids)
 	files, _ := protocolManagedFiles(root, candidate.Definitions)
-	plan := protocolPackPlan{Digest: candidate.Digest, LiveDigest: registry.currentDigest(), CreatedAt: time.Now().UTC(), Protocols: ids, DraftID: draftID, Files: files}
+	baseDigest, liveDigest, _ := registry.currentProtocolDraftBase(root)
+	plan := protocolPackPlan{Digest: candidate.Digest, BaseDigest: baseDigest, LiveDigest: liveDigest, CreatedAt: time.Now().UTC(), Protocols: ids, DraftID: draftID, Files: files}
 	registry.pendingPlan = &plan
 	return plan, nil
 }
