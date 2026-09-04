@@ -117,6 +117,40 @@ LOCALROUTER_BASE_URL="http://127.0.0.1:$gateway_port" \
 LOCALROUTER_API_TOKEN_FILE="$data_home/localrouter/api-token" \
   "$prefix/bin/lr" request GET /v1/models | jq -e '.object == "list"' >/dev/null
 
+env -u LOCALROUTER_API_TOKEN_FILE -u LOCALROUTER_ADMIN_TOKEN_FILE -u LOCALROUTER_PROJECT_ROOT \
+  HOME="$test_home" \
+  XDG_DATA_HOME="$data_home" \
+  LOCALROUTER_BASE_URL="http://127.0.0.1:$gateway_port" \
+  "$prefix/bin/lr" env | jq -e --arg token_file "$data_home/localrouter/api-token" \
+    '.api_token_file == $token_file and .token_value_exported == false' >/dev/null
+env -u LOCALROUTER_API_TOKEN_FILE -u LOCALROUTER_ADMIN_TOKEN_FILE -u LOCALROUTER_PROJECT_ROOT \
+  HOME="$test_home" \
+  XDG_DATA_HOME="$data_home" \
+  LOCALROUTER_BASE_URL="http://127.0.0.1:$gateway_port" \
+  "$prefix/bin/lr" request GET /v1/models | jq -e '.object == "list"' >/dev/null
+env -u LOCALROUTER_API_TOKEN_FILE -u LOCALROUTER_ADMIN_TOKEN_FILE -u LOCALROUTER_PROJECT_ROOT -u XDG_DATA_HOME \
+  HOME="$test_home" \
+  "$prefix/bin/lr" env | jq -e --arg token_file "$test_home/.local/share/localrouter/api-token" \
+    '.api_token_file == $token_file and .token_value_exported == false' >/dev/null
+
+legacy_project_root="$test_root/legacy-project"
+HOME="$test_home" \
+XDG_DATA_HOME="$data_home" \
+LOCALROUTER_PROJECT_ROOT="$legacy_project_root" \
+LOCALROUTER_API_TOKEN_FILE="$legacy_project_root/gateway/data/api-token" \
+LOCALROUTER_ADMIN_TOKEN_FILE="$legacy_project_root/gateway/data/admin-token" \
+LOCALROUTER_BASE_URL="http://127.0.0.1:$gateway_port" \
+  "$prefix/bin/lr" env | jq -e \
+    --arg api_token_file "$data_home/localrouter/api-token" \
+    --arg admin_token_file "$data_home/localrouter/admin-token" \
+    '.api_token_file == $api_token_file and .admin_token_file == $admin_token_file' >/dev/null
+HOME="$test_home" \
+XDG_DATA_HOME="$data_home" \
+LOCALROUTER_PROJECT_ROOT="$legacy_project_root" \
+LOCALROUTER_API_TOKEN_FILE="$legacy_project_root/gateway/data/api-token" \
+LOCALROUTER_BASE_URL="http://127.0.0.1:$gateway_port" \
+  "$prefix/bin/lr" request GET /v1/models | jq -e '.object == "list"' >/dev/null
+
 relative_home="$test_root/relative-home"
 mkdir -p "$relative_home"
 relative_paths="$(HOME="$relative_home" XDG_CONFIG_HOME=relative XDG_DATA_HOME=relative XDG_STATE_HOME=relative XDG_CACHE_HOME=relative "$prefix/bin/localrouter" paths)"

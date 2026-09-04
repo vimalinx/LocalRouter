@@ -8,9 +8,24 @@ mcp_url="${LOCALROUTER_MCP_URL:-$base_url/mcp}"
 maintenance_mcp_url="${LOCALROUTER_MAINTENANCE_MCP_URL:-$base_url/manage/mcp}"
 xdg_data_home="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
 [[ "$xdg_data_home" = /* ]] || xdg_data_home="$HOME/.local/share"
-api_token_file="${LOCALROUTER_API_TOKEN_FILE:-$xdg_data_home/localrouter/api-token}"
-admin_token_file="${LOCALROUTER_ADMIN_TOKEN_FILE:-$xdg_data_home/localrouter/admin-token}"
+default_api_token_file="$xdg_data_home/localrouter/api-token"
+default_admin_token_file="$xdg_data_home/localrouter/admin-token"
+api_token_file="${LOCALROUTER_API_TOKEN_FILE:-$default_api_token_file}"
+admin_token_file="${LOCALROUTER_ADMIN_TOKEN_FILE:-$default_admin_token_file}"
 maintainer_token_file="${LOCALROUTER_MAINTAINER_TOKEN_FILE:-}"
+
+# Recover only the retired repository-local locators used before the XDG install.
+# Other explicit locator failures remain authoritative instead of silently falling back.
+legacy_project_root="${LOCALROUTER_PROJECT_ROOT:-}"
+legacy_project_root="${legacy_project_root%/}"
+if [[ -n "$legacy_project_root" ]]; then
+  if [[ "$api_token_file" == "$legacy_project_root/gateway/data/api-token" && ! -e "$api_token_file" && -f "$default_api_token_file" ]]; then
+    api_token_file="$default_api_token_file"
+  fi
+  if [[ "$admin_token_file" == "$legacy_project_root/gateway/data/admin-token" && ! -e "$admin_token_file" && -f "$default_admin_token_file" ]]; then
+    admin_token_file="$default_admin_token_file"
+  fi
+fi
 
 usage() {
   cat <<'EOF'
