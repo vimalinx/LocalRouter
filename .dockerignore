@@ -6,6 +6,9 @@
 !gateway/
 gateway/*
 !gateway/*.go
+!gateway/agent-start.md
+!gateway/service-templates/
+!gateway/service-templates/*.json
 !gateway/go.mod
 !gateway/go.sum
 !gateway/channel-profiles.json

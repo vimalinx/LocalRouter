@@ -102,6 +102,8 @@ run_container
 wait_ready
 wait_healthy
 jq -e '.ok == true and .mode == "lan-service"' "$test_root/health.json" >/dev/null
+curl --noproxy '*' --fail --silent "http://127.0.0.1:$local_port/docs/agent-start.md" >"$test_root/agent-guide.md"
+grep -Fq 'lr init' "$test_root/agent-guide.md"
 
 test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "10001:10001"
 test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container")" = "true"

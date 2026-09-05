@@ -15,6 +15,8 @@ COPY VERSION ./VERSION
 COPY gateway/go.mod gateway/go.sum ./gateway/
 RUN cd gateway && go mod download
 COPY gateway/*.go ./gateway/
+COPY gateway/agent-start.md ./gateway/agent-start.md
+COPY gateway/service-templates/ ./gateway/service-templates/
 COPY gateway/channel-profiles.json ./gateway/channel-profiles.json
 COPY gateway/protocols/README.md ./gateway/protocols/README.md
 COPY gateway/protocols/schema/ ./gateway/protocols/schema/
