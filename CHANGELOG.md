@@ -6,6 +6,24 @@ published.
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-06
+
+- Published the first non-prerelease 0.x milestone from the validated alpha.7
+  code baseline. This release changes version metadata and release notes;
+  the gateway, CLI, schemas, and configuration formats remain unchanged.
+- Includes Agent-prepared service onboarding with exact approval, scoped
+  capability bundles, delegated maintenance, and task-attributed call traces.
+- Includes guided Agent discovery, independent identity checks, explicit model
+  selection, path/query parameter support, and durable call-result handling.
+- Includes isolated operator/LAN surfaces, hardened Docker deployment, and
+  prebuilt Linux amd64/arm64 archives with the XDG installer and Agent Skill.
+- Existing alpha.7 installations can upgrade with the archive installer and
+  restart the service using their existing configuration and persistent state.
+  Provider accounts and operator Pack definitions are not distributed.
+- Provider verification remains operation-specific. Account readiness,
+  incomplete model output, and unverified media downloads are not promoted
+  to successful provider acceptance by this version change.
+
 ## 0.1.0-alpha.7 - 2026-09-05
 
 - Added Agent-prepared service onboarding with exact-digest human approval,
