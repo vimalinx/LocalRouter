@@ -23,6 +23,7 @@ bash -n "$project_root/tools/protocol-pack-lifecycle.sh" \
   "$project_root/tests/xdg_install_acceptance.sh" \
 	"$project_root/tests/lan_service_acceptance.sh" \
   "$project_root/tests/protocol_e2e.sh"
+python3 "$project_root/tests/service_workspace_acceptance.py"
 "$project_root/tests/agent_skill_acceptance.sh"
 "$project_root/tests/smoke_local_gateway.sh"
 "$project_root/tests/lan_service_acceptance.sh"

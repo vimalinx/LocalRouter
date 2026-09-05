@@ -140,6 +140,9 @@ func (store *protocolEventStore) recordRequestWithDefinition(c *gin.Context, sur
 		Usage: usageView,
 	}
 	event.Cost = protocolUsageCost(definition, operationID, model, metrics, status > 0 && status < http.StatusBadRequest)
+	if trace := serviceTraceContext(c); trace != nil && trace.Kind == "request" {
+		trace.Usage, trace.Cost = usageView, event.Cost
+	}
 	store.append(event)
 }
 

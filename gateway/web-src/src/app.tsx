@@ -12,6 +12,7 @@ import { JobsPage } from '@/features/jobs/jobs-page'
 import { OverviewPage } from '@/features/overview/overview-page'
 import { ServicesPage } from '@/features/services/services-page'
 import { TokensPage } from '@/features/tokens/tokens-page'
+import { SetupPage } from '@/features/setup/setup-page'
 import { adminRequest, publicRequest } from '@/lib/api'
 import type { PublicStatus, Summary, UpdateStatus } from '@/lib/types'
 import { useConsoleData } from '@/lib/console-data'
@@ -22,6 +23,7 @@ const validSections = new Set<SectionId>([
   'jobs',
   'tokens',
   'logs',
+  'setup',
 ])
 
 function currentSection(): SectionId {
@@ -178,6 +180,9 @@ export default function App() {
   } else {
     const data = consoleData.data
     switch (activeSection) {
+      case 'setup':
+        content = <SetupPage adminToken={requestAdminToken} tokens={data.tokens} />
+        break
       case 'protocols':
         content = (
           <ServicesPage

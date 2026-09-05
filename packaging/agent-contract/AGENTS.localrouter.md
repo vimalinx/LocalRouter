@@ -1,6 +1,7 @@
 <!-- LOCALROUTER:BEGIN managed-block global-consumer-contract version=1 -->
 ## LocalRouter global consumer contract
 
+- Start a fresh Agent with `lr init` and `lr guide`. A bootstrap/system identity is not an independent Agent identity; follow `registration_url`, use a dedicated mode-600 Service Token file, and check `agent_code` plus `workspace`. Do not create identities through `/local/api`.
 - Use `lr` as the default interface to LocalRouter. The default authority is loopback port 8317. For an operator-approved private LAN endpoint, require `LOCALROUTER_ALLOW_LAN=true` and let `lr` verify `scope=lan-service` plus unavailable maintenance before it reads or sends a Service Token. Begin with `lr status` and `lr tree [pack]`, then narrow with `lr find`, `lr show`, `lr describe`, and `lr docs`; require `ready=true`.
 - Search callable operations with `lr find operation <intent>`, pools with `lr find pool <pack>`, and live models with `lr find model <name>`. Final model selection must use `lr find model --exact <pack>:<model-id>` and return one exact result. Model and catalog commands return at most 20 entries by default; refine first and use `--all` only when the complete catalog is required.
 - Treat every `request_example` as shape-only. Resolve published `model` or `model_cls` dynamic inputs with one exact `lr find model --exact <pack>:<model-id>` result. Prefer a live catalogue; when a provider exposes none, accept only a reviewed explicit enum from the current versioned request schema.
@@ -8,5 +9,5 @@
 - Before a paid or side-effecting call, explicitly choose the Pack, operation, and dynamic inputs, then run `lr preflight`. A nonzero preflight exit is blocking. Consume structured `code`, `retryable`, `next_action`, and `alternatives`; never blindly replay an unknown side-effecting outcome.
 - Invoke an authorized real or paid `lr call` once, capture its raw response and exit status, then summarize that captured value offline. A `jq`, pipe, or display failure does not authorize another upstream request.
 - API Token locators name mode-600 files; they are not Token values. Never print, export, or paste Token contents, and never read the administrator credential for consumer work. For Pack, auth, pool, workflow, guide, or release changes, load the globally installed `localrouter-protocol-pack` Skill and use its reviewed exact-digest lifecycle.
-- The human console may advertise password-free loopback access by default. This does not authorize an Agent to mutate `/local/api`; Agent maintenance still requires explicit delegation through the documented `/manage/mcp` lane.
+- The human console may advertise password-free loopback access by default. This does not authorize an Agent to mutate `/local/api`; Agent maintenance requires an enabled, distinct maintenance-only Token through `/manage/mcp`; the administrator-backed fallback belongs to the human operator.
 <!-- LOCALROUTER:END managed-block global-consumer-contract -->

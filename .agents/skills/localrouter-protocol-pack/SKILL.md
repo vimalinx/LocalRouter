@@ -5,20 +5,21 @@ description: Use when authoring, changing, releasing, diagnosing, or rolling bac
 
 # Maintain LocalRouter Protocol Packs
 
-Treat live discovery as consumer authority and a reviewed Pack draft as the authoring unit. Parseability, model lists, and balances are not provider proof.
+Live discovery is authoritative. Readiness is not provider proof.
 
 ## Start from the live contract
 
 1. Request configured discovery, defaulting to `http://127.0.0.1:8317/.well-known/localrouter.json`. Before sending a Token to non-loopback, require `scope=lan-service` and `maintenance.available=false`.
-2. Follow its links. Before mutation require an enabled maintenance Agent Token or explicit delegation for one `lr manage-*` change. Keep credentials private; an open loopback console grants no Agent authority.
+2. Run `lr init` and `lr guide`. Bootstrap identity is not an independent Agent; follow the returned registration steps. Agent maintenance requires an enabled, distinct maintenance-only Token. Never read the administrator credential or use its human fallback.
 3. Classify the work before reading more detail:
+   - **New service/template/bundle:** `lr setup templates` → `lr setup template <id> <version>` → `lr setup schema` → prepare → human exact approval → verify. Preparation grants no authority.
    - **Use only:** call the already documented operation and do not edit the Pack.
    - **Compatibility Pack:** standard APIs use Channel Profile + Channels on `/v1` or `/v1beta`.
    - **Pack change:** use authorized `maintenance.mcp`; LocalRouter owns formatting, validation, digests, installation, and rollback.
    - **Runtime change:** Go, WebUI, schema, or handlers require build, restart, and any Pack release.
 4. Determine who owns registration, credential refresh, health, request-time selection, quota measurement, and upstream OAuth. Do not silently move ownership into LocalRouter.
 
-With a Pack argument, `lr` accepts bare `operation_id` or Pack-qualified `operation_key`; dotted selectors are not paths.
+`operation_id` is a semantic selector, never a path.
 
 ## Load only the relevant detail
 
@@ -37,25 +38,25 @@ With a Pack argument, `lr` accepts bare `operation_id` or Pack-qualified `operat
 | Any completion claim | [references/acceptance.md](references/acceptance.md) |
 | Delivering a newly published model to OMP or another Agent runtime | [references/runtime-handoff.md](references/runtime-handoff.md) |
 
-Authoritative schemas are `gateway/protocols/schema/protocol-pack-v2.schema.json` and `protocol-pack-v3.schema.json`; `docs/PROTOCOL-PACK-V3.md` is the full runtime contract.
+Schemas live under `gateway/protocols/schema/`; see `docs/PROTOCOL-PACK-V3.md`.
 
 ## Non-negotiable boundaries
 
 - Keep the operator gateway on loopback. An explicit LAN listener may expose only authenticated consumer routes and sanitized docs, never the console, `/local/status`, `/local/api`, or `/manage/mcp`. Request data never selects targets or adapter/module paths.
 - Keep credentials, cookies, locators, private upstream addresses, and pool contents out of Pack source, guides, logs, tests, and `.ai` project-visible notes. Installed protected material stays below `$XDG_DATA_HOME/localrouter/` with mode `0600`; isolated tests may set `LOCAL_GATEWAY_DATA_DIR`.
 - Keep registration, CAPTCHA, human OAuth consent, anti-bot challenges, payment, and account production outside the request path.
-- Use `pool.mode=external` when another gateway owns the complete pool. Use `pool.mode=local` only when LocalRouter owns request-time selection. An external maintainer may atomically update a private external-readonly source without transferring registration ownership.
+- Keep externally owned pools external. Use `pool.mode=local` only when LocalRouter owns request-time selection. An external maintainer may atomically update a private external-readonly source without transferring registration ownership.
 - Default retry to `safe`. Never replay an unknown side-effecting outcome without idempotency or authoritative reconciliation.
 - Prefer byte passthrough for multipart, files, SSE, WebSocket, gRPC, and unknown bodies. Apply JSON transforms only to observed JSON contracts.
 - Give every route a stable `operation_id`. Define workflows only from observed IDs, status paths, transitions, terminal values, results, and cancellation behavior.
 - Unknown capability, cost, balance, or account state stays unknown. Missing quota is not zero; balance is not provider task success.
-- Consumer Tokens are call-only; pool concurrency, lease, cooldown, health, and quota still apply. Optional Agent maintenance requires a distinct maintenance-only `localrouter.maintain` Token. Never mix purposes.
+- Service Tokens can prepare owned setup proposals but cannot approve authority or maintain Packs; pool concurrency, lease, cooldown, health, and quota still apply. Optional Agent maintenance requires a distinct maintenance-only `localrouter.maintain` Token. Never mix purposes.
 - Pack is the common service view. Full Protocol Packs cover isolated routes, transforms, special auth, dedicated pools, adapters, or workflows; `/w` and `/mcp` are projections.
 
 ## Required lifecycle
 
 1. Discover the live Pack and ownership boundary.
-2. Confirm the selected lane and scope. Open an isolated `/manage/mcp` draft; never request, print, copy, or edit credentials there.
+2. For advanced Pack authoring, confirm the enabled maintenance Token and scope. Open an isolated `/manage/mcp` draft; never request, print, copy, or edit credentials there.
 3. Use the narrowest semantic tool for Pack core, operation, supplier profile, or guide. Lint content edits. Use merge patch only for advanced/removal fields outside those tools.
 4. Read the draft's `impact.files`, `impact.protocols`, and `impact.pool_ids`. Inspect every changed section and affected pool before planning.
 5. Run strict validation, focused mocks, relevant transport/workflow tests, and the Skill doctor.
@@ -64,10 +65,10 @@ Authoritative schemas are `gateway/protocols/schema/protocol-pack-v2.schema.json
 8. Report pass/fail/not-covered plus the revision digest. Do not create `.ai` evidence while automation is paused.
 9. Post-apply verification failure preserves the draft and attempts the previous revision. Inspect `error.stage`, `error.code`, and `error.rollback`; reconcile unknown upstream outcomes before retry.
 
-Run the discovery doctor when the listener is available:
+Discovery doctor:
 
 ```bash
 python .agents/skills/localrouter-protocol-pack/scripts/protocol_pack_doctor.py
 ```
 
-Use `--pack <id>` to narrow. Doctor success proves discovery/document consistency only; calls, streams, workflows, cost, and rollback need separate evidence.
+Doctor checks discovery/docs only; provider execution needs separate evidence.

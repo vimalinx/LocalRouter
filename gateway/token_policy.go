@@ -50,6 +50,7 @@ type tokenPolicyUsage struct {
 }
 
 type tokenPolicyStore struct {
+	workspace               *serviceWorkspace
 	path                    string
 	mu                      sync.Mutex
 	agentMaintenanceEnabled bool
@@ -207,6 +208,9 @@ func (store *tokenPolicyStore) policyFor(tokenID int) (localTokenPolicy, bool) {
 func (store *tokenPolicyStore) preview(tokenID int, surface, pack, operation, modelName string) (bool, int, string) {
 	if store == nil || tokenID <= 0 {
 		return true, 0, ""
+	}
+	if !store.workspace.bundleAllows(tokenID, surface, pack, operation) {
+		return false, http.StatusForbidden, "capability bundle does not grant this service operation"
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -367,6 +371,9 @@ func containsPolicyValue(values []string, value string) bool {
 }
 
 func (store *tokenPolicyStore) begin(tokenID int, surface, pack, operation, modelName string) (func(), int, string) {
+	if store != nil && !store.workspace.bundleAllows(tokenID, surface, pack, operation) {
+		return nil, http.StatusForbidden, "capability bundle does not grant this service operation"
+	}
 	if store == nil || tokenID <= 0 {
 		return func() {}, 0, ""
 	}

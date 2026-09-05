@@ -1,0 +1,10 @@
+{
+  "id": "multipart-api", "version": "1", "name": "文件与媒体", "summary": "文件上传、识别、转换及二进制结果接口。",
+  "maintenance_guide": "Preserve multipart boundaries and file bytes. Use the provider's documented fields and content type; do not apply JSON transforms to file bodies. Record response resource units when available; byte size is not a billing estimate.",
+  "checks": ["multipart bytes preserved", "documented content type", "file result", "resource unit mapping", "no request body logging"],
+  "example": {
+    "schema_version": "3", "id": "my-files", "name": "My file service", "description": "Replace with the observed provider contract", "enabled": true,
+    "base_url": "https://service.example.invalid", "auth": {"type": "none"}, "timeout_seconds": 300,
+    "routes": [{"operation_id": "process", "methods": ["POST"], "path": "/files/process", "summary": "Process an uploaded file", "retry": {"mode": "never", "max_attempts": 1}}]
+  }
+}

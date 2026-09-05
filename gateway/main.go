@@ -70,6 +70,11 @@ type runtimeConfig struct {
 
 type localRuntime struct {
 	workflowContext context.Context
+	callOwner       int
+	callTraceID     string
+	callParentID    string
+	callTaskID      string
+	callSurface     string
 	config          runtimeConfig
 	adminAuth       *adminAuthStore
 	adminToken      *adminTokenStore
@@ -83,6 +88,7 @@ type localRuntime struct {
 	events          *protocolEventStore
 	channelProfiles *localChannelProfileRegistry
 	updates         *updateChecker
+	workspace       *serviceWorkspace
 }
 
 type adminTokenStore struct {
@@ -544,13 +550,22 @@ func initializeRuntime(config runtimeConfig) (localRuntime, error) {
 	transport.MaxIdleConns = 128
 	transport.MaxIdleConnsPerHost = 32
 	transport.IdleConnTimeout = 90 * time.Second
-	complete = true
-	return localRuntime{
+	runtime := localRuntime{
 		config: config, adminAuth: adminAuth, adminToken: newAdminTokenStore(adminToken), apiToken: apiToken,
 		rootUser: rootUser, store: store, relayClient: &http.Client{Transport: transport, CheckRedirect: rejectUpstreamRedirect},
 		balancer: newLocalRelayBalancer(), protocols: protocols, policies: policies, events: events, channelProfiles: channelProfiles,
 		updates: newUpdateChecker(config.UpdateCheckEnabled, buildVersion, nil, ""),
-	}, nil
+	}
+	workspace, err := newServiceWorkspace(runtime)
+	if err != nil {
+		return localRuntime{}, fmt.Errorf("load service workspace: %w", err)
+	}
+	if err := store.initializeServiceTraces(); err != nil {
+		return localRuntime{}, fmt.Errorf("initialize service traces: %w", err)
+	}
+	runtime.workspace, protocols.workspace, policies.workspace = workspace, workspace, workspace
+	complete = true
+	return runtime, nil
 }
 
 func protectDatabaseFiles(databasePath string) error {
@@ -842,6 +857,7 @@ func registerLANLandingRoutes(engine *gin.Engine) {
 func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 	admin := engine.Group("/local/api")
 	admin.Use(localAdminAuth(runtime.adminAuth, runtime.adminToken, runtime.rootUser))
+	registerServiceAdminRoutes(admin, runtime)
 	{
 		admin.GET("/summary", localSummary(runtime))
 		admin.POST("/update/check", handleUpdateCheck(runtime))

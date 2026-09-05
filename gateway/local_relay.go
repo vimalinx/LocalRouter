@@ -144,6 +144,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 
 	relayV1 := engine.Group("/v1")
 	relayV1.Use(auth)
+	relayV1.Use(serviceTraceMiddleware(runtime, "v1"))
 	if runtime.policies != nil {
 		relayV1.Use(runtime.policies.middleware("v1"))
 	}
@@ -154,6 +155,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 	relayV1.POST("/engines/:model/embeddings", handleRelayRequest(runtime))
 	geminiRelay := engine.Group("/v1beta")
 	geminiRelay.Use(auth)
+	geminiRelay.Use(serviceTraceMiddleware(runtime, "v1beta"))
 	if runtime.policies != nil {
 		geminiRelay.Use(runtime.policies.middleware("v1beta"))
 	}
@@ -659,6 +661,17 @@ func copyRelayError(c *gin.Context, status int, body []byte) {
 }
 
 func logRelay(runtime localRuntime, c *gin.Context, channel localChannel, model, requestID string, started time.Time, usage usageMetrics, streamed bool, entryType int, content string) {
+	c.Set("localrouter_usage_model", model)
+	if trace := serviceTraceContext(c); trace != nil {
+		trace.Usage = &usage
+		trace.UpstreamCalled = true
+		if usage.ReportedCostUSD != nil {
+			trace.Cost = &usageCost{AmountUSD: *usage.ReportedCostUSD, Status: "reported", Source: "provider"}
+		}
+		if entryType == localLogTypeError {
+			trace.Outcome = "outcome_unknown"
+		}
+	}
 	token, _ := c.Get("local_token")
 	local, _ := token.(*localToken)
 	entry := localRequestLog{

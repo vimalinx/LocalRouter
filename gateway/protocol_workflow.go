@@ -23,6 +23,9 @@ import (
 )
 
 type protocolWorkflowJob struct {
+	TraceID         string                     `json:"trace_id,omitempty"`
+	ParentSpanID    string                     `json:"parent_span_id,omitempty"`
+	TaskID          string                     `json:"task_id,omitempty"`
 	ExecutionID     string                     `json:"execution_id,omitempty"`
 	CancelRequested bool                       `json:"cancel_requested,omitempty"`
 	Cancelling      bool                       `json:"cancelling,omitempty"`
@@ -145,8 +148,9 @@ func (registry *protocolRegistry) handleWorkflowCreate(runtime localRuntime) gin
 			return
 		}
 		operation := "workflow." + workflow.ID + ".create"
+		bindServiceTrace(c, definition, operation)
 		if registry.policies != nil {
-			release, allowed := registry.policies.authorizeRequest(c, "w", definition.ID, operation, "")
+			release, allowed := registry.policies.authorizeProjection(c, "w", definition.ID, operation, "")
 			if !allowed {
 				return
 			}
@@ -172,7 +176,7 @@ func (registry *protocolRegistry) handleWorkflowCreate(runtime localRuntime) gin
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "message": "workflow request body is too large"})
 			return
 		}
-		responseCode, responseBody, contentType, err := callLocalProtocol(runtime, definition.ID, http.MethodPost, createRoute.Path, c.Request.URL.RawQuery, c.GetHeader("Content-Type"), body)
+		responseCode, responseBody, contentType, err := callLocalProtocol(serviceCallRuntime(runtime, c), definition.ID, http.MethodPost, createRoute.Path, c.Request.URL.RawQuery, c.GetHeader("Content-Type"), body)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "workflow create operation failed"})
 			return
@@ -199,6 +203,7 @@ func (registry *protocolRegistry) handleWorkflowCreate(runtime localRuntime) gin
 			LastHTTPCode: responseCode,
 			OwnerTokenID: c.GetInt(tokenPolicyContextID),
 		}
+		attachWorkflowTrace(c, &job)
 		registry.workflowMu.Lock()
 		stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
 		state, stateErr := registry.loadWorkflowState(definition.ID)
@@ -228,7 +233,7 @@ func (registry *protocolRegistry) handleWorkflowGet(runtime localRuntime) gin.Ha
 		}
 		operation := "workflow." + workflow.ID + ".get"
 		if registry.policies != nil {
-			release, allowed := registry.policies.authorizeRequest(c, "w", definition.ID, operation, "")
+			release, allowed := registry.policies.authorizeProjection(c, "w", definition.ID, operation, "")
 			if !allowed {
 				return
 			}
@@ -256,7 +261,7 @@ func (registry *protocolRegistry) handleWorkflowCancel(runtime localRuntime) gin
 		}
 		operation := "workflow." + workflow.ID + ".cancel"
 		if registry.policies != nil {
-			release, allowed := registry.policies.authorizeRequest(c, "w", definition.ID, operation, "")
+			release, allowed := registry.policies.authorizeProjection(c, "w", definition.ID, operation, "")
 			if !allowed {
 				return
 			}
@@ -291,7 +296,7 @@ func (registry *protocolRegistry) handleWorkflowList(c *gin.Context) {
 	}
 	operation := "workflow." + workflow.ID + ".list"
 	if registry.policies != nil {
-		release, allowed := registry.policies.authorizeRequest(c, "w", definition.ID, operation, "")
+		release, allowed := registry.policies.authorizeProjection(c, "w", definition.ID, operation, "")
 		if !allowed {
 			return
 		}
@@ -336,6 +341,9 @@ func (registry *protocolRegistry) handleAdminWorkflowJobs(c *gin.Context) {
 }
 
 func callLocalProtocol(runtime localRuntime, protocolID, method, path, rawQuery, contentType string, body []byte) (int, []byte, string, error) {
+	if runtime.callOwner > 0 && runtime.store != nil && runtime.protocols != nil {
+		return callOwnedProtocol(runtime, protocolID, method, path, rawQuery, contentType, body)
+	}
 	host := runtime.config.Host
 	if host == "" {
 		host = "127.0.0.1"
@@ -350,7 +358,21 @@ func callLocalProtocol(runtime localRuntime, protocolID, method, path, rawQuery,
 	if err != nil {
 		return 0, nil, "", err
 	}
-	request.Header.Set("Authorization", "Bearer "+runtime.apiToken)
+	callToken := runtime.apiToken
+	if runtime.callOwner > 0 && runtime.store != nil {
+		token, err := runtime.store.tokenByID(runtime.rootUser.ID, runtime.callOwner, true)
+		if err != nil || token.Status != localStatusEnabled || (token.ExpiredTime >= 0 && token.ExpiredTime <= time.Now().Unix()) {
+			return http.StatusForbidden, nil, "", errors.New("workflow owner Token is unavailable")
+		}
+		callToken = token.Key
+	}
+	request.Header.Set("Authorization", "Bearer "+callToken)
+	if serviceTraceIDPattern.MatchString(runtime.callTraceID) && serviceSpanIDPattern.MatchString(runtime.callParentID) {
+		request.Header.Set("traceparent", "00-"+runtime.callTraceID+"-"+runtime.callParentID+"-00")
+	}
+	if runtime.callTaskID != "" {
+		request.Header.Set("X-LocalRouter-Task-Id", runtime.callTaskID)
+	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}

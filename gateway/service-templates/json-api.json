@@ -1,0 +1,10 @@
+{
+  "id": "json-api", "version": "1", "name": "JSON 服务", "summary": "生成、解析、转换等同步 JSON 服务接口。",
+  "maintenance_guide": "Use observed request and response schemas. Declare response resource units independently of price. Preserve safe retry behavior. HTTP success alone may not mean business completion. Submit incompatible repairs for a new approval.",
+  "checks": ["documented JSON input", "business result state", "resource units", "cost provenance", "no unsafe replay"],
+  "example": {
+    "schema_version": "3", "id": "my-service", "name": "My JSON service", "description": "Replace with the observed provider contract", "enabled": true,
+    "base_url": "https://service.example.invalid", "auth": {"type": "none"}, "timeout_seconds": 300,
+    "routes": [{"operation_id": "generate", "methods": ["POST"], "path": "/generate", "summary": "Generate a resource", "request_schema": {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"], "additionalProperties": false}, "retry": {"mode": "never", "max_attempts": 1}}]
+  }
+}

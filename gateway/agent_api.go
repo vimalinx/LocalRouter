@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "9"
+const agentContractSchemaVersion = "10"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -131,13 +131,21 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"object": "localrouter.agent.contract", "schema_version": agentContractSchemaVersion,
 		"contract_digest": registry.currentDigest(),
-		"authentication":  gin.H{"type": "bearer", "header": "Authorization", "token_purpose": "service-call-only"},
+		"authentication":  gin.H{"type": "bearer", "header": "Authorization", "token_purpose": "service-calls-and-proposal-preparation"},
 		"identity": gin.H{
 			"binding": "service-token", "registration": "operator-issued", "console": console,
 			"required_fields": []string{"agent_code", "agent_name", "workspace"},
-			"whoami":          "/agent/whoami", "secret_values_returned": false,
+			"whoami":          "/agent/whoami", "secret_values_returned": false, "start_command": "lr init", "getting_started": "/docs/agent-start.md",
 		},
 		"flow": []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
+		"service_workspace": gin.H{
+			"mode": "agent-led", "templates": "/agent/service-templates", "proposals": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
+			"prepare_schema": serviceProposalSchema(),
+			"flow":           []string{"choose exact template", "adapt observed contract", "prepare proposal", "human approves exact authority digest", "inspect installation", "request explicit capability bundle", "preflight and authorized call", "verify recorded trace"},
+			"preparation":    "Service Tokens may prepare owned proposals without maintenance authority; preparation never calls the provider or grants permissions.",
+			"maintenance":    "A separate maintenance-only Token uses setup tools on /manage/mcp. Compatible repairs within human-approved Pack delegations need no repeated approval; target/auth/path/method/operation/workflow changes do.",
+			"trace_headers":  gin.H{"task": "X-LocalRouter-Task-Id", "trace": "traceparent or X-LocalRouter-Trace-Id", "privacy": "metadata and declared numeric resource units only; correlation labels do not grant access"},
+		},
 		"selection": gin.H{
 			"mode": "agent", "merged": false,
 			"rule": "every Pack operation remains independently addressable; LocalRouter never collapses providers or silently chooses one",
@@ -224,7 +232,7 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenID := c.GetInt(tokenPolicyContextID)
 		response := gin.H{
-			"object": "localrouter.identity", "token_id": tokenID,
+			"object": "localrouter.identity", "token_id": tokenID, "identity_ready": false, "identity_kind": "unknown", "registration_url": "/#tokens",
 			"token_name": c.GetString("token_name"), "service_access": true,
 			"maintenance_access": false, "contract_digest": runtime.protocols.currentDigest(),
 			"contract_schema_version": agentContractSchemaVersion,
@@ -233,6 +241,11 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 			if token, err := runtime.store.tokenByID(runtime.rootUser.ID, tokenID, false); err == nil {
 				response["token_name"] = token.Name
 				response["agent_code"] = token.AgentCode
+				response["identity_ready"] = token.AgentCode != "" && token.AgentCode != "localrouter-system"
+				response["identity_kind"] = "agent"
+				if token.AgentCode == "localrouter-system" || token.Name == localTokenName {
+					response["identity_ready"], response["identity_kind"] = false, "bootstrap"
+				}
 				response["agent_name"] = token.AgentName
 				response["workspace"] = token.Workspace
 				response["runtime"] = token.Runtime

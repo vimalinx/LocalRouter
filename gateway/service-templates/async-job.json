@@ -1,0 +1,15 @@
+{
+  "id": "async-job", "version": "1", "name": "异步生成任务", "summary": "创建任务、查询结果和取消，保留同一任务的调用链。",
+  "maintenance_guide": "Replace resource_id_path, status_path, result_path and terminal values with provider evidence. Creation, polling and completion are separate facts. Polling does not count as another generated resource. Unknown creation outcomes require reconciliation, never blind replay.",
+  "checks": ["real resource ID path", "documented terminal states", "cancellation semantics", "durable recovery", "resource accounting deduplication"],
+  "example": {
+    "schema_version": "3", "id": "my-jobs", "name": "My task service", "description": "Replace with the observed provider contract", "enabled": true,
+    "base_url": "https://service.example.invalid", "auth": {"type": "none"}, "timeout_seconds": 300,
+    "routes": [
+      {"operation_id": "create", "methods": ["POST"], "path": "/tasks", "summary": "Create one task", "retry": {"mode": "never", "max_attempts": 1}},
+      {"operation_id": "status", "methods": ["GET"], "path": "/tasks/{task_id}", "summary": "Read task status", "retry": {"mode": "safe", "max_attempts": 1}},
+      {"operation_id": "cancel", "methods": ["DELETE"], "path": "/tasks/{task_id}", "summary": "Cancel task", "retry": {"mode": "never", "max_attempts": 1}}
+    ],
+    "workflows": [{"id": "generate", "name": "Create and follow one generation task", "create_operation": "create", "poll_operation": "status", "cancel_operation": "cancel", "resource_id_path": "id", "status_path": "status", "result_path": "result", "pending_values": ["pending"], "running_values": ["running"], "success_values": ["succeeded"], "failure_values": ["failed"], "poll_interval_ms": 2000, "max_poll_attempts": 300}]
+  }
+}

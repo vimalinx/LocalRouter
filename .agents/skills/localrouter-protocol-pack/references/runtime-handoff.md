@@ -23,4 +23,4 @@ Read this reference when a user asks to add a model, provider, or fixed local se
 
 ## Lane boundary
 
-An ordinary Agent can use the semantic maintenance MCP only with the enabled maintenance-only Token. A user may explicitly delegate one named change to a local operator; that operator may use `lr manage-*` with the local administrator-backed lane, but the operation remains scoped to the request and no credential value may enter an Agent transcript, source file, guide, log, or command line. If neither condition holds, finish the upstream probe and draft design only; do not publish or configure the runtime.
+An Agent uses semantic maintenance MCP only with the enabled, distinct maintenance-only Token. The administrator-backed fallback is for the human operator, not a substitute for Agent delegation. Never request or read the administrator credential. If the Agent lane is unavailable, finish the reviewable proposal and return the exact required authority to the human.

@@ -48,3 +48,20 @@ Shell Agents may use `lr manage-list` and `lr manage-call` only when `LOCALROUTE
 | `rollback_failed` | previous immutable revision could not be restored | stop mutation and report the live digest and structured error |
 
 Port-only authoring changes Pack-managed content. It cannot modify Go/WebUI/runtime schemas, pool contents, locators, credentials, console Tokens, or administrator settings.
+
+
+## Agent-led service setup
+
+When discovery advertises `service_workspace`, a registered Service Token can
+prepare an owned proposal through `lr init`, `lr guide`, `lr setup templates`, `lr setup template <id> <version>`, `lr setup schema`, and
+`lr setup prepare @proposal.json`. Preparation does not install Packs or grant
+authority. The human reviews the complete connection, explicit bundle and optional
+compatible maintenance scope together in `/#setup`, then approves the exact
+proposal digest. Continue with `lr setup get`, ordinary describe/preflight/call,
+and `lr setup verify`; verification only reads existing evidence.
+
+Use `lr setup reconcile` for interrupted applies. It never replays provider calls
+and refuses to recreate grants after an intervening authority change. A scoped
+maintenance-only Token uses `LOCALROUTER_SETUP_LANE=maintenance` for preparation
+and `lr setup apply <id> <digest>` for compatible repairs. New authority still
+requires human approval. Read `lr guide` and the published `/docs/agent.json` for the current port-only contract; repository access is not required.

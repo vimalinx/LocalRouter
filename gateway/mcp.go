@@ -121,7 +121,15 @@ func (registry *protocolRegistry) handleMCP(runtime localRuntime) gin.HandlerFun
 			mcpResult(c, request.ID, gin.H{})
 		case "tools/list":
 			tools := make([]gin.H, 0)
+			if registry.workspace != nil {
+				tools = append(tools, serviceMCPToolViews(false)...)
+			}
 			for _, binding := range registry.mcpTools() {
+				if registry.policies != nil {
+					if allowed, _, _ := registry.policies.preview(c.GetInt(tokenPolicyContextID), "mcp", binding.ProtocolID, binding.Operation, ""); !allowed {
+						continue
+					}
+				}
 				tools = append(tools, gin.H{
 					"name": binding.Name, "description": binding.Route.Summary,
 					"inputSchema": mcpInputSchema(binding.Route),
@@ -146,6 +154,9 @@ func (registry *protocolRegistry) handleMCPToolCall(c *gin.Context, runtime loca
 		mcpError(c, request.ID, -32602, "tool name is required")
 		return
 	}
+	if registry.handleServiceSetupTool(c, runtime, request, params.Name, params.Arguments, false) {
+		return
+	}
 	var binding *mcpToolBinding
 	for _, candidate := range registry.mcpTools() {
 		if candidate.Name == params.Name {
@@ -159,7 +170,7 @@ func (registry *protocolRegistry) handleMCPToolCall(c *gin.Context, runtime loca
 		return
 	}
 	if registry.policies != nil {
-		release, allowed := registry.policies.authorizeRequest(c, "mcp", binding.ProtocolID, binding.Operation, "")
+		release, allowed := registry.policies.authorizeProjection(c, "mcp", binding.ProtocolID, binding.Operation, "")
 		if !allowed {
 			return
 		}
@@ -217,7 +228,10 @@ func (registry *protocolRegistry) handleMCPToolCall(c *gin.Context, runtime loca
 	if arguments.Body != nil {
 		body, _ = json.Marshal(arguments.Body)
 	}
-	status, response, contentType, err := callLocalProtocol(runtime, binding.ProtocolID, binding.Method, path, query.Encode(), "application/json", body)
+	if definition, ok := registry.get(binding.ProtocolID); ok {
+		bindServiceTrace(c, definition, binding.Operation)
+	}
+	status, response, contentType, err := callLocalProtocol(serviceCallRuntime(runtime, c), binding.ProtocolID, binding.Method, path, query.Encode(), "application/json", body)
 	if err != nil {
 		mcpError(c, request.ID, -32603, "tool transport failed")
 		return

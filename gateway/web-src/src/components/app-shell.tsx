@@ -10,6 +10,7 @@ import {
   RefreshCw,
   ScrollText,
   Workflow,
+  Waypoints,
   Sun,
   X,
 } from 'lucide-react'
@@ -21,7 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
-export type SectionId = 'overview' | 'protocols' | 'jobs' | 'tokens' | 'logs'
+export type SectionId = 'overview' | 'protocols' | 'jobs' | 'tokens' | 'logs' | 'setup'
 
 const navigation: Array<{
   id: SectionId
@@ -30,6 +31,7 @@ const navigation: Array<{
 }> = [
   { id: 'overview', label: '运行概览', icon: Activity },
   { id: 'protocols', label: '服务与渠道', icon: Boxes },
+  { id: 'setup', label: '接入与授权', icon: Waypoints },
   { id: 'jobs', label: '任务与事件', icon: Workflow },
   { id: 'tokens', label: 'Agent 工作台', icon: KeyRound },
   { id: 'logs', label: '请求日志', icon: ScrollText },

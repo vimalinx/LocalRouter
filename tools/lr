@@ -32,6 +32,10 @@ usage() {
   cat <<'EOF'
 Usage: lr <command> [arguments]
 
+Start here
+  lr init                           Check identity and return the next safe step (read-only)
+  lr guide                          Read the short Agent getting-started guide
+
 Discover
   lr status                         Health and compatibility/Protocol Pack readiness
   lr tree [pack]                    Show all LR surfaces and Packs as one tree
@@ -56,7 +60,8 @@ Discover
 Call
   lr preflight <pack> <operation> [json] [path-params-json] [query-params-json]
                                     Validate auth, readiness and input without an upstream call
-  lr call <pack> <operation> [json] Call one exact Pack operation without path params
+  lr call <pack> <operation> [json] [path-params-json] [query-params-json]
+                                    Call one operation; path/query values are encoded safely
   lr run <pack> <operation|workflow> [json]
                                     Call an operation or start a persistent workflow
   lr watch <pack> <workflow> <job> [timeout-seconds]
@@ -67,7 +72,26 @@ Call
   lr mcp-call <tool> [json]         Call a ready MCP tool with arguments
   lr whoami                         Show this service Token's non-secret effective policy
 
-Maintain (delegated operator or optional Agent maintenance Token)
+Agent-led service setup
+  lr setup templates [--all]       List compact template metadata; --all returns full recipes
+  lr setup template <id> <version>  Read one exact recipe and its maintenance guide
+  lr setup schema                  Read the proposal input schema
+  lr setup prepare <json|@file>     Prepare a connection, bundle or template for exact approval
+  lr setup list                    List this Agent's proposals
+  lr setup get <id>                 Inspect progress, impact, digest and next action
+  lr setup verify <id>              Inspect recorded evidence without calling the provider
+  lr setup withdraw <id> <digest>   Withdraw an owned pending proposal
+  lr setup reconcile <id>           Reconcile an interrupted apply without replaying it
+  lr setup bundles                 Inspect bundle revisions and pinned assignments
+  lr setup traces [trace-id]        Inspect this Agent's service trace records
+  lr setup apply <id> <digest>      Apply a delegated compatible repair; maintenance Token only
+
+Set LOCALROUTER_TASK_ID to correlate calls with an Agent task. Optionally set
+LOCALROUTER_TRACE_ID to a 32-character lowercase hexadecimal trace ID. These
+labels do not affect identity or permissions. Provider calls are never part of
+setup preparation, approval, reconciliation or evidence inspection.
+
+Maintain (Agent lane requires a separate maintenance-only Token)
   lr manage-status                  Show the selected maintenance lane and its prerequisites
   lr manage-list [text]             Inspect semantic maintenance tools; listing grants no authority
   lr manage-call <tool> [json]      Call one semantic draft tool in the selected maintenance lane
@@ -76,14 +100,15 @@ JSON may be an inline object or @/path/to/body.json. Service calls read the API
 Token. With LOCALROUTER_MAINTAINER_TOKEN_FILE, an Agent must first confirm
 maintenance.auth.agent_token.enabled=true in discovery and use a distinct
 localrouter.maintain Token. Without that locator, manage commands use the
-administrator-backed operator lane and require explicit user delegation for the
-named change. Neither lane permits credential values in output. Do not replace
+administrator-backed human operator lane. Agents must not use that fallback or
+read the administrator credential; request a distinct maintenance-only Token.
+Neither lane permits credential values in output. Do not replace
 either lane by editing files, SQLite, live Packs, or restarting the service.
 
 The browser console and /local/api use password-free loopback access by default.
 An operator can enable password protection and choose a custom password in
 Run Overview. This does not remove the separate administrator credential used
-by the delegated /manage/mcp operator lane.
+by the human /manage/mcp operator lane.
 
 For an operator-approved private LAN service listener, set
 LOCALROUTER_ALLOW_LAN=true and point LOCALROUTER_BASE_URL at its advertised
@@ -214,6 +239,14 @@ bearer_request() {
   local body="${4:-}"
   local max_time_seconds="${5:-}"
   local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --request "$method")
+  if [[ -n "${LOCALROUTER_TASK_ID:-}" ]]; then
+    [[ "$LOCALROUTER_TASK_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$ ]] || fail "invalid LOCALROUTER_TASK_ID"
+    curl_arguments+=(--header "X-LocalRouter-Task-Id: $LOCALROUTER_TASK_ID")
+  fi
+  if [[ -n "${LOCALROUTER_TRACE_ID:-}" ]]; then
+    [[ "$LOCALROUTER_TRACE_ID" =~ ^[a-f0-9]{32}$ && "$LOCALROUTER_TRACE_ID" != 00000000000000000000000000000000 ]] || fail "invalid LOCALROUTER_TRACE_ID"
+    curl_arguments+=(--header "X-LocalRouter-Trace-Id: $LOCALROUTER_TRACE_ID")
+  fi
   if [[ -n "$max_time_seconds" ]]; then
     [[ "$max_time_seconds" =~ ^[0-9]+$ ]] && ((10#$max_time_seconds >= 1 && 10#$max_time_seconds <= 120)) ||
       fail "request timeout must be between 1 and 120 seconds"
@@ -805,8 +838,61 @@ command_preflight() {
   [[ "$(jq -r '.ok // false' <<<"$response")" = "true" ]] || return 1
 }
 
+command_init() {
+  local contract identity
+  contract="$(discovery)"
+  if [[ ! -f "$api_token_file" ]]; then
+    jq -n --arg file "$api_token_file" --arg console "$base_url/#tokens" '{ready:false,code:"agent_identity_required",token_file:$file,registration_url:$console,next_action:"Ask the human to issue a dedicated Service Token in Agent Workbench and save it in a private mode-600 file. Set LOCALROUTER_API_TOKEN_FILE to that path and rerun lr init. Do not read an administrator credential.",can_continue:["lr guide","lr tree","lr docs <pack>"]}'
+    return 1
+  fi
+  identity="$(authenticated_request GET "$base_url/agent/whoami")"
+  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready // false),next_action:(if .identity_ready then "Identity is ready. Use lr find operation <intent> and lr describe; for a missing service use lr setup templates. Read lr guide before calling." else "This is a shared/bootstrap identity, not your independent Agent identity. Ask the human to issue a dedicated Service Token in Agent Workbench, save it mode 0600, set LOCALROUTER_API_TOKEN_FILE to its path, then rerun lr init. Do not issue Tokens through /local/api." end)}' <<<"$identity"
+  [[ "$(jq -r '.identity_ready // false' <<<"$identity")" == true ]]
+}
+
+command_guide() {
+  curl --noproxy '*' --fail-with-body --silent --show-error "$base_url/docs/agent-start.md"
+}
+
 command_whoami() {
   authenticated_request GET "$base_url/agent/whoami" | jq .
+}
+
+command_setup() {
+  local action="${1:-help}"
+  shift || true
+  local arguments='{}' tool_name
+  case "$action" in
+    schema) curl --noproxy '*' --fail-with-body --silent "$base_url/docs/agent.json" | jq '.service_workspace.prepare_schema' ; return ;;
+    templates)
+      case "${1:-}" in "") ;; --all) arguments='{"full":true}' ;; *) fail "use lr setup templates [--all] or lr setup template <id> <version>" ;; esac
+      tool_name=localrouter_setup_templates ;;
+    template)
+      [[ -n "${1:-}" && -n "${2:-}" ]] || fail "select an exact template id and version"
+      arguments="$(jq -cn --arg id "$1" --arg version "$2" '{id:$id,version:$version}')"; tool_name=localrouter_setup_templates ;;
+    list|bundles) tool_name="localrouter_setup_$action" ;;
+    prepare) [[ -n "${1:-}" ]] || fail "setup prepare requires JSON or @file"; arguments="$(json_argument "$1")"; tool_name=localrouter_setup_prepare ;;
+    get|verify|reconcile)
+      [[ -n "${1:-}" ]] || fail "setup $action requires a proposal id"
+      arguments="$(jq -cn --arg id "$1" '{id:$id}')"; tool_name="localrouter_setup_$action" ;;
+    withdraw|apply)
+      [[ -n "${1:-}" && -n "${2:-}" ]] || fail "setup $action requires proposal id and exact digest"
+      arguments="$(jq -cn --arg id "$1" --arg digest "$2" '{id:$id,digest:$digest}')"; tool_name="localrouter_setup_$action" ;;
+    traces) arguments="$(jq -cn --arg trace_id "${1:-}" '{trace_id:$trace_id}')"; tool_name=localrouter_setup_traces ;;
+    help|-h|--help) usage; return ;;
+    *) fail "unknown setup action: $action" ;;
+  esac
+  if [[ "$action" == apply ]]; then
+    [[ -n "$maintainer_token_file" ]] || fail "setup apply requires an explicitly delegated maintenance-only Token locator"
+    command_manage_call "$tool_name" "$arguments"
+  elif [[ "${LOCALROUTER_SETUP_LANE:-service}" == maintenance ]]; then
+    [[ -n "$maintainer_token_file" ]] || fail "maintenance setup requires a delegated maintenance Token locator"
+    command_manage_call "$tool_name" "$arguments"
+  else
+    local response
+    response="$(command_mcp_call "$tool_name" "$arguments")" || return $?
+    jq '.structuredContent // .' <<<"$response"
+  fi
 }
 
 command_show() {
@@ -885,7 +971,9 @@ command_runtime_openai() {
 command_call() {
   local pack_id="${1:-}"
   local operation_id="${2:-}"
+  (($# <= 5)) || fail "call accepts pack, operation, body, path parameters and query parameters"
   local body_input="${3-}"
+  local path_input="${4-}" query_input="${5-}"
   [[ -n "$body_input" ]] || body_input='{}'
   [[ -n "$pack_id" && -n "$operation_id" ]] || fail "call requires a Pack ID and operation ID"
   validate_pack_id "$pack_id"
@@ -895,7 +983,7 @@ command_call() {
   binding="$(discovery | jq -c --arg pack "$pack_id" --arg operation "$operation_id" '
     [.protocols[] | select(.id == $pack) as $protocol
       | $protocol.routes[] | select(.operation_id == $operation)
-      | {ready: $protocol.ready, status: $protocol.status, path: .call_url, method: .call.default_method}]
+      | {ready: $protocol.ready, status: $protocol.status, path: .call_url, method: .call.default_method, required_query: (.query_parameters // [])}]
   ')"
   if [[ "$(jq 'length' <<<"$binding")" != "1" ]]; then
     json_fail "operation_not_found" "operation not found or ambiguous: $pack_id/$operation_id" "run lr show $pack_id or lr find operation <intent>, then use the published operation_id"
@@ -904,13 +992,24 @@ command_call() {
   local request_path method body
   request_path="$(jq -r '.[0].path' <<<"$binding")"
   method="$(jq -r '.[0].method' <<<"$binding")"
-  if [[ "$request_path" == *'{'* ]]; then
-    json_fail "path_parameters_required" "operation needs path parameters" "use lr mcp-list to inspect the schema, then lr mcp-call with the required path parameters"
-    return 1
-  fi
+  local path_parameters query_parameters
+  path_parameters="$(json_argument "$path_input")"
+  query_parameters="$(json_argument "$query_input")"
+  request_path="$(jq -ner --arg path "$request_path" --argjson params "$path_parameters" --argjson query "$query_parameters" --argjson required "$(jq '.[0].required_query' <<<"$binding")" '
+    if ($params|type)!="object" or ($query|type)!="object" then error("path and query parameters must be JSON objects") else . end
+    | ($path | [scan("\\{([^{}]+)\\}") | .[0]]) as $names
+    | if (($params|keys) - $names | length)>0 then error("unknown path parameter") else . end
+    | reduce $names[] as $name ($path;
+        if ($params[$name]|type)!="string" or $params[$name]=="" or $params[$name]=="." or $params[$name]==".." or ($params[$name]|contains("/") or contains("\\") or (explode|any(. < 32))) then error("missing or invalid path parameter: " + $name)
+        else split("{"+$name+"}") | join($params[$name]|@uri) end)
+    | . as $rendered
+    | if any($required[]; . as $key | ($query|has($key)|not)) then error("missing required query parameter") else . end
+    | ($query | to_entries | map(if (.value|type)=="string" or (.value|type)=="number" or (.value|type)=="boolean" then (.key|@uri)+"="+(.value|tostring|@uri) else error("query values must be strings, numbers or booleans") end) | join("&")) as $encoded
+    | $rendered + (if $encoded=="" then "" elif ($rendered|contains("?")) then "&"+$encoded else "?"+$encoded end)
+  ')" || return 1
   body="$(json_argument "$body_input")"
   if [[ "$method" = "GET" && "$body" != "{}" ]]; then
-    json_fail "query_parameters_required" "GET operation bodies are not supported" "use lr request with an explicit published call_url and query string, or lr mcp-call"
+    json_fail "query_parameters_required" "GET operation bodies are not supported" "pass an empty body {}, then path parameters {}, then query parameters as the fifth argument"
     return 1
   fi
   authenticated_request "$method" "$base_url$request_path" "$body"
@@ -1028,6 +1127,10 @@ command_mcp_call() {
     jq -r '"lr: MCP error " + (.error.code | tostring) + ": " + .error.message' <<<"$response" >&2
     return 1
   fi
+  if jq -e '.result.isError == true' >/dev/null <<<"$response"; then
+    jq '.result.structuredContent // .result' <<<"$response" >&2
+    return 1
+  fi
   jq '.result' <<<"$response"
 }
 
@@ -1050,7 +1153,7 @@ command_manage_status() {
   local contract
   contract="$(discovery)"
   jq -n \
-    --arg lane "$(if [[ -n "$maintainer_token_file" ]]; then printf 'agent-token'; else printf 'delegated-operator'; fi)" \
+    --arg lane "$(if [[ -n "$maintainer_token_file" ]]; then printf 'agent-token'; else printf 'human-operator'; fi)" \
     --argjson contract "$contract" '
       {
         object: "localrouter.maintenance.status",
@@ -1058,7 +1161,7 @@ command_manage_status() {
         agent_maintenance_enabled: ($contract.maintenance.auth.agent_token.enabled // false),
         prerequisite: (if $lane == "agent-token"
           then "discovery must enable maintenance.auth.agent_token and the supplied locator must contain a distinct localrouter.maintain Token"
-          else "explicit user delegation is required for the named local operator change"
+          else "human operator only; Agents must request an enabled distinct maintenance-only Token and must not read administrator credentials"
           end),
         credential_value_exported: false,
         next: "use lr manage-list, then open an isolated draft and apply only its reviewed exact digest"
@@ -1110,6 +1213,8 @@ if [[ "$command_name" != "help" && ("${1:-}" == "-h" || "${1:-}" == "--help") ]]
   exit 0
 fi
 case "$command_name" in
+  init) command_init "$@" ;;
+  guide) command_guide "$@" ;;
   status) command_status "$@" ;;
   tree) command_tree "$@" ;;
   find) command_find "$@" ;;
@@ -1131,6 +1236,7 @@ case "$command_name" in
   mcp-list) command_mcp_list "$@" ;;
   mcp-call) command_mcp_call "$@" ;;
   whoami) command_whoami "$@" ;;
+  setup) command_setup "$@" ;;
   manage-status) command_manage_status "$@" ;;
   manage-list) command_manage_list "$@" ;;
   manage-call) command_manage_call "$@" ;;

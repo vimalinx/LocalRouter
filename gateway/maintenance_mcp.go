@@ -115,7 +115,13 @@ func (registry *protocolRegistry) handleMaintenanceMCP() gin.HandlerFunc {
 		case "tools/list":
 			items := make([]gin.H, 0, len(maintenanceTools()))
 			for _, tool := range maintenanceTools() {
+				if registry.workspace.scopedMaintainer(c.GetInt(tokenPolicyContextID)) {
+					continue
+				}
 				items = append(items, gin.H{"name": tool.Name, "description": tool.Description, "inputSchema": tool.InputSchema, "annotations": gin.H{"readOnlyHint": tool.ReadOnly, "destructiveHint": tool.Destructive}})
+			}
+			if registry.workspace != nil {
+				items = append(items, serviceMCPToolViews(true)...)
 			}
 			mcpResult(c, request.ID, gin.H{"tools": items})
 		case "tools/call":
@@ -171,6 +177,17 @@ func (registry *protocolRegistry) handleMaintenanceToolCall(c *gin.Context, requ
 	if err := json.Unmarshal(request.Params, &params); err != nil || params.Name == "" {
 		mcpError(c, request.ID, -32602, "tool name is required")
 		return
+	}
+	if registry.workspace != nil {
+		hub := registry.workspace
+		runtime := localRuntime{store: hub.store, policies: hub.policies, protocols: registry, workspace: hub, rootUser: localUser{ID: hub.userID}}
+		if registry.handleServiceSetupTool(c, runtime, request, params.Name, params.Arguments, true) {
+			return
+		}
+		if hub.scopedMaintainer(c.GetInt(tokenPolicyContextID)) {
+			maintenanceFailureResult(c, request.ID, maintenanceFailure(registry, "maintenance_scope_denied", "authorization", "this scoped maintainer uses setup proposals; legacy global maintenance tools are not delegated", false, false))
+			return
+		}
 	}
 	known := false
 	for _, tool := range maintenanceTools() {

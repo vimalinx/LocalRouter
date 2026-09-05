@@ -148,6 +148,8 @@ func (registry *protocolRegistry) runStoredWorkflow(ctx context.Context, runtime
 		break
 	}
 	defer registry.finishWorkflowExecution(key, execution)
+	runtime.callOwner, runtime.callTraceID, runtime.callParentID, runtime.callTaskID = job.OwnerTokenID, job.TraceID, job.ParentSpanID, job.TaskID
+	runtime.callSurface = "w"
 	claimID := job.ExecutionID
 	if mode == "cancel" {
 		job.State, job.WaitingCallback = "running", false
@@ -182,6 +184,9 @@ func (registry *protocolRegistry) runStoredWorkflow(ctx context.Context, runtime
 		state.Jobs[jobID] = job
 		return true, nil
 	})
+	if err == nil && runtime.workspace != nil {
+		runtime.workspace.recordWorkflowTrace(job, mode)
+	}
 	return job, err
 }
 
@@ -252,6 +257,12 @@ func (registry *protocolRegistry) serveStoredWorkflow(c *gin.Context, runtime lo
 		}
 		c.JSON(status, gin.H{"success": false, "message": "cannot execute or read workflow job"})
 		return
+	}
+	c.Set("localrouter_workflow_job", job.ID)
+	if trace := serviceTraceContext(c); trace != nil {
+		trace.ResourceState = job.State
+		trace.Pack = definition.ID
+		trace.Operation = "workflow." + workflow.ID + "." + mode
 	}
 	c.JSON(http.StatusOK, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
 }

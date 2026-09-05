@@ -52,7 +52,7 @@ test -f "$test_home/.agents/skills/localrouter-protocol-pack/SKILL.md"
 test -f "$test_home/.omp/agent/skills/localrouter-protocol-pack/SKILL.md"
 test -f "$test_home/.agents/skills/localrouter-protocol-pack/.localrouter-managed"
 test -f "$test_home/.omp/agent/skills/localrouter-protocol-pack/.localrouter-managed"
-grep -Fq 'explicit delegation for one `lr manage-*` change' "$test_home/.agents/skills/localrouter-protocol-pack/SKILL.md"
+grep -Fq 'Never read the administrator credential' "$test_home/.agents/skills/localrouter-protocol-pack/SKILL.md"
 grep -Fq 'Provider and runtime handoff' "$test_home/.agents/skills/localrouter-protocol-pack/references/runtime-handoff.md"
 grep -Fq 'lr runtime-openai <pack> <exact-model>' "$test_home/.agents/skills/localrouter-protocol-pack/references/runtime-handoff.md"
 for agent_contract in "$test_home/.agents/AGENTS.md" "$test_home/.codex/AGENTS.md" "$test_home/.omp/agent/AGENTS.md"; do

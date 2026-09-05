@@ -135,7 +135,17 @@ func (registry *protocolRegistry) forwardGRPC(c *gin.Context, definition protoco
 	} else {
 		client = registry.client
 	}
+	finishAttempt, traceErr := registry.startServiceAttempt(c, 1)
+	if traceErr != nil {
+		c.Status(http.StatusServiceUnavailable)
+		return
+	}
 	response, err := client.Do(request)
+	attemptStatus := 0
+	if response != nil {
+		attemptStatus = response.StatusCode
+	}
+	finishAttempt(attemptStatus, true, err)
 	if err != nil {
 		c.Set("localrouter_protocol_outcome", "unknown")
 		writeAgentError(c, routeUnknownOutcomeStatus(route), "upstream_outcome_unknown", "grpc upstream outcome is unknown", "the gRPC request may have reached the provider but no authoritative response was received", false, "provider", "reconcile provider state using the returned resource or idempotency key; do not replay blindly", nil, registry.alternativeOperationRefs(c.GetInt(tokenPolicyContextID), definition.ID, route.OperationID), gin.H{"outcome": "unknown", "operation_id": route.OperationID})
@@ -156,7 +166,11 @@ func (registry *protocolRegistry) forwardGRPC(c *gin.Context, definition protoco
 	}
 	c.Status(response.StatusCode)
 	buffer := make([]byte, 32<<10)
-	_, _ = io.CopyBuffer(c.Writer, response.Body, buffer)
+	if _, err := io.CopyBuffer(c.Writer, response.Body, buffer); err != nil {
+		if trace := serviceTraceContext(c); trace != nil {
+			trace.Outcome = "response_incomplete"
+		}
+	}
 	for header, values := range response.Trailer {
 		for _, value := range values {
 			c.Writer.Header().Add(header, value)
@@ -184,6 +198,10 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "message": "protocol request body is too large"})
 		return
 	}
+	if !registry.authorizeProtocolModel(c, body) {
+		return
+	}
+	observeServiceUnits(c, route, body, "request")
 	body, err = applyProtocolJSONTransform(body, route.RequestTransform.JSON)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
@@ -193,6 +211,9 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 	body, err = applyProtocolExpressions(body, route.RequestTransform.JSON, expressionEnv)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "request expression failed"})
+		return
+	}
+	if !registry.authorizeProtocolModel(c, body) {
 		return
 	}
 	expressionEnv = protocolExpressionEnv(body, matched.Params, query, c.Request.Header, c.Request.Method, 0)
@@ -298,7 +319,13 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 			SchemaVersion: "1", OperationID: route.OperationID,
 			Request: protocolAdapterRequest{Method: prepared.Method, URL: prepared.URL.String(), Headers: prepared.Header.Clone(), BodyBase64: base64.StdEncoding.EncodeToString(body)},
 		})
+		finishAttempt, traceErr := registry.startServiceAttempt(c, attempt+1)
+		if traceErr != nil {
+			c.Status(http.StatusServiceUnavailable)
+			return
+		}
 		raw, definitelyNotSent, invokeErr := registry.invokeProtocolAdapter(c.Request.Context(), definition, route, envelopeBody)
+		finishAttempt(0, !definitelyNotSent, invokeErr)
 		if invokeErr != nil {
 			_ = registry.releaseCredential(definition, acquired, http.StatusBadGateway, "")
 			if attempt+1 < maxAttempts && routeRetryAllowed(route, providerMethod, !definitelyNotSent, idempotencyKey, true, 0) {
@@ -347,6 +374,7 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 		if affinityKey != "" && adapted.Status >= 200 && adapted.Status < 400 {
 			_ = registry.bindAffinity(definition, affinityKey, acquired.Credential.ID, route.Affinity.TTLSeconds)
 		}
+		observeServiceUnits(c, route, decodedBody, "response")
 		decodedBody, err = applyProtocolJSONTransform(decodedBody, route.ResponseTransform)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "protocol response transform failed"})
@@ -500,6 +528,13 @@ func (registry *protocolRegistry) forwardWebSocket(c *gin.Context, definition pr
 		subprotocols := websocket.Subprotocols(c.Request)
 		dialer := websocket.Dialer{HandshakeTimeout: time.Duration(definition.Timeout) * time.Second, Subprotocols: subprotocols, EnableCompression: true}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(definition.Timeout)*time.Second)
+		finishAttempt, traceErr := registry.startServiceAttempt(c, attempt+1)
+		if traceErr != nil {
+			cancel()
+			_ = registry.releaseCredential(definition, candidate, 0, "")
+			c.Status(http.StatusServiceUnavailable)
+			return
+		}
 		connection, response, dialErr := dialer.DialContext(ctx, target.String(), headers)
 		cancel()
 		status := http.StatusBadGateway
@@ -507,6 +542,7 @@ func (registry *protocolRegistry) forwardWebSocket(c *gin.Context, definition pr
 			status = response.StatusCode
 			_ = response.Body.Close()
 		}
+		finishAttempt(status, true, dialErr)
 		if dialErr == nil {
 			upstream = connection
 			break

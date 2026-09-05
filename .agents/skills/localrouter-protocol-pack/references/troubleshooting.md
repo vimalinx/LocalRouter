@@ -27,7 +27,7 @@ Read this reference after a concrete failure. Preserve the layer where it failed
 
 1. Public discovery and generated docs.
 2. Draft/static validation.
-3. Local listener, call-only consumer authorization, administrator maintenance, then optional Agent-maintenance switch and capability.
+3. Local listener, service/proposal consumer authorization, human administrator maintenance, then optional Agent-maintenance switch and capability.
 4. Sanitized operation availability/readiness.
 5. Sanitized pool scheduler and quota state.
 6. Direct cheap provider probe through the owning maintainer.

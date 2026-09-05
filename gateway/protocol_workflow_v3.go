@@ -228,6 +228,8 @@ func (registry *protocolRegistry) handleGraphWorkflowCreate(c *gin.Context, runt
 		CallbackURL:  fmt.Sprintf("%s/w/callback/%s/%s/%s/%s", callbackBaseURL, definition.ID, workflow.ID, jobID, callbackToken),
 		OwnerTokenID: c.GetInt(tokenPolicyContextID),
 	}
+	attachWorkflowTrace(c, &job)
+	c.Set("localrouter_workflow_job", job.ID)
 	err = registry.editWorkflowState(definition.ID, func(state *protocolWorkflowState) (bool, error) {
 		state.Jobs[job.ID] = job
 		return true, nil

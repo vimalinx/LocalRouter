@@ -51,6 +51,7 @@ export const consoleSources = [
 ] as const
 export type ConsoleKey = typeof consoleSources[number][0]
 const requirements: Record<string, ConsoleKey[]> = {
+  setup: [],
   overview: ['summary', 'analytics'],
   protocols: ['protocols', 'providers', 'channels'],
   tokens: ['tokens', 'policies', 'maintenanceAccess'],

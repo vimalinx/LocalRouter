@@ -1,0 +1,10 @@
+{
+  "id": "read-api", "version": "1", "name": "查询与搜索", "summary": "GET 查询、搜索、状态与目录接口。",
+  "maintenance_guide": "Read the provider's current documentation. Replace the example with observed paths and schemas; never infer successful verification. Keep query parameters explicit. Do not replay unknown side effects. After approval, call the smallest authorized operation once and inspect its trace.",
+  "checks": ["documented path and method", "authentication placement", "query schema", "resource unit mapping", "one authorized real response"],
+  "example": {
+    "schema_version": "3", "id": "my-search", "name": "My search service", "description": "Replace with the observed provider contract", "enabled": true,
+    "base_url": "https://service.example.invalid", "auth": {"type": "none"}, "timeout_seconds": 60,
+    "routes": [{"operation_id": "search", "methods": ["GET"], "path": "/search", "query_parameters": ["q"], "summary": "Search documents", "retry": {"mode": "safe", "max_attempts": 1}}]
+  }
+}

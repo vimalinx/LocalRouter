@@ -188,6 +188,7 @@ func loadProtocolGuide(path string, operations map[string]bool) (protocolGuide, 
 	if strings.TrimSpace(markdownBody) == "" {
 		return protocolGuide{}, errors.New("guide body cannot be empty")
 	}
+	markdownBody = currentPublishedGuide(markdownBody)
 	var rendered bytes.Buffer
 	if err := protocolMarkdown.Convert([]byte(markdownBody), &rendered); err != nil {
 		return protocolGuide{}, fmt.Errorf("render markdown: %w", err)
@@ -251,7 +252,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 					"required_capability": localRouterMaintainCapability, "service_access": false,
 				},
 			},
-			"grant":        "Service Tokens are call-only. Agent maintenance Tokens are separate, maintenance-only, and accepted only while the operator switch is enabled.",
+			"grant":        "Service Tokens can call services and prepare owned proposals, but cannot approve authority or maintain Packs. Agent maintenance requires a separate maintenance-only Token and the enabled operator switch.",
 			"lifecycle":    []string{"draft", "edit", "validate", "review-impact", "plan", "apply", "verify", "rollback"},
 			"editing":      "Semantic MCP tools own paths, JSON/YAML formatting, atomic writes and exact digests.",
 			"failure":      "Drafts are preserved and local post-apply verification failures automatically restore the previous revision.",
@@ -277,9 +278,10 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"cache": "reuse the service tree until this digest or schema_version changes; readiness remains live state",
 			},
 			"agent": gin.H{
+				"service_templates": "/agent/service-templates", "onboarding": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 				"catalog": "/agent/operations", "resolve": "/agent/resolve", "describe": "/agent/operations/{pack}/{operation}",
 				"compare": "/agent/compare", "preflight": "/agent/preflight", "whoami": "/agent/whoami",
-				"workflow": "/w/{pack}/{workflow}", "docs": "/docs/agent.json",
+				"workflow": "/w/{pack}/{workflow}", "docs": "/docs/agent.json", "getting_started": "/docs/agent-start.md", "start_command": "lr init",
 				"selection_mode": "agent", "merged": false,
 			},
 			"agent_identity": gin.H{
@@ -292,7 +294,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"operation_id":        "semantic selector for Agent APIs, lr and MCP; never an HTTP path",
 				"operation_id_is_url": false,
 				"http":                "use each route.call_url with one of route.call.methods",
-				"cli":                 "prefer route.call.cli or lr call <pack> <operation_id> '<json>'",
+				"cli":                 "prefer route.call.cli; lr call accepts body JSON, path-params JSON and query-params JSON in that order",
 			},
 			"pack_model": gin.H{
 				"unit": "service-pack",
@@ -520,9 +522,9 @@ func (registry *protocolRegistry) handlePackMarkdown(c *gin.Context) {
 	}
 	output.WriteString("> `operation_id` 是给 Agent API、`lr` 和 MCP 使用的语义选择标识，不是 URL。直接发送 HTTP 时只使用下方的 **实际调用地址**（也就是 Manifest 中的 `call_url`）。\n\n")
 	output.WriteString("> `request_example` 只说明请求形状，不证明其中的动态值当前可用；存在 `dynamic_inputs` 时，必须先按其来源解析模型或资源 ID。\n\n")
-	output.WriteString("## 操作参考\n\n")
+	output.WriteString("先运行 `lr init` 检查独立身份；`lr guide` 提供入门路径。凭据只通过 `LOCALROUTER_API_TOKEN_FILE` 文件定位器交给 CLI。\n\n## 操作参考\n\n")
 	for _, route := range view.Routes {
-		fmt.Fprintf(&output, "- **实际调用**：`%s %s`\n  - `operation_key`：`%s.%s`\n  - `operation_id`：`%s`（语义选择标识，不是 URL）\n  - CLI：`lr call %s %s '<json>'`\n  - 用途：%s", strings.Join(route.Methods, "/"), view.Mount+route.Path, view.ID, route.OperationID, route.OperationID, view.ID, route.OperationID, route.Summary)
+		fmt.Fprintf(&output, "- **实际调用**：`%s %s`\n  - `operation_key`：`%s.%s`\n  - `operation_id`：`%s`（语义选择标识，不是 URL）\n  - CLI：`%s`\n  - 用途：%s", strings.Join(route.Methods, "/"), view.Mount+route.Path, view.ID, route.OperationID, route.OperationID, publishProtocolRoute(view.ID, view.Mount, view.Routes, route).Call.CLI, route.Summary)
 		if route.Streaming {
 			output.WriteString("（流式）")
 		}

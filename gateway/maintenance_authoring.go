@@ -140,6 +140,7 @@ func maintenanceAvailabilitySchema() gin.H {
 
 func maintenancePutOperationSchema() gin.H {
 	operation := maintenanceObjectSchema(gin.H{
+		"metering":     serviceMeteringSchema(),
 		"operation_id": maintenanceString("Stable operation id"), "methods": gin.H{"type": "array", "minItems": 1, "uniqueItems": true, "items": gin.H{"type": "string", "enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}}},
 		"path": maintenanceString("Public absolute path pattern"), "summary": maintenanceString("One sentence operation purpose"),
 		"capabilities": maintenanceStringArray("Searchable capability tags"), "query_parameters": maintenanceStringArray("Allowed public query names"),

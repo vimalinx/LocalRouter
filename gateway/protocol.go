@@ -36,6 +36,7 @@ var protocolQueryParameterPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{
 var protocolHeaderPattern = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")
 
 type protocolRegistry struct {
+	workspace       *serviceWorkspace
 	mu              sync.RWMutex
 	dir             string
 	dataDir         string
@@ -104,6 +105,7 @@ type protocolAuth struct {
 }
 
 type protocolRoute struct {
+	Metering                 *serviceMetering          `json:"metering,omitempty"`
 	OperationID              string                    `json:"operation_id,omitempty"`
 	Capabilities             []string                  `json:"capabilities,omitempty"`
 	Methods                  []string                  `json:"methods"`
@@ -225,8 +227,23 @@ func publishProtocolRoute(packID, mount string, routes []protocolRoute, route pr
 	if len(route.Methods) > 0 {
 		call.DefaultMethod = route.Methods[0]
 	}
-	if len(protocolPathParameterNames(route.Path)) == 0 {
-		call.CLI = "lr call " + packID + " " + route.OperationID + " '<json>'"
+	call.CLI = "lr call " + packID + " " + route.OperationID + " '<json>'"
+	paths := map[string]string{}
+	queries := map[string]string{}
+	for name := range protocolPathParameterNames(route.Path) {
+		paths[name] = "actual-" + name
+	}
+	for _, name := range route.QueryParameters {
+		queries[name] = "actual-" + name
+	}
+	if len(paths) > 0 || len(queries) > 0 {
+		pathJSON, _ := json.Marshal(paths)
+		queryJSON, _ := json.Marshal(queries)
+		body := "<json>"
+		if call.DefaultMethod == http.MethodGet || call.DefaultMethod == http.MethodHead {
+			body = "{}"
+		}
+		call.CLI = "lr call " + packID + " " + route.OperationID + " '" + body + "' '" + string(pathJSON) + "' '" + string(queryJSON) + "'"
 	}
 	published := protocolPublicRoute{
 		protocolRoute:    route,
@@ -651,6 +668,9 @@ func (registry *protocolRegistry) validateAuth(auth protocolAuth, pooled bool) e
 }
 
 func validateProtocolRoute(route *protocolRoute) error {
+	if err := validateServiceMetering(route.Metering); err != nil {
+		return err
+	}
 	if !strings.HasPrefix(route.Path, "/") || strings.Contains(route.Path, "?") || strings.Contains(route.Path, "#") {
 		return errors.New("path must be an absolute path pattern without query or fragment")
 	}
@@ -943,6 +963,7 @@ func registerProtocolDocumentationRoutes(engine *gin.Engine, runtime localRuntim
 	engine.GET("/docs/index.json", runtime.protocols.handleDocsIndex)
 	engine.GET("/docs/openapi.json", runtime.protocols.handleOpenAPI)
 	engine.GET("/docs/agent.json", runtime.protocols.handleAgentDocs)
+	engine.GET("/docs/agent-start.md", handleAgentStartGuide)
 	engine.GET("/docs/pools/index.json", runtime.protocols.handlePoolCatalogJSON)
 	engine.GET("/docs/pools/catalog.md", runtime.protocols.handlePoolCatalogMarkdown)
 	engine.GET("/docs/protocols", runtime.protocols.handleDocsIndex)
@@ -963,11 +984,14 @@ func registerProtocolConsumerRoutes(engine *gin.Engine, runtime localRuntime) {
 	agent.GET("/operations", runtime.protocols.handleAgentCatalog(runtime))
 	agent.GET("/operations/:protocol/:operation", runtime.protocols.handleAgentDescribe(runtime))
 	agent.POST("/preflight", runtime.protocols.handleAgentPreflight(runtime))
+	registerServiceAgentRoutes(agent, runtime)
 	mcp := engine.Group("/mcp")
 	mcp.Use(localAPITokenAuth(runtime))
+	mcp.Use(serviceTraceMiddleware(runtime, "mcp"))
 	mcp.POST("", runtime.protocols.handleMCP(runtime))
 	workflow := engine.Group("/w")
 	workflow.Use(localAPITokenAuth(runtime))
+	workflow.Use(serviceTraceMiddleware(runtime, "w"))
 	workflow.POST("/:protocol/:workflow", runtime.protocols.handleWorkflowCreate(runtime))
 	workflow.GET("/:protocol/:workflow", runtime.protocols.handleWorkflowList)
 	workflow.GET("/:protocol/:workflow/:job", runtime.protocols.handleWorkflowGet(runtime))
@@ -975,6 +999,7 @@ func registerProtocolConsumerRoutes(engine *gin.Engine, runtime localRuntime) {
 	engine.POST("/w/callback/:protocol/:workflow/:job/:token", runtime.protocols.handleGraphWorkflowCallback(runtime))
 	proxy := engine.Group("/p")
 	proxy.Use(localAPITokenAuth(runtime))
+	proxy.Use(serviceTraceMiddleware(runtime, "p"))
 	proxy.Any("/:protocol", runtime.protocols.handleProxy)
 	proxy.Any("/:protocol/*path", runtime.protocols.handleProxy)
 }
@@ -1057,6 +1082,7 @@ func localAPITokenAuth(runtime localRuntime) gin.HandlerFunc {
 			c.Set(tokenPolicyContextID, token.ID)
 			c.Set("token_id", token.ID)
 			c.Set("token_name", token.Name)
+			c.Set("local_token", token)
 		}
 		c.Next()
 	}
@@ -1116,6 +1142,7 @@ func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 		writeAgentError(c, http.StatusMethodNotAllowed, "route_not_allowed", "path or method is not allowed by the Protocol Pack", decodedPath, false, "agent", "operation_id is a semantic selector, not a URL; run lr show "+definition.ID+" and use the exact published call_url and method", nil, nil, gin.H{"pack": definition.ID, "requested_method": c.Request.Method, "requested_path": decodedPath})
 		return
 	}
+	bindServiceTrace(c, definition, matched.Route.OperationID)
 	ready, status := registry.readiness(definition)
 	if !ready {
 		view, _ := registry.viewFor(definition.ID)
@@ -1133,7 +1160,7 @@ func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 		return
 	}
 	if registry.policies != nil {
-		release, allowed := registry.policies.authorizeRequest(c, "p", definition.ID, matched.Route.OperationID, "")
+		release, allowed := registry.policies.authorizeRequest(c, servicePolicySurface(c), definition.ID, matched.Route.OperationID, "")
 		if !allowed {
 			return
 		}
@@ -1250,6 +1277,10 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "message": "protocol request body is too large"})
 		return
 	}
+	observeServiceUnits(c, route, body, "request")
+	if !registry.authorizeProtocolModel(c, body) {
+		return
+	}
 	body, err = applyProtocolJSONTransform(body, route.RequestTransform.JSON)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
@@ -1264,6 +1295,9 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 	expressionEnv = protocolExpressionEnv(body, matched.Params, query, c.Request.Header, c.Request.Method, 0)
 	if model := requestModel(body); model != "" {
 		c.Set("localrouter_usage_model", model)
+	}
+	if !registry.authorizeProtocolModel(c, body) {
+		return
 	}
 	for key, expression := range route.RequestTransform.QueryExpr {
 		value, evalErr := evalProtocolExpression(expression, expressionEnv)
@@ -1368,7 +1402,18 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "cannot prepare upstream authentication"})
 			return
 		}
+		finishAttempt, traceErr := registry.startServiceAttempt(c, attempt+1)
+		if traceErr != nil {
+			_ = registry.releaseCredential(definition, acquired, 0, "")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "trace_unavailable"})
+			return
+		}
 		response, requestErr := registry.client.Do(request)
+		responseStatus := 0
+		if response != nil {
+			responseStatus = response.StatusCode
+		}
+		finishAttempt(responseStatus, wroteRequest, requestErr)
 		if requestErr != nil {
 			_ = registry.releaseCredential(definition, acquired, http.StatusBadGateway, "")
 			if attempt+1 < maxAttempts && routeRetryAllowed(route, providerMethod, wroteRequest, idempotencyKey, true, 0) {
@@ -1413,10 +1458,14 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 	if needsBody {
 		body, err := io.ReadAll(io.LimitReader(response.Body, maxProtocolBodyBytes+1))
 		if err != nil || len(body) > maxProtocolBodyBytes {
+			if trace := serviceTraceContext(c); trace != nil {
+				trace.Outcome = "response_incomplete"
+			}
 			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "protocol response body is too large"})
 			return
 		}
 		observeProtocolUsage(c, response.Header.Get("Content-Type"), body)
+		observeServiceUnits(c, route, body, "response")
 		if route.Affinity.ResponseJSONPath != "" && response.StatusCode >= 200 && response.StatusCode < 400 {
 			resourceID := gjson.GetBytes(body, route.Affinity.ResponseJSONPath).String()
 			_ = registry.bindAffinity(definition, resourceID, acquired.Credential.ID, route.Affinity.TTLSeconds)
@@ -1449,6 +1498,7 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 	streamUsage := &streamUsageCollector{}
 	observe := func() {
 		observeProtocolUsage(c, response.Header.Get("Content-Type"), capture.Bytes())
+		observeServiceUnits(c, route, capture.Bytes(), "response")
 		if usage := streamUsage.result(); usage.hasTokens() || usage.ReportedCostUSD != nil {
 			c.Set("localrouter_usage_metrics", usage)
 		}
@@ -1460,6 +1510,9 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 			_, _ = capture.Write(buffer[:count])
 			_, _ = streamUsage.Write(buffer[:count])
 			if _, writeErr := c.Writer.Write(buffer[:count]); writeErr != nil {
+				if trace := serviceTraceContext(c); trace != nil {
+					trace.Outcome = "client_disconnected"
+				}
 				observe()
 				return
 			}
@@ -1468,6 +1521,11 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 			}
 		}
 		if readErr != nil {
+			if readErr != io.EOF {
+				if trace := serviceTraceContext(c); trace != nil {
+					trace.Outcome = "response_incomplete"
+				}
+			}
 			observe()
 			return
 		}

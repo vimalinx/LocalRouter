@@ -6,6 +6,32 @@ published.
 
 ## Unreleased
 
+## 0.1.0-alpha.7 - 2026-09-05
+
+- Added Agent-prepared service onboarding with exact-digest human approval,
+  versioned service templates, and capability bundles pinned to approved
+  operations. Compatible maintenance can be delegated separately from calls.
+- Added the service workspace console for reviewing proposals, granting and
+  revoking bundles, inspecting templates, and following request traces.
+- Persisted task and owner attribution across HTTP, MCP, and workflow calls,
+  including upstream attempts, usage provenance, resource snapshots, and
+  explicitly unknown outcomes and costs. Internal calls preserve the original
+  caller's policy, quota, and revocation checks.
+- Added interrupted-approval reconciliation that preserves intervening grants
+  and revocations, and kept preparation separate from installation and execution.
+- Added `lr init` and `lr guide` for identity checks and a concise Agent entry
+  flow. Bootstrap identity is distinguished from independent Agent registration;
+  service and maintenance credentials remain separate.
+- Made template discovery compact and on demand, propagated MCP errors through
+  CLI exit codes, and fixed body, path, and query arguments in `lr call` and
+  generated usage examples.
+- Clarified service readiness, caller authorization, proposal digests, provider
+  resource IDs, and workflow Job IDs in installed Agent guidance. Public legacy
+  guides direct consumers to file-based Token locators.
+- Extended isolated CLI, authorization, trace-accounting, console, and release
+  acceptance. The release contains generic templates and no provider accounts
+  or operator Pack configuration.
+
 ## 0.1.0-alpha.6 - 2026-09-05
 
 - Reject foreign browser origins and non-loopback operator hosts; prohibit
