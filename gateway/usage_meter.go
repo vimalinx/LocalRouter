@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"strings"
@@ -52,6 +53,14 @@ func parseUsageMetrics(body []byte) usageMetrics {
 	if len(body) == 0 || !json.Valid(body) {
 		return usageMetrics{}
 	}
+	// Streaming envelopes retain the provider's normal usage document inside
+	// message/response. Never interpret generated content as usage.
+	switch gjson.GetBytes(body, "type").String() {
+	case "message_start":
+		body = []byte(gjson.GetBytes(body, "message").Raw)
+	case "response.completed", "response.incomplete", "response.failed":
+		body = []byte(gjson.GetBytes(body, "response").Raw)
+	}
 	usage := usageMetrics{
 		InputTokens: firstUsageInt(body,
 			"usage.prompt_tokens", "usage.input_tokens", "usage.inputTokens", "usageMetadata.promptTokenCount"),
@@ -94,22 +103,70 @@ func firstUsageFloat(body []byte, paths ...string) (float64, bool) {
 	return 0, false
 }
 
-func parseStreamUsageMetrics(body []byte) usageMetrics {
-	best := usageMetrics{}
-	for _, line := range strings.Split(string(body), "\n") {
-		candidate := strings.TrimSpace(line)
-		if strings.HasPrefix(candidate, "data:") {
-			candidate = strings.TrimSpace(strings.TrimPrefix(candidate, "data:"))
+// Parse lines incrementally so usage at the start of a long stream is retained.
+// Oversized individual lines are skipped without retaining unbounded payloads.
+type streamUsageCollector struct {
+	pending  []byte
+	dropping bool
+	usage    usageMetrics
+}
+
+func (collector *streamUsageCollector) Write(data []byte) (int, error) {
+	size := len(data)
+	for len(data) > 0 {
+		end := bytes.IndexByte(data, '\n')
+		complete := end >= 0
+		if !complete {
+			end = len(data)
 		}
-		if candidate == "" || candidate == "[DONE]" {
-			continue
+		if !collector.dropping {
+			if len(collector.pending)+end > 2<<20 {
+				collector.pending = nil
+				collector.dropping = true
+			} else {
+				collector.pending = append(collector.pending, data[:end]...)
+			}
 		}
-		parsed := parseUsageMetrics([]byte(candidate))
-		if usageInformationScore(parsed) >= usageInformationScore(best) {
-			best = parsed
+		if !complete {
+			break
 		}
+		if !collector.dropping {
+			collector.observe(collector.pending)
+		}
+		collector.pending = collector.pending[:0]
+		collector.dropping = false
+		data = data[end+1:]
 	}
-	return best.normalized()
+	return size, nil
+}
+
+func (collector *streamUsageCollector) observe(line []byte) {
+	candidate := bytes.TrimSpace(line)
+	candidate = bytes.TrimSpace(bytes.TrimPrefix(candidate, []byte("data:")))
+	parsed := parseUsageMetrics(candidate)
+	best := &collector.usage
+	best.InputTokens = max(best.InputTokens, parsed.InputTokens)
+	best.OutputTokens = max(best.OutputTokens, parsed.OutputTokens)
+	best.CacheReadInputTokens = max(best.CacheReadInputTokens, parsed.CacheReadInputTokens)
+	best.CacheWriteInputTokens = max(best.CacheWriteInputTokens, parsed.CacheWriteInputTokens)
+	best.ReasoningTokens = max(best.ReasoningTokens, parsed.ReasoningTokens)
+	best.TotalTokens = max(best.TotalTokens, parsed.TotalTokens, best.InputTokens+best.OutputTokens)
+	if parsed.ReportedCostUSD != nil {
+		best.ReportedCostUSD = parsed.ReportedCostUSD
+	}
+}
+
+func (collector *streamUsageCollector) result() usageMetrics {
+	if !collector.dropping && len(collector.pending) > 0 {
+		collector.observe(collector.pending)
+	}
+	return collector.usage.normalized()
+}
+
+func parseStreamUsageMetrics(body []byte) usageMetrics {
+	collector := &streamUsageCollector{}
+	_, _ = collector.Write(body)
+	return collector.result()
 }
 
 func usageInformationScore(usage usageMetrics) int64 {

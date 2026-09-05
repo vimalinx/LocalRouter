@@ -43,6 +43,11 @@ http://192.168.1.10:8318/v1
 http://192.168.1.10:8318/mcp
 ```
 
+The container anonymously checks the public GitHub Releases API on startup and
+every six hours. It only reports an available version in the loopback console;
+it never downloads or installs anything. Set
+`LOCALROUTER_UPDATE_CHECK_ENABLED=false` in `.env` for an offline deployment.
+
 Create a distinct Service Token for each device or Agent in the local console.
 Never copy the administrator credential to a LAN client. Configure the host
 firewall to allow port 8318 only from the intended private subnet.

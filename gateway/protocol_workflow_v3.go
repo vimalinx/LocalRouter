@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -227,23 +228,12 @@ func (registry *protocolRegistry) handleGraphWorkflowCreate(c *gin.Context, runt
 		CallbackURL:  fmt.Sprintf("%s/w/callback/%s/%s/%s/%s", callbackBaseURL, definition.ID, workflow.ID, jobID, callbackToken),
 		OwnerTokenID: c.GetInt(tokenPolicyContextID),
 	}
-	registry.workflowMu.Lock()
-	defer registry.workflowMu.Unlock()
-	stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-	if lockErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot lock workflow state"})
-		return
-	}
-	defer unlockProtocolState(stateLock)
-	state, err := registry.loadWorkflowState(definition.ID)
-	if err == nil {
+	err = registry.editWorkflowState(definition.ID, func(state *protocolWorkflowState) (bool, error) {
 		state.Jobs[job.ID] = job
-		err = registry.saveWorkflowState(definition.ID, state)
-	}
+		return true, nil
+	})
 	if err == nil {
-		job = registry.advanceGraphWorkflow(runtime, definition, workflow, job, nil, 0)
-		state.Jobs[job.ID] = job
-		err = registry.saveWorkflowState(definition.ID, state)
+		job, err = registry.runStoredWorkflow(c.Request.Context(), runtime, definition, workflow, job.ID, job.OwnerTokenID, "advance", nil, 0)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow job"})
@@ -267,79 +257,11 @@ func workflowCallbackBaseURL(c *gin.Context, runtime localRuntime) (string, erro
 }
 
 func (registry *protocolRegistry) handleGraphWorkflowGet(c *gin.Context, runtime localRuntime, definition protocolDefinition, workflow protocolWorkflow) {
-	registry.workflowMu.Lock()
-	defer registry.workflowMu.Unlock()
-	stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-	if lockErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot lock workflow state"})
-		return
-	}
-	defer unlockProtocolState(stateLock)
-	state, err := registry.loadWorkflowState(definition.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot read workflow state"})
-		return
-	}
-	job, ok := state.Jobs[c.Param("job")]
-	if !ok || job.WorkflowID != workflow.ID {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-		return
-	}
-	if !workflowJobOwnedBy(c, job) {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-		return
-	}
-	if !workflowJobTerminal(job.State) && !job.WaitingCallback && !time.Now().UTC().Before(job.NextPollAt) {
-		job = registry.advanceGraphWorkflow(runtime, definition, workflow, job, nil, 0)
-		state.Jobs[job.ID] = job
-		if err := registry.saveWorkflowState(definition.ID, state); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow state"})
-			return
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
+	registry.serveStoredWorkflow(c, runtime, definition, workflow, "advance")
 }
 
 func (registry *protocolRegistry) handleGraphWorkflowCancel(c *gin.Context, runtime localRuntime, definition protocolDefinition, workflow protocolWorkflow) {
-	registry.workflowMu.Lock()
-	defer registry.workflowMu.Unlock()
-	stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-	if lockErr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot lock workflow state"})
-		return
-	}
-	defer unlockProtocolState(stateLock)
-	state, err := registry.loadWorkflowState(definition.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot read workflow state"})
-		return
-	}
-	job, ok := state.Jobs[c.Param("job")]
-	if !ok || job.WorkflowID != workflow.ID {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-		return
-	}
-	if !workflowJobOwnedBy(c, job) {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-		return
-	}
-	if !workflowJobTerminal(job.State) {
-		job.WaitingCallback = false
-		if workflow.CancelStep == "" {
-			job.State = "cancelled"
-			job.UpdatedAt = time.Now().UTC()
-		} else {
-			job.CurrentStep = workflow.CancelStep
-			job.NextPollAt = time.Now().UTC()
-			job = registry.advanceGraphWorkflow(runtime, definition, workflow, job, nil, 0)
-		}
-		state.Jobs[job.ID] = job
-		if err := registry.saveWorkflowState(definition.ID, state); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow state"})
-			return
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
+	registry.serveStoredWorkflow(c, runtime, definition, workflow, "cancel")
 }
 
 func (registry *protocolRegistry) handleGraphWorkflowCallback(runtime localRuntime) gin.HandlerFunc {
@@ -360,14 +282,6 @@ func (registry *protocolRegistry) handleGraphWorkflowCallback(runtime localRunti
 		if !json.Valid(body) {
 			body, _ = json.Marshal(string(body))
 		}
-		registry.workflowMu.Lock()
-		defer registry.workflowMu.Unlock()
-		stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-		if lockErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot lock workflow state"})
-			return
-		}
-		defer unlockProtocolState(stateLock)
 		state, err := registry.loadWorkflowState(definition.ID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot read workflow state"})
@@ -387,11 +301,9 @@ func (registry *protocolRegistry) handleGraphWorkflowCallback(runtime localRunti
 			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "workflow is not waiting for a callback"})
 			return
 		}
-		job.WaitingCallback = false
-		job = registry.advanceGraphWorkflow(runtime, definition, workflow, job, body, http.StatusOK)
-		state.Jobs[job.ID] = job
-		if err := registry.saveWorkflowState(definition.ID, state); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow state"})
+		job, err = registry.runStoredWorkflow(c.Request.Context(), runtime, definition, workflow, job.ID, job.OwnerTokenID, "callback", body, http.StatusOK)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow callback"})
 			return
 		}
 		c.JSON(http.StatusAccepted, gin.H{"object": "workflow.callback.receipt", "accepted": true, "job_id": job.ID, "state": job.State})
@@ -403,7 +315,7 @@ func (registry *protocolRegistry) advanceGraphWorkflow(runtime localRuntime, def
 		return job
 	}
 	now := time.Now().UTC()
-	if job.Attempts >= job.MaxAttempts {
+	if (!job.Cancelling && job.Attempts >= job.MaxAttempts) || (job.Cancelling && job.CancelAttempts >= 100) {
 		job.State, job.Error, job.UpdatedAt = "timed_out", "workflow exceeded max_poll_attempts", now
 		return job
 	}
@@ -412,7 +324,11 @@ func (registry *protocolRegistry) advanceGraphWorkflow(runtime localRuntime, def
 		job.State, job.Error, job.UpdatedAt = "failed", "current workflow step is missing", now
 		return job
 	}
-	job.Attempts++
+	if job.Cancelling {
+		job.CancelAttempts++
+	} else {
+		job.Attempts++
+	}
 	job.UpdatedAt = now
 	job.Error = ""
 	var responseBody []byte
@@ -643,6 +559,7 @@ func newWorkflowCallbackToken() (string, error) {
 
 func publicWorkflowJob(job protocolWorkflowJob) protocolWorkflowJob {
 	job.CallbackToken = ""
+	job.ExecutionID = ""
 	job.Input = nil
 	job.OwnerTokenID = 0
 	return job
@@ -654,6 +571,7 @@ func (registry *protocolRegistry) startWorkflowScheduler(runtime localRuntime) {
 	if registry.schedulerStop != nil {
 		return
 	}
+	registry.recoverInterruptedWorkflows()
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	registry.schedulerStop = stop
@@ -687,6 +605,12 @@ func (registry *protocolRegistry) stopWorkflowScheduler() {
 		case <-time.After(5 * time.Second):
 		}
 	}
+	registry.workflowMu.Lock()
+	for _, execution := range registry.workflowRunning {
+		execution.cancel()
+	}
+	registry.workflowMu.Unlock()
+	registry.workflowWorkers.Wait()
 }
 
 func (registry *protocolRegistry) advanceDueGraphWorkflows(runtime localRuntime) {
@@ -699,34 +623,29 @@ func (registry *protocolRegistry) advanceDueGraphWorkflows(runtime localRuntime)
 	}
 	registry.mu.RUnlock()
 	now := time.Now().UTC()
+	dispatched := 0
 	for _, definition := range definitions {
-		registry.workflowMu.Lock()
-		stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-		if lockErr != nil {
-			registry.workflowMu.Unlock()
+		state, err := registry.loadWorkflowState(definition.ID)
+		if err != nil {
 			continue
 		}
-		state, err := registry.loadWorkflowState(definition.ID)
-		changed := false
-		advanced := 0
-		if err == nil {
-			for id, job := range state.Jobs {
-				if advanced >= 16 || workflowJobTerminal(job.State) || job.WaitingCallback || now.Before(job.NextPollAt) {
-					continue
-				}
-				_, workflow, ok := registry.workflowDefinition(definition.ID, job.WorkflowID)
-				if !ok || len(workflow.Steps) == 0 {
-					continue
-				}
-				state.Jobs[id] = registry.advanceGraphWorkflow(runtime, definition, workflow, job, nil, 0)
-				changed = true
-				advanced++
+		for _, job := range state.Jobs {
+			if workflowJobTerminal(job.State) || job.ExecutionID != "" || job.WaitingCallback || job.CancelRequested || now.Before(job.NextPollAt) {
+				continue
 			}
+			_, workflow, ok := registry.workflowDefinition(definition.ID, job.WorkflowID)
+			if !ok || len(workflow.Steps) == 0 {
+				continue
+			}
+			if dispatched >= 32 {
+				return
+			}
+			dispatched++
+			registry.workflowWorkers.Add(1)
+			go func() {
+				defer registry.workflowWorkers.Done()
+				_, _ = registry.runStoredWorkflow(context.Background(), runtime, definition, workflow, job.ID, -1, "advance", nil, 0)
+			}()
 		}
-		if changed {
-			_ = registry.saveWorkflowState(definition.ID, state)
-		}
-		unlockProtocolState(stateLock)
-		registry.workflowMu.Unlock()
 	}
 }

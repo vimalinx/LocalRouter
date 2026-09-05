@@ -22,6 +22,10 @@ const summary: Summary = {
   protocols_ready: 1,
   billing: 'disabled',
   oauth: 'external',
+  update: {
+    enabled: true, automatic: true, current_version: '0.1.0-alpha.5', channel: 'prerelease',
+    status: 'current', latest_version: 'v0.1.0-alpha.5', release_url: 'https://github.com/vimalinx/LocalRouter/releases/tag/v0.1.0-alpha.5',
+  },
 }
 
 const protocol: ProtocolView = {
@@ -83,7 +87,7 @@ const analytics: Analytics = {
 describe('OverviewPage', () => {
   it('shows model and service API activity without mixing pool value into spend', async () => {
     const user = userEvent.setup()
-    render(<OverviewPage summary={summary} analytics={analytics} protocols={[protocol]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
+    render(<OverviewPage summary={summary} analytics={analytics} protocols={[protocol]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} onCheckUpdate={vi.fn()} />)
 
     expect(screen.getByRole('heading', { name: '运行概览' })).toBeInTheDocument()
     expect(screen.getByText('10 次模型调用 · 2 条 Pack 事件')).toBeInTheDocument()
@@ -94,6 +98,8 @@ describe('OverviewPage', () => {
     expect(screen.getByText('按 Agent 汇总')).toBeInTheDocument()
     expect(screen.getByLabelText('供应商图例')).toHaveTextContent('OpenAI compatible')
     expect(screen.getByLabelText('供应商图例')).toHaveTextContent('Search API')
+    expect(screen.getByText('0.1.0-alpha.5')).toBeVisible()
+    expect(screen.getByText('已是最新')).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: '已确认成本' }))
     expect(screen.getByRole('img', { name: '过去 24 小时成本趋势' })).toBeInTheDocument()
@@ -107,7 +113,7 @@ describe('OverviewPage', () => {
       services: [],
       models: [],
     }
-    render(<OverviewPage summary={{ ...summary, channels: 0, protocols: 0 }} analytics={empty} protocols={[]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
+    render(<OverviewPage summary={{ ...summary, channels: 0, protocols: 0 }} analytics={empty} protocols={[]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} onCheckUpdate={vi.fn()} />)
     expect(screen.getByText('还没有可统计的服务。')).toBeInTheDocument()
     expect(screen.getAllByText('还没有模型调用记录。')).toHaveLength(2)
     expect(screen.getByText('未接入')).toBeInTheDocument()
@@ -118,7 +124,23 @@ describe('OverviewPage', () => {
       ...analytics,
       services: [{ ...analytics.services[1], cost_usd: 0, cost_status: 'unavailable' as const }],
     }
-    render(<OverviewPage summary={summary} analytics={missingPricing} protocols={[protocol]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} />)
+    render(<OverviewPage summary={summary} analytics={missingPricing} protocols={[protocol]} onChangeAdminToken={vi.fn()} onChangeAdminAuth={vi.fn()} onCheckUpdate={vi.fn()} />)
     expect(screen.getByText('未接入价格')).toBeVisible()
+  })
+
+  it('shows an available release and supports a manual recheck', async () => {
+    const user = userEvent.setup()
+    const onCheckUpdate = vi.fn().mockResolvedValue(undefined)
+    render(<OverviewPage
+      summary={{ ...summary, update: { ...summary.update!, status: 'available', latest_version: 'v0.1.1', release_url: 'https://github.com/vimalinx/LocalRouter/releases/tag/v0.1.1' } }}
+      analytics={analytics}
+      protocols={[protocol]}
+      onChangeAdminToken={vi.fn()}
+      onChangeAdminAuth={vi.fn()}
+      onCheckUpdate={onCheckUpdate}
+    />)
+    expect(screen.getByRole('link', { name: '查看 v0.1.1 发布说明' })).toHaveAttribute('href', 'https://github.com/vimalinx/LocalRouter/releases/tag/v0.1.1')
+    await user.click(screen.getByRole('button', { name: '立即检查' }))
+    expect(onCheckUpdate).toHaveBeenCalledOnce()
   })
 })

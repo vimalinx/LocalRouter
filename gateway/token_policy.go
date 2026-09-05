@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -47,7 +46,7 @@ type tokenPolicyUsage struct {
 	MinuteCount int
 	DayStart    time.Time
 	DayCount    int
-	InFlight    int
+	InFlight    int `json:"-"`
 }
 
 type tokenPolicyStore struct {
@@ -85,6 +84,20 @@ func newTokenPolicyStore(dataDir string) (*tokenPolicyStore, error) {
 		store.policies = document.Policies
 	}
 	store.agentMaintenanceEnabled = document.AgentMaintenanceEnabled
+	usagePath := store.usagePath()
+	exists, err = inspectPrivateRegularFile(usagePath, "token usage file")
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		data, err := os.ReadFile(usagePath)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(data, &store.usage); err != nil || store.usage == nil {
+			return nil, errors.New("token usage file is invalid")
+		}
+	}
 	return store, nil
 }
 
@@ -289,6 +302,20 @@ func (store *tokenPolicyStore) handleMaintenanceAccessPut(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": view})
 }
 
+// Counters are separate from the version-1 policy contract so older binaries
+// can still load policy settings during rollback. Active leases never persist.
+func (store *tokenPolicyStore) usagePath() string {
+	return filepath.Join(filepath.Dir(store.path), "token-policy-usage.json")
+}
+
+func (store *tokenPolicyStore) saveUsageLocked() error {
+	data, err := json.Marshal(store.usage)
+	if err != nil {
+		return err
+	}
+	return store.writeAtomicLocked(store.usagePath(), data)
+}
+
 func (store *tokenPolicyStore) saveLocked() error {
 	document := tokenPolicyDocument{
 		SchemaVersion:           "1",
@@ -299,7 +326,11 @@ func (store *tokenPolicyStore) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(store.path), ".token-policies-*.tmp")
+	return store.writeAtomicLocked(store.path, data)
+}
+
+func (store *tokenPolicyStore) writeAtomicLocked(path string, data []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".token-policies-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -320,7 +351,7 @@ func (store *tokenPolicyStore) saveLocked() error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, store.path)
+	return os.Rename(temporaryPath, path)
 }
 
 func containsPolicyValue(values []string, value string) bool {
@@ -398,6 +429,15 @@ func (store *tokenPolicyStore) begin(tokenID int, surface, pack, operation, mode
 	usage.MinuteCount++
 	usage.DayCount++
 	usage.InFlight++
+	if policy.DailyRequestLimit > 0 || policy.RequestsPerMinute > 0 {
+		if err := store.saveUsageLocked(); err != nil {
+			usage.MinuteCount--
+			usage.DayCount--
+			usage.InFlight--
+			store.mu.Unlock()
+			return nil, http.StatusServiceUnavailable, "cannot persist token usage; request was not admitted"
+		}
+	}
 	store.mu.Unlock()
 	var once sync.Once
 	return func() {
@@ -430,24 +470,15 @@ func (store *tokenPolicyStore) middleware(surface string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenID := c.GetInt("token_id")
 		c.Set(tokenPolicyContextID, tokenID)
-		modelName := c.Param("model")
-		if modelName == "" && strings.HasPrefix(c.Param("path"), "/") {
-			parts := strings.Split(strings.Trim(c.Param("path"), "/"), ":")
-			if len(parts) > 0 {
-				modelName = parts[0]
-			}
+		body, err := compatibilityBody(c)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{"message": "request body exceeds 64 MiB or cannot be read"}})
+			return
 		}
-		if modelName == "" && c.Request.Body != nil && c.Request.ContentLength >= 0 && c.Request.ContentLength <= 1<<20 {
-			body, err := io.ReadAll(c.Request.Body)
-			if err == nil {
-				c.Request.Body = io.NopCloser(bytes.NewReader(body))
-				var payload struct {
-					Model string `json:"model"`
-				}
-				if json.Unmarshal(body, &payload) == nil {
-					modelName = strings.TrimSpace(payload.Model)
-				}
-			}
+		modelName := relayModel(c, body)
+		if c.Request.Method == http.MethodPost && modelName == "" {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "model is required"}})
+			return
 		}
 		release, status, message := store.begin(tokenID, surface, "", "", modelName)
 		if status != 0 {

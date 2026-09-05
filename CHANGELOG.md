@@ -4,6 +4,33 @@ All notable LocalRouter changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once a stable `1.0.0` contract is
 published.
 
+## Unreleased
+
+## 0.1.0-alpha.6 - 2026-09-05
+
+- Reject foreign browser origins and non-loopback operator hosts; prohibit
+  upstream redirects that could forward supplier credentials.
+- Stop replaying potentially accepted POST requests after transport failures or
+  upstream 5xx responses; report incomplete non-streaming responses as errors.
+- Route multipart model requests without modifying file bytes, filter model
+  catalogs by protocol profile and Token policy, and enforce model restrictions
+  for large and chunked requests.
+- Persist limited Token request counters across restarts in a separate private
+  usage file. Merge streaming usage incrementally, including nested start and
+  terminal events even when streams exceed the previous capture limit.
+- Run workflow network operations outside shared state locks, interrupt active
+  requests for explicit cancellation, preserve independent cleanup budgets, and
+  mark interrupted durable executions as outcome_unknown without automatic replay.
+- Load all channel and Agent pages, paginate request logs, isolate unavailable
+  console sections, and add workflow result/error details and operator cancellation.
+- Rewrote the project README around installation, service configuration, Agent
+  access, permissions, and recovery behavior.
+- Added a non-blocking release update checker that runs on startup and every
+  six hours, uses anonymous conditional GitHub API requests, respects stable
+  and prerelease channels, and only prompts without downloading or installing.
+- Added update state and a manual refresh action to the loopback Run Overview;
+  the LAN service surface remains unchanged.
+
 ## 0.1.0-alpha.5 - 2026-09-04
 
 - Added an opt-in LAN service listener that exposes only authenticated consumer

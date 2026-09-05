@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -22,6 +23,11 @@ import (
 )
 
 type protocolWorkflowJob struct {
+	ExecutionID     string                     `json:"execution_id,omitempty"`
+	CancelRequested bool                       `json:"cancel_requested,omitempty"`
+	Cancelling      bool                       `json:"cancelling,omitempty"`
+	CancelAttempts  int                        `json:"cancel_attempts,omitempty"`
+	Cancellable     bool                       `json:"cancellable,omitempty"`
 	ID              string                     `json:"id"`
 	ProtocolID      string                     `json:"protocol_id"`
 	WorkflowID      string                     `json:"workflow_id"`
@@ -237,74 +243,7 @@ func (registry *protocolRegistry) handleWorkflowGet(runtime localRuntime) gin.Ha
 			registry.handleGraphWorkflowGet(c, runtime, definition, workflow)
 			return
 		}
-		registry.workflowMu.Lock()
-		defer registry.workflowMu.Unlock()
-		stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-		if lockErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot lock workflow state"})
-			return
-		}
-		defer unlockProtocolState(stateLock)
-		state, err := registry.loadWorkflowState(definition.ID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot read workflow state"})
-			return
-		}
-		job, exists := state.Jobs[c.Param("job")]
-		if !exists || job.WorkflowID != workflow.ID {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-			return
-		}
-		if !workflowJobOwnedBy(c, job) {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-			return
-		}
-		if workflowJobTerminal(job.State) || time.Now().UTC().Before(job.NextPollAt) {
-			c.JSON(http.StatusOK, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
-			return
-		}
-		pollRoute, _ := operationRoute(definition, workflow.PollOperation)
-		paramNames := protocolPathParameterNames(pollRoute.Path)
-		paramName := ""
-		for name := range paramNames {
-			paramName = name
-		}
-		pollPath, err := renderProtocolPath(pollRoute.Path, map[string]string{paramName: job.ResourceID})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot render workflow poll path"})
-			return
-		}
-		responseCode, responseBody, _, callErr := callLocalProtocol(runtime, definition.ID, http.MethodGet, pollPath, "", "application/json", nil)
-		now := time.Now().UTC()
-		job.Attempts++
-		job.UpdatedAt = now
-		job.LastHTTPCode = responseCode
-		job.NextPollAt = now.Add(time.Duration(workflow.PollIntervalMS) * time.Millisecond)
-		if callErr != nil {
-			job.Error = "poll request failed"
-		} else if responseCode < 200 || responseCode >= 300 {
-			job.Error = fmt.Sprintf("poll returned HTTP %d", responseCode)
-		} else {
-			job.Error = ""
-			job.UpstreamState = gjson.GetBytes(responseBody, workflow.StatusPath).String()
-			job.State = classifyWorkflowState(workflow, job.UpstreamState)
-			if workflow.ResultPath != "" && job.State == "succeeded" {
-				result := gjson.GetBytes(responseBody, workflow.ResultPath)
-				if result.Exists() {
-					job.Result = json.RawMessage(result.Raw)
-				}
-			}
-		}
-		if job.Attempts >= job.MaxAttempts && !workflowJobTerminal(job.State) {
-			job.State = "timed_out"
-			job.Error = "workflow exceeded max_poll_attempts"
-		}
-		state.Jobs[job.ID] = job
-		if err := registry.saveWorkflowState(definition.ID, state); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow state"})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
+		registry.serveStoredWorkflow(c, runtime, definition, workflow, "advance")
 	}
 }
 
@@ -336,56 +275,7 @@ func (registry *protocolRegistry) handleWorkflowCancel(runtime localRuntime) gin
 			c.JSON(http.StatusMethodNotAllowed, gin.H{"success": false, "message": "workflow does not define cancellation"})
 			return
 		}
-		registry.workflowMu.Lock()
-		defer registry.workflowMu.Unlock()
-		stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-		if lockErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot lock workflow state"})
-			return
-		}
-		defer unlockProtocolState(stateLock)
-		state, err := registry.loadWorkflowState(definition.ID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot read workflow state"})
-			return
-		}
-		job, exists := state.Jobs[c.Param("job")]
-		if !exists || job.WorkflowID != workflow.ID {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-			return
-		}
-		if !workflowJobOwnedBy(c, job) {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "workflow job not found"})
-			return
-		}
-		cancelRoute, _ := operationRoute(definition, workflow.CancelOperation)
-		paramName := ""
-		for name := range protocolPathParameterNames(cancelRoute.Path) {
-			paramName = name
-		}
-		cancelPath, _ := renderProtocolPath(cancelRoute.Path, map[string]string{paramName: job.ResourceID})
-		method := http.MethodDelete
-		if !routeSupportsMethod(cancelRoute, method) {
-			method = http.MethodPost
-		}
-		responseCode, responseBody, contentType, callErr := callLocalProtocol(runtime, definition.ID, method, cancelPath, "", "application/json", nil)
-		if callErr != nil || responseCode < 200 || responseCode >= 300 {
-			if callErr != nil {
-				c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "workflow cancel operation failed"})
-				return
-			}
-			c.Data(responseCode, contentType, responseBody)
-			return
-		}
-		job.State = "cancelled"
-		job.UpdatedAt = time.Now().UTC()
-		job.LastHTTPCode = responseCode
-		state.Jobs[job.ID] = job
-		if err := registry.saveWorkflowState(definition.ID, state); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow state"})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
+		registry.serveStoredWorkflow(c, runtime, definition, workflow, "cancel")
 	}
 }
 
@@ -432,6 +322,11 @@ func (registry *protocolRegistry) handleAdminWorkflowJobs(c *gin.Context) {
 		for _, job := range state.Jobs {
 			copy := job
 			copy.CallbackToken = ""
+			copy.CallbackURL = ""
+			copy.ExecutionID = ""
+			if _, workflow, ok := registry.workflowDefinition(job.ProtocolID, job.WorkflowID); ok {
+				copy.Cancellable = job.State != "succeeded" && job.State != "cancelled" && (len(workflow.Steps) > 0 || workflow.CancelOperation != "")
+			}
 			copy.Input = nil
 			jobs = append(jobs, copy)
 		}
@@ -447,7 +342,11 @@ func callLocalProtocol(runtime localRuntime, protocolID, method, path, rawQuery,
 	}
 	address := net.JoinHostPort(host, fmt.Sprintf("%d", runtime.config.Port))
 	target := url.URL{Scheme: "http", Host: address, Path: "/p/" + protocolID + path, RawQuery: rawQuery}
-	request, err := http.NewRequest(method, target.String(), bytes.NewReader(body))
+	ctx := runtime.workflowContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, "", err
 	}
@@ -455,7 +354,7 @@ func callLocalProtocol(runtime localRuntime, protocolID, method, path, rawQuery,
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{Timeout: 10 * time.Minute, CheckRedirect: rejectUpstreamRedirect}
 	response, err := client.Do(request)
 	if err != nil {
 		return 0, nil, "", err
@@ -492,7 +391,7 @@ func classifyWorkflowState(workflow protocolWorkflow, upstream string) string {
 
 func workflowJobTerminal(state string) bool {
 	switch state {
-	case "succeeded", "failed", "cancelled", "timed_out":
+	case "succeeded", "failed", "cancelled", "timed_out", "outcome_unknown":
 		return true
 	default:
 		return false

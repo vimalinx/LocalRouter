@@ -33,6 +33,22 @@ export type Summary = {
   protocols_ready: number
   billing: string
   oauth: string
+  update?: UpdateStatus
+}
+
+export type UpdateStatus = {
+  enabled: boolean
+  automatic: boolean
+  current_version: string
+  channel: 'stable' | 'prerelease' | 'development'
+  status: 'pending' | 'current' | 'available' | 'ahead' | 'development' | 'no-release' | 'error' | 'disabled' | 'unavailable'
+  latest_version?: string
+  release_url?: string
+  published_at?: string
+  checked_at?: string
+  next_check_at?: string
+  retry_after?: string
+  error_code?: string
 }
 
 export type AnalyticsTotals = {
@@ -243,6 +259,10 @@ export type ProtocolDraft = {
 export type ProtocolRevision = { digest: string; created_at: string; live?: boolean }
 
 export type WorkflowJob = {
+  result?: unknown
+  cancellable?: boolean
+  cancelling?: boolean
+  cancel_attempts?: number
   id: string
   protocol_id: string
   workflow_id: string

@@ -73,7 +73,7 @@ func buildLocalAgentUsage(runtime localRuntime, now time.Time) ([]localAgentUsag
 	if runtime.store == nil || runtime.store.db == nil {
 		return []localAgentUsage{}, nil
 	}
-	tokens, _, err := runtime.store.listTokens(runtime.rootUser.ID, 1, 200)
+	tokens, err := runtime.store.allTokens(runtime.rootUser.ID)
 	if err != nil {
 		return nil, err
 	}

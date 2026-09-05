@@ -30,7 +30,7 @@ function logTokens(log: RequestLog) {
   return log.total_tokens || (log.prompt_tokens || 0) + (log.completion_tokens || 0)
 }
 
-export function LogsPage(props: { logs: RequestLog[] }) {
+export function LogsPage(props: { logs: RequestLog[]; page?: number; total?: number; onPageChange?: (page: number) => void }) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<RequestLog | null>(null)
   const filtered = useMemo(() => {
@@ -59,7 +59,7 @@ export function LogsPage(props: { logs: RequestLog[] }) {
         <Input
           type='search'
           aria-label='搜索请求日志'
-          placeholder='搜索模型、渠道或内容…'
+          placeholder='筛选本页模型、渠道或内容…'
           className='pl-10'
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -112,6 +112,8 @@ export function LogsPage(props: { logs: RequestLog[] }) {
           />
         )}
       </section>
+
+      {props.onPageChange ? <nav aria-label='日志分页' className='flex items-center justify-end gap-3 text-sm'><span>第 {props.page || 1} 页 · 共 {props.total || 0} 条</span><Button variant='outline' disabled={(props.page || 1) <= 1} onClick={() => props.onPageChange?.((props.page || 1) - 1)}>上一页</Button><Button variant='outline' disabled={(props.page || 1) * 50 >= (props.total || 0)} onClick={() => props.onPageChange?.((props.page || 1) + 1)}>下一页</Button></nav> : null}
 
       <Dialog open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(null)}>
         <DialogContent className='max-w-2xl'>

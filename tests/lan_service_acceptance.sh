@@ -36,6 +36,7 @@ LOCAL_GATEWAY_DATA_DIR="$test_root/data" \
 LOCAL_GATEWAY_STATE_DIR="$test_root/state" \
 LOCAL_GATEWAY_CACHE_DIR="$test_root/cache" \
 LOCAL_GATEWAY_PORT="$local_port" \
+LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=false \
 LOCAL_GATEWAY_LAN_ENABLED=true \
 LOCAL_GATEWAY_LAN_HOST=0.0.0.0 \
 LOCAL_GATEWAY_LAN_PORT="$lan_port" \
@@ -66,6 +67,8 @@ for path in /local/status /local/api/summary /manage/mcp; do
   status="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$lan_port$path")"
   test "$status" = "404"
 done
+update_status="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' --request POST "http://127.0.0.1:$lan_port/local/api/update/check")"
+test "$update_status" = "404"
 
 unauthorized_status="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$lan_port/v1/models")"
 test "$unauthorized_status" = "401"

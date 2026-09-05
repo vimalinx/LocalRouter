@@ -537,6 +537,20 @@ func (store *localStore) listTokens(userID, page, pageSize int) ([]localToken, i
 	return tokens, total, rows.Err()
 }
 
+func (store *localStore) allTokens(userID int) ([]localToken, error) {
+	var tokens []localToken
+	for page := 1; ; page++ {
+		items, total, err := store.listTokens(userID, page, 200)
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, items...)
+		if int64(page*200) >= total || len(items) == 0 {
+			return tokens, nil
+		}
+	}
+}
+
 func maskToken(key string) string {
 	if len(key) <= 8 {
 		return "sk-********"

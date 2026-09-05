@@ -17,6 +17,7 @@ export function ServicesPage(props: {
   providers: Provider[]
   drafts: ProtocolDraft[]
   revisions: ProtocolRevision[]
+  editorAvailable?: boolean
   initialTab?: WorkspaceTab
   onChanged: () => Promise<void>
 }) {
@@ -44,7 +45,7 @@ export function ServicesPage(props: {
 
       <div className={cn('min-h-0 flex-1', activeTab === 'models' ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden')}>
         {activeTab === 'services' ? (
-          <ProtocolsPage embedded protocols={props.protocols} adminToken={props.adminToken} onChanged={props.onChanged} onOpenEditor={() => setEditorOpen(true)} />
+          <ProtocolsPage embedded protocols={props.protocols} adminToken={props.adminToken} onChanged={props.onChanged} onOpenEditor={props.editorAvailable === false ? undefined : () => setEditorOpen(true)} />
         ) : (
           <ChannelsPage embedded adminToken={props.adminToken} channels={props.channels} providers={props.providers} onChanged={props.onChanged} />
         )}

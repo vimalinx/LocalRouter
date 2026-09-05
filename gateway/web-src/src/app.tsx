@@ -12,25 +12,9 @@ import { JobsPage } from '@/features/jobs/jobs-page'
 import { OverviewPage } from '@/features/overview/overview-page'
 import { ServicesPage } from '@/features/services/services-page'
 import { TokensPage } from '@/features/tokens/tokens-page'
-import { adminRequest, normalizeItems, publicRequest } from '@/lib/api'
-import type {
-  AgentUsage,
-	Analytics,
-  Channel,
-  LocalToken,
-  Paginated,
-  ProtocolView,
-  Provider,
-  PublicStatus,
-  RequestLog,
-  Summary,
-	TokenPolicy,
-	MaintenanceAccess,
-	ProtocolDraft,
-	ProtocolRevision,
-	WorkflowJob,
-	ProtocolEvent,
-} from '@/lib/types'
+import { adminRequest, publicRequest } from '@/lib/api'
+import type { PublicStatus, Summary, UpdateStatus } from '@/lib/types'
+import { useConsoleData } from '@/lib/console-data'
 
 const validSections = new Set<SectionId>([
   'overview',
@@ -40,62 +24,10 @@ const validSections = new Set<SectionId>([
   'logs',
 ])
 
-type ConsoleData = {
-  summary: Summary
-  analytics: Analytics
-  protocols: ProtocolView[]
-  providers: Provider[]
-  channels: Channel[]
-  tokens: LocalToken[]
-  logs: RequestLog[]
-  policies: TokenPolicy[]
-  maintenanceAccess: MaintenanceAccess
-  drafts: ProtocolDraft[]
-  revisions: ProtocolRevision[]
-  jobs: WorkflowJob[]
-  events: ProtocolEvent[]
-  agentUsage: AgentUsage[]
-}
-
 function currentSection(): SectionId {
   const raw = window.location.hash.slice(1)
   const section = (raw === 'channels' || raw === 'control' ? 'protocols' : raw) as SectionId
   return validSections.has(section) ? section : 'overview'
-}
-
-async function loadConsole(adminToken: string): Promise<ConsoleData> {
-  const [summary, analytics, protocols, providers, channels, tokens, logs, policies, maintenanceAccess, drafts, revisions, jobs, events, agentUsage] = await Promise.all([
-    adminRequest<Summary>('/local/api/summary', adminToken),
-    adminRequest<Analytics>('/local/api/analytics', adminToken),
-    adminRequest<ProtocolView[]>('/local/api/protocols', adminToken),
-    adminRequest<Provider[]>('/local/api/providers', adminToken),
-    adminRequest<Paginated<Channel>>('/local/api/channels?page=1&page_size=100', adminToken),
-    adminRequest<Paginated<LocalToken>>('/local/api/tokens?page=1&page_size=100', adminToken),
-    adminRequest<Paginated<RequestLog>>('/local/api/logs?page=1&page_size=50', adminToken),
-    adminRequest<TokenPolicy[]>('/local/api/token-policies', adminToken),
-    adminRequest<MaintenanceAccess>('/local/api/maintenance-access', adminToken),
-    adminRequest<ProtocolDraft[]>('/local/api/protocol-drafts', adminToken),
-    adminRequest<ProtocolRevision[]>('/local/api/protocols/history', adminToken),
-    adminRequest<WorkflowJob[]>('/local/api/workflows/jobs', adminToken),
-    adminRequest<ProtocolEvent[]>('/local/api/protocol-events?limit=100', adminToken),
-    adminRequest<AgentUsage[]>('/local/api/agent-usage', adminToken),
-  ])
-  return {
-    summary,
-    analytics,
-    protocols,
-    providers,
-    channels: normalizeItems(channels),
-    tokens: normalizeItems(tokens),
-    logs: normalizeItems(logs),
-    policies,
-    maintenanceAccess,
-    drafts,
-    revisions,
-    jobs,
-    events,
-    agentUsage,
-  }
 }
 
 export default function App() {
@@ -103,6 +35,7 @@ export default function App() {
   const [adminToken, setAdminToken] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<SectionId>(currentSection)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [logPage, setLogPage] = useState(1)
   const [dark, setDark] = useState(() => {
     const saved = window.localStorage.getItem('localrouter-theme')
     if (saved) return saved === 'dark'
@@ -119,13 +52,7 @@ export default function App() {
   const consoleAccessReady = Boolean(publicStatus.data) && (!adminAuthEnabled || adminToken !== null)
   const requestAdminToken = adminToken || ''
 
-  const consoleData = useQuery({
-    queryKey: ['console-data'],
-    queryFn: () => loadConsole(requestAdminToken),
-    enabled: consoleAccessReady,
-    staleTime: 10_000,
-    retry: false,
-  })
+  const consoleData = useConsoleData(requestAdminToken, consoleAccessReady, activeSection, logPage)
 
   useEffect(() => {
     function onHashChange() {
@@ -168,6 +95,22 @@ export default function App() {
     toast.success('运行数据已刷新')
   }
 
+  async function checkUpdate() {
+    try {
+      const update = await adminRequest<UpdateStatus>('/local/api/update/check', requestAdminToken, { method: 'POST' })
+      queryClient.setQueryData<Summary>(['console-data', 'summary'], current => current ? { ...current, update } : current)
+      if (update.status === 'available') {
+        toast.info(`发现新版本 ${update.latest_version}`)
+      } else if (update.status === 'error') {
+        toast.error('版本检查失败，网关运行不受影响')
+      } else {
+        toast.success('已经是当前更新通道的最新版本')
+      }
+    } catch {
+      toast.error('无法发起版本检查，网关运行不受影响')
+    }
+  }
+
   async function changeAdminToken(token: string) {
     await adminRequest<{ changed: boolean }>('/local/api/admin-token', requestAdminToken, {
       method: 'PUT',
@@ -184,10 +127,7 @@ export default function App() {
     })
     setAdminToken(enabled ? token || adminToken : '')
     await publicStatus.refetch()
-    queryClient.setQueryData<ConsoleData>(['console-data'], (current) => current ? {
-      ...current,
-      summary: { ...current.summary, admin_auth_enabled: enabled },
-    } : current)
+    queryClient.setQueryData<Summary>(['console-data', 'summary'], current => current ? { ...current, admin_auth_enabled: enabled } : current)
     toast.success(enabled ? '控制台密码保护已开启' : '控制台密码保护已关闭')
   }
 
@@ -245,6 +185,7 @@ export default function App() {
             protocols={data.protocols}
             channels={data.channels}
             providers={data.providers}
+            editorAvailable={!consoleData.warnings.some(warning => warning.key === 'drafts' || warning.key === 'revisions')}
             drafts={data.drafts}
             revisions={data.revisions}
             initialTab={window.location.hash === '#channels' ? 'models' : 'services'}
@@ -255,7 +196,7 @@ export default function App() {
         )
         break
       case 'jobs':
-        content = <JobsPage jobs={data.jobs} events={data.events} />
+        content = <JobsPage jobs={data.jobs} events={data.events} adminToken={requestAdminToken} onChanged={async () => { await consoleData.refetch() }} />
         break
       case 'tokens':
         content = (
@@ -264,8 +205,8 @@ export default function App() {
             tokens={data.tokens}
             usage={data.agentUsage}
             policies={data.policies}
-            maintenanceAccess={data.maintenanceAccess}
-            apiTokenFile={data.summary.api_token_file}
+            maintenanceAccess={data.maintenanceAccess!}
+            apiTokenFile={data.summary?.api_token_file || publicStatus.data?.api_token_file || ''}
             onChanged={async () => {
               const result = await consoleData.refetch()
               return result.data?.tokens || []
@@ -274,17 +215,18 @@ export default function App() {
         )
         break
       case 'logs':
-        content = <LogsPage logs={data.logs} />
+        content = <LogsPage logs={data.logs} page={logPage} total={data.logTotal} onPageChange={setLogPage} />
         break
       default:
         content = (
           <OverviewPage
-            summary={data.summary}
-            analytics={data.analytics}
+            summary={data.summary!}
+            analytics={data.analytics!}
             protocols={data.protocols}
             agentUsage={data.agentUsage}
             onChangeAdminToken={changeAdminToken}
             onChangeAdminAuth={changeAdminAuth}
+            onCheckUpdate={checkUpdate}
           />
         )
     }
@@ -303,13 +245,14 @@ export default function App() {
         mobileOpen={mobileOpen}
         dark={dark}
         refreshing={consoleData.isFetching}
-        listener={consoleData.data?.summary.listen || publicStatus.data?.listen || ''}
+        listener={consoleData.data?.summary?.listen || publicStatus.data?.listen || ''}
         onNavigate={navigate}
         onMobileOpenChange={setMobileOpen}
         onThemeToggle={() => setDark((current) => !current)}
         onRefresh={refresh}
         onLock={adminAuthEnabled ? lock : undefined}
       >
+        {consoleData.warnings.length > 0 && !consoleData.error ? <div role='status' className='mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100'>{consoleData.warnings.map(warning => <p key={warning.key}>{warning.message}</p>)}</div> : null}
         {content}
       </AppShell>
       <Toaster theme={dark ? 'dark' : 'light'} position='top-right' richColors />

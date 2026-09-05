@@ -147,6 +147,7 @@ LOCAL_GATEWAY_STATE_DIR="$matrix_root/state" \
 LOCAL_GATEWAY_CACHE_DIR="$matrix_root/cache" \
 LOCAL_GATEWAY_PROTOCOL_DIR="$matrix_root/protocols" \
 LOCAL_GATEWAY_PORT="$gateway_port" \
+LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=false \
 GIN_MODE=release \
 "$gateway_binary" --log-dir "$matrix_root/logs" >"$matrix_root/gateway.log" 2>&1 &
 gateway_pid=$!
@@ -307,7 +308,8 @@ grep -q 'The semantic operation ID is not a URL' "$matrix_root/guide.md"
 [[ "$(stat -c '%a' "$matrix_root/data/admin-token")" == "600" ]]
 [[ "$(stat -c '%a' "$matrix_root/data/protocol-secrets/modelauth")" == "600" ]]
 [[ "$(stat -c '%a' "$matrix_root/data/protocol-pools/asyncjobs.json")" == "600" ]]
-ss -ltn | grep -Eq "127\.0\.0\.1:${gateway_port}[[:space:]]" || fail "gateway is not bound to IPv4 loopback"
+ss -ltn >"$matrix_root/listeners.txt"
+grep -Eq "127\.0\.0\.1:${gateway_port}[[:space:]]" "$matrix_root/listeners.txt" || fail "gateway is not bound to IPv4 loopback"
 if grep -Fq 'matrix-header-placeholder' "$matrix_root/discovery.json" "$matrix_root/manifest.json" "$matrix_root/openapi.json" "$matrix_root/guide.md" "$matrix_root/chat-describe.json" "$matrix_root/chat-preflight.json" "$matrix_root/gateway.log"; then
   fail "header credential leaked into a public or diagnostic surface"
 fi

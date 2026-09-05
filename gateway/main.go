@@ -65,9 +65,11 @@ type runtimeConfig struct {
 	AdminAuthFile       string
 	AdminTokenFile      string
 	APITokenFile        string
+	UpdateCheckEnabled  bool
 }
 
 type localRuntime struct {
+	workflowContext context.Context
 	config          runtimeConfig
 	adminAuth       *adminAuthStore
 	adminToken      *adminTokenStore
@@ -80,6 +82,7 @@ type localRuntime struct {
 	policies        *tokenPolicyStore
 	events          *protocolEventStore
 	channelProfiles *localChannelProfileRegistry
+	updates         *updateChecker
 }
 
 type adminTokenStore struct {
@@ -223,6 +226,8 @@ func main() {
 	}
 	runtime.protocols.startWorkflowScheduler(runtime)
 	defer runtime.protocols.stopWorkflowScheduler()
+	runtime.updates.start()
+	defer runtime.updates.stop()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -289,6 +294,10 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		}
 	}
 	lanEnabled, err := parseEnvironmentBoolean("LOCAL_GATEWAY_LAN_ENABLED")
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+	updateCheckEnabled, err := parseEnvironmentBooleanDefault("LOCAL_GATEWAY_UPDATE_CHECK_ENABLED", true)
 	if err != nil {
 		return runtimeConfig{}, err
 	}
@@ -393,13 +402,18 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		AdminAuthFile:       filepath.Join(dataDir, "admin-auth.json"),
 		AdminTokenFile:      filepath.Join(dataDir, "admin-token"),
 		APITokenFile:        filepath.Join(dataDir, "api-token"),
+		UpdateCheckEnabled:  updateCheckEnabled,
 	}, nil
 }
 
 func parseEnvironmentBoolean(name string) (bool, error) {
+	return parseEnvironmentBooleanDefault(name, false)
+}
+
+func parseEnvironmentBooleanDefault(name string, defaultValue bool) (bool, error) {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
-		return false, nil
+		return defaultValue, nil
 	}
 	value, err := strconv.ParseBool(raw)
 	if err != nil {
@@ -533,8 +547,9 @@ func initializeRuntime(config runtimeConfig) (localRuntime, error) {
 	complete = true
 	return localRuntime{
 		config: config, adminAuth: adminAuth, adminToken: newAdminTokenStore(adminToken), apiToken: apiToken,
-		rootUser: rootUser, store: store, relayClient: &http.Client{Transport: transport},
+		rootUser: rootUser, store: store, relayClient: &http.Client{Transport: transport, CheckRedirect: rejectUpstreamRedirect},
 		balancer: newLocalRelayBalancer(), protocols: protocols, policies: policies, events: events, channelProfiles: channelProfiles,
+		updates: newUpdateChecker(config.UpdateCheckEnabled, buildVersion, nil, ""),
 	}, nil
 }
 
@@ -658,7 +673,7 @@ func writeSecretAtomic(path string, secret string) error {
 
 func buildServer(runtime localRuntime) *gin.Engine {
 	engine := gin.New()
-	engine.Use(gin.Recovery(), serverScope(loopbackScope), localSecurityHeaders())
+	engine.Use(gin.Recovery(), serverScope(loopbackScope), localHostGuard(), localSecurityHeaders())
 
 	registerConsoleRoutes(engine, runtime)
 	registerLocalAdminRoutes(engine, runtime)
@@ -693,7 +708,23 @@ func requestServerScope(c *gin.Context) string {
 }
 
 func localSecurityHeaders() gin.HandlerFunc {
-	return securityHeaders(loopbackOrigin, false)
+	return securityHeaders(loopbackOrigin, true)
+}
+
+func localHostGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		host := c.Request.Host
+		if name, _, err := net.SplitHostPort(host); err == nil {
+			host = name
+		}
+		host = strings.Trim(host, "[]")
+		ip := net.ParseIP(host)
+		if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		c.Next()
+	}
 }
 
 func lanSecurityHeaders(allowedOrigins []string) gin.HandlerFunc {
@@ -714,7 +745,7 @@ func securityHeaders(originAllowed func(string) bool, rejectDisallowed bool) gin
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Vary", "Origin")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version")
+			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Local-Admin, X-Api-Key, X-Goog-Api-Key, Anthropic-Version")
 			c.Header("Access-Control-Max-Age", "600")
 		}
 		if origin != "" && !allowed && rejectDisallowed {
@@ -813,6 +844,7 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 	admin.Use(localAdminAuth(runtime.adminAuth, runtime.adminToken, runtime.rootUser))
 	{
 		admin.GET("/summary", localSummary(runtime))
+		admin.POST("/update/check", handleUpdateCheck(runtime))
 		admin.GET("/analytics", localAnalyticsHandler(runtime))
 		admin.GET("/agent-usage", localAgentUsageHandler(runtime))
 		admin.PUT("/admin-auth", handleAdminAuthChange(runtime))
@@ -846,6 +878,7 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 		admin.GET("/logs", handleListLogs(runtime))
 		admin.GET("/protocol-events", runtime.events.handleList)
 		admin.GET("/workflows/jobs", runtime.protocols.handleAdminWorkflowJobs)
+		admin.POST("/workflows/:protocol/:workflow/:job/cancel", runtime.protocols.handleAdminWorkflowCancel(runtime))
 		admin.GET("/protocols", runtime.protocols.handleAdminList)
 		admin.POST("/protocols/validate", runtime.protocols.handleAdminValidate)
 		admin.POST("/protocols/plan", runtime.protocols.handleAdminPlan)
@@ -969,6 +1002,10 @@ func localSummary(runtime localRuntime) gin.HandlerFunc {
 		channelCount, _ := runtime.store.count("channels", "")
 		tokenCount, _ := runtime.store.count("tokens", "user_id = ? AND deleted_at IS NULL", runtime.rootUser.ID)
 		protocolTotal, protocolReady := runtime.protocols.counts()
+		update := updateStatus{CurrentVersion: buildVersion, Channel: updateChannel(buildVersion), Status: "unavailable"}
+		if runtime.updates != nil {
+			update = runtime.updates.status()
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"data": gin.H{
@@ -990,6 +1027,7 @@ func localSummary(runtime localRuntime) gin.HandlerFunc {
 				"billing":            "usage-accounting",
 				"oauth":              "external-maintainer",
 				"lan_service":        lanServiceStatus(runtime.config),
+				"update":             update,
 			},
 		})
 	}

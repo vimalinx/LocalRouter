@@ -31,6 +31,8 @@ make -C gateway web
 `$XDG_CONFIG_HOME/localrouter/config.env`；源码开发仍可用 `.env`。
 `LOCAL_GATEWAY_HOST` 如果不是回环 IP，程序会拒绝启动。
 
+网关默认在启动后及每 6 小时匿名查询公开 GitHub Releases API，并在“运行概览”提示新版本；它不会读取 GitHub 凭据、下载或安装更新，失败也不会阻塞网关。设置 `LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=false` 可完全关闭。loopback 控制台还可通过 `POST /local/api/update/check` 手动刷新，LAN 服务面不注册该入口。
+
 可选 LAN 服务面使用独立配置，默认完全关闭：
 
 ```text
@@ -87,6 +89,9 @@ LAN host 必须是未指定地址、私网地址或链路本地 IP，不能是 l
 - 号池目录：`/docs/pools/index.json`；Agent 适配说明：`/docs/pools/catalog.md`。
 - Pack 生命周期：Agent 使用 `/manage/mcp` 或上级 `lr manage-*`；LocalRouter 负责路径、格式、原子安装、线上摘要复验和本地失败自动回滚。`/local/api/protocols/*` 继续作为人工控制台使用的管理 API。
 - 端口草稿：维护工具支持隔离创建、语义修改、校验和计划；精确 digest 发布失败时保留草稿，并返回结构化阶段、错误码和回滚结果。
+- 限额持久化：启用每分钟或每日限额时，已接纳请求计数保存在私有 `token-policy-usage.json`，重启不会清零；写入失败时拒绝接纳新请求。日期边界使用 UTC，运行中的并发占用不跨重启保留。
+- 控制台恢复：各块数据独立加载，渠道与 Agent 列表读取全部页，日志提供上一页/下一页；任务详情展示结果和错误，并可确认取消。
+- 工作流恢复：网络调用只占用对应任务，取消可中断正在等待的请求；取消步骤使用独立次数预算。进程中断留下的执行记录进入 `outcome_unknown`，需核对上游状态或显式取消，避免重复提交。
 - Token 策略：`/local/api/token-policies/*` 限制入口、Pack、operation、model、每分钟/每日请求、并发与到期时间。
 - Agent 注册与计量：非系统 Token 必须绑定唯一 `agent_code`、名称和工作区；`GET /local/api/agent-usage` 按 Token ID 合并模型日志与 Protocol Pack 事件，返回调用、输入/输出/缓存读写/推理 Token、成本状态和额度使用。`GET /agent/whoami` 返回当前 Token 的脱敏 Agent 身份。
 - 调用账本：`GET /local/api/protocol-events` 为每次 Protocol Pack、Workflow 与 MCP 调用保留一条脱敏事件。模型响应存在标准 usage 时会记录规范化 Token；当上游明确返回 USD 成本或 Pack 有可计算的 operation/model 标价时，事件会冻结当次成本及组成，后续改价不会重算新格式的历史事件。

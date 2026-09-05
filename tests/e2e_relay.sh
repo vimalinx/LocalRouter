@@ -45,6 +45,7 @@ LOCAL_GATEWAY_DATA_DIR="$e2e_root/data" \
 LOCAL_GATEWAY_STATE_DIR="$e2e_root/state" \
 LOCAL_GATEWAY_CACHE_DIR="$e2e_root/cache" \
 LOCAL_GATEWAY_PORT="$gateway_port" \
+LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=false \
 GIN_MODE=release \
 "$project_root/gateway/localrouter" --log-dir "$e2e_root/logs" >"$e2e_root/gateway.log" 2>&1 &
 gateway_pid=$!

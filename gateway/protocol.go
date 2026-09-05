@@ -36,30 +36,32 @@ var protocolQueryParameterPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{
 var protocolHeaderPattern = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")
 
 type protocolRegistry struct {
-	mu             sync.RWMutex
-	dir            string
-	dataDir        string
-	stateDir       string
-	templates      map[string]protocolDefinition
-	guides         map[string][]protocolGuide
-	poolMu         sync.Mutex
-	workflowMu     sync.Mutex
-	lifecycleMu    sync.Mutex
-	liveDigest     string
-	pendingPlan    *protocolPackPlan
-	client         *http.Client
-	readinessMu    sync.Mutex
-	readinessCache map[string]protocolReadinessRuntime
-	oauthMu        sync.Mutex
-	oauthTokens    map[string]protocolOAuthToken
-	schedulerMu    sync.Mutex
-	schedulerStop  chan struct{}
-	schedulerDone  chan struct{}
-	policies       *tokenPolicyStore
-	events         *protocolEventStore
-	verifyInstall  func(root, digest string) error
-	activationPath string
-	activations    protocolActivationDocument
+	mu              sync.RWMutex
+	dir             string
+	dataDir         string
+	stateDir        string
+	templates       map[string]protocolDefinition
+	guides          map[string][]protocolGuide
+	poolMu          sync.Mutex
+	workflowMu      sync.Mutex
+	workflowRunning map[string]*workflowExecution
+	workflowWorkers sync.WaitGroup
+	lifecycleMu     sync.Mutex
+	liveDigest      string
+	pendingPlan     *protocolPackPlan
+	client          *http.Client
+	readinessMu     sync.Mutex
+	readinessCache  map[string]protocolReadinessRuntime
+	oauthMu         sync.Mutex
+	oauthTokens     map[string]protocolOAuthToken
+	schedulerMu     sync.Mutex
+	schedulerStop   chan struct{}
+	schedulerDone   chan struct{}
+	policies        *tokenPolicyStore
+	events          *protocolEventStore
+	verifyInstall   func(root, digest string) error
+	activationPath  string
+	activations     protocolActivationDocument
 }
 
 type protocolActivationDocument struct {
@@ -358,7 +360,8 @@ func newProtocolRegistryWithState(dir, dataDir, stateDir string) (*protocolRegis
 		templates: make(map[string]protocolDefinition),
 		guides:    make(map[string][]protocolGuide),
 		client: &http.Client{
-			Transport: http.DefaultTransport.(*http.Transport).Clone(),
+			Transport:     http.DefaultTransport.(*http.Transport).Clone(),
+			CheckRedirect: rejectUpstreamRedirect,
 		},
 		readinessCache: make(map[string]protocolReadinessRuntime),
 		oauthTokens:    make(map[string]protocolOAuthToken),
@@ -1443,13 +1446,21 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 	registry.copyProtocolResponseHeaders(c, definition, response)
 	c.Status(response.StatusCode)
 	capture := &limitedCaptureWriter{limit: 2 << 20}
+	streamUsage := &streamUsageCollector{}
+	observe := func() {
+		observeProtocolUsage(c, response.Header.Get("Content-Type"), capture.Bytes())
+		if usage := streamUsage.result(); usage.hasTokens() || usage.ReportedCostUSD != nil {
+			c.Set("localrouter_usage_metrics", usage)
+		}
+	}
 	buffer := make([]byte, 32<<10)
 	for {
 		count, readErr := response.Body.Read(buffer)
 		if count > 0 {
 			_, _ = capture.Write(buffer[:count])
+			_, _ = streamUsage.Write(buffer[:count])
 			if _, writeErr := c.Writer.Write(buffer[:count]); writeErr != nil {
-				observeProtocolUsage(c, response.Header.Get("Content-Type"), capture.Bytes())
+				observe()
 				return
 			}
 			if flusher, ok := c.Writer.(http.Flusher); ok {
@@ -1457,7 +1468,7 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 			}
 		}
 		if readErr != nil {
-			observeProtocolUsage(c, response.Header.Get("Content-Type"), capture.Bytes())
+			observe()
 			return
 		}
 	}

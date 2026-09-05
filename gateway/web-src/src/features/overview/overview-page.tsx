@@ -8,6 +8,7 @@ import {
   Gauge,
   KeyRound,
   RadioTower,
+  RefreshCw,
   Route,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -18,7 +19,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AdminTokenDialog } from '@/features/overview/admin-token-dialog'
 import { supplierColor } from '@/lib/supplier-colors'
-import type { AgentUsage, Analytics, AnalyticsBucket, AnalyticsService, ProtocolView, Summary } from '@/lib/types'
+import type { AgentUsage, Analytics, AnalyticsBucket, AnalyticsService, ProtocolView, Summary, UpdateStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const relayEndpoints = [
@@ -90,6 +91,26 @@ function costLabel(service: AnalyticsService) {
   if (service.cost_status === 'unavailable') return '未接入价格'
   const suffix = service.cost_status === 'partial' ? ' 部分' : service.cost_status === 'estimated' ? ' 估算' : service.cost_status === 'reported' ? ' 上游' : ''
   return `${formatUSD(service.cost_usd || 0)}${suffix}`
+}
+
+function updateLabel(update?: UpdateStatus) {
+  if (!update) return '不可用'
+  if (update.status === 'available') return '有新版本'
+  if (update.status === 'current') return '已是最新'
+  if (update.status === 'ahead') return '领先发布版'
+  if (update.status === 'development') return '开发构建'
+  if (update.status === 'pending') return '等待检查'
+  if (update.status === 'disabled') return '已关闭'
+  if (update.status === 'error') return '检查失败'
+  if (update.status === 'no-release') return '暂无发布版'
+  return '不可用'
+}
+
+function updateVariant(update?: UpdateStatus): 'success' | 'warning' | 'secondary' | 'destructive' {
+  if (update?.status === 'available') return 'warning'
+  if (update?.status === 'current' || update?.status === 'ahead') return 'success'
+  if (update?.status === 'error') return 'destructive'
+  return 'secondary'
 }
 
 function TrendChart(props: { buckets: AnalyticsBucket[]; services: AnalyticsService[]; metric: TrendMetric }) {
@@ -179,8 +200,10 @@ export function OverviewPage(props: {
   agentUsage?: AgentUsage[]
   onChangeAdminToken: (token: string) => Promise<void>
   onChangeAdminAuth: (enabled: boolean, token?: string) => Promise<void>
+  onCheckUpdate: () => Promise<void>
 }) {
   const [trendMetric, setTrendMetric] = useState<TrendMetric>('requests')
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
   const origin = window.location.origin
   const totals = props.analytics.totals
   const configuredServices = props.summary.channels + props.summary.protocols
@@ -216,6 +239,15 @@ export function OverviewPage(props: {
   async function copyBaseUrl() {
     await navigator.clipboard.writeText(origin)
     toast.success('本机网关地址已复制')
+  }
+
+  async function checkUpdate() {
+    setCheckingUpdate(true)
+    try {
+      await props.onCheckUpdate()
+    } finally {
+      setCheckingUpdate(false)
+    }
   }
 
   return (
@@ -282,6 +314,13 @@ export function OverviewPage(props: {
               </div>
               <div className='flex items-center justify-between gap-3 py-2'><dt className='text-muted-foreground'>监听</dt><dd className='font-mono'>{props.summary.listen}</dd></div>
               <div className='flex items-center justify-between gap-3 py-2'><dt className='text-muted-foreground'>本机 API Token</dt><dd className='tabular-nums'>{props.summary.tokens}</dd></div>
+              <div className='flex items-center justify-between gap-3 py-2'>
+                <dt className='text-muted-foreground'>版本</dt>
+                <dd className='flex items-center gap-2'>
+                  <code>{props.summary.update?.current_version || 'unknown'}</code>
+                  <Badge variant={updateVariant(props.summary.update)}>{updateLabel(props.summary.update)}</Badge>
+                </dd>
+              </div>
               <div className='flex items-center justify-between gap-3 py-2'><dt className='text-muted-foreground'>服务计价覆盖</dt><dd className='tabular-nums'>{pricingCoverage}%</dd></div>
               <div className='flex items-center justify-between gap-3 py-2'>
                 <dt className='text-muted-foreground'>号池参考余额</dt>
@@ -291,6 +330,26 @@ export function OverviewPage(props: {
                 </dd>
               </div>
             </dl>
+          </div>
+          <div className='flex items-center justify-between gap-3 py-4'>
+            <div className='min-w-0'>
+              <p className='text-xs font-medium'>自动检查更新</p>
+              <p className='mt-1 text-[11px] text-muted-foreground'>
+                {props.summary.update?.status === 'available' && props.summary.update.release_url ? (
+                  <a className='text-primary hover:underline' href={props.summary.update.release_url} target='_blank' rel='noreferrer'>
+                    查看 {props.summary.update.latest_version} 发布说明
+                  </a>
+                ) : props.summary.update?.error_code === 'rate-limited'
+                  ? 'GitHub 暂时限流，后续周期会重试，网关不受影响'
+                  : props.summary.update?.status === 'error'
+                    ? '本次检查失败，后续周期会重试，网关不受影响'
+                    : props.summary.update?.enabled ? '每 6 小时检查 GitHub Releases，只提示不安装' : '可通过运行配置启用'}
+              </p>
+            </div>
+            <Button size='sm' variant='outline' onClick={checkUpdate} disabled={checkingUpdate || props.summary.update?.status === 'disabled'}>
+              <RefreshCw aria-hidden='true' className={cn(checkingUpdate && 'animate-spin')} />
+              {checkingUpdate ? '检查中' : '立即检查'}
+            </Button>
           </div>
           <div className='flex items-center justify-between gap-3 py-4'>
             <div className='min-w-0'>

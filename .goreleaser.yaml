@@ -2,6 +2,9 @@ version: 2
 
 project_name: localrouter
 
+release:
+  prerelease: auto
+
 before:
   hooks:
     - bun install --cwd gateway/web-src --frozen-lockfile

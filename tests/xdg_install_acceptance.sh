@@ -82,6 +82,7 @@ XDG_DATA_HOME="$data_home" \
 XDG_STATE_HOME="$state_home" \
 XDG_CACHE_HOME="$cache_home" \
 LOCAL_GATEWAY_PORT="$gateway_port" \
+LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=false \
   "$prefix/bin/localrouter" >"$test_root/gateway.log" 2>&1 &
 gateway_pid=$!
 

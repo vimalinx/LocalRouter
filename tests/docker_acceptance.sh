@@ -54,6 +54,7 @@ run_container() {
     --security-opt no-new-privileges:true \
     --init \
     --env LOCAL_GATEWAY_PORT="$local_port" \
+    --env LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=false \
     --env LOCAL_GATEWAY_LAN_ENABLED=true \
     --env LOCAL_GATEWAY_LAN_HOST=0.0.0.0 \
     --env LOCAL_GATEWAY_LAN_PORT="$lan_port" \
@@ -131,6 +132,7 @@ docker exec "$container" localrouter version | grep -Fq 'commit=acceptance'
 
 LOCALROUTER_LAN_HOST=192.168.1.10 docker compose --project-directory "$project_root" -f "$project_root/compose.yaml" config --format json >"$test_root/compose.json"
 jq -e '.services.localrouter.healthcheck.test == ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${LOCAL_GATEWAY_PORT}/healthz || exit 1"]' "$test_root/compose.json" >/dev/null
+jq -e '.services.localrouter.environment.LOCAL_GATEWAY_UPDATE_CHECK_ENABLED == "true"' "$test_root/compose.json" >/dev/null
 mkdir -p "$test_root/bind-config" "$test_root/bind-data" "$test_root/bind-state" "$test_root/bind-cache"
 LOCALROUTER_LAN_HOST=192.168.1.10 \
 LOCALROUTER_CONFIG_DIR="$test_root/bind-config" \

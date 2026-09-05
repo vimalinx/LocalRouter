@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -164,6 +166,11 @@ func unsupportedRealtime(c *gin.Context) {
 
 func handleRelayModels(runtime localRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		profile, ok := runtime.channelProfiles.matchRequestPath(c.Request.URL.Path)
+		if !ok {
+			c.JSON(http.StatusNotImplemented, gin.H{"error": gin.H{"message": "unknown protocol profile"}})
+			return
+		}
 		channels, err := runtime.store.enabledChannels()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "cannot load model catalogue"}})
@@ -172,9 +179,15 @@ func handleRelayModels(runtime localRuntime) gin.HandlerFunc {
 		seen := make(map[string]bool)
 		data := make([]gin.H, 0)
 		for _, channel := range channels {
+			if channel.Type != profile.ID {
+				continue
+			}
 			for _, model := range strings.Split(channel.Models, ",") {
 				model = strings.TrimSpace(model)
-				if model == "" || model == "*" || seen[model] {
+				if model == "" || strings.Contains(model, "*") || seen[model] {
+					continue
+				}
+				if policy, exists := runtime.policies.policyFor(c.GetInt(tokenPolicyContextID)); exists && !containsPolicyValue(policy.Models, model) {
 					continue
 				}
 				seen[model] = true
@@ -210,14 +223,18 @@ func handleRelayModel(runtime localRuntime) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "model not found", "type": "invalid_request_error"}})
 			return
 		}
+		if strings.HasPrefix(c.Request.URL.Path, "/v1beta/") {
+			c.JSON(http.StatusOK, gin.H{"name": "models/" + model, "displayName": model})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"id": model, "object": "model", "created": channels[0].CreatedTime, "owned_by": channels[0].Name})
 	}
 }
 
 func handleRelayRequest(runtime localRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRelayBodyBytes+1))
-		if err != nil || len(body) > maxRelayBodyBytes {
+		body, err := compatibilityBody(c)
+		if err != nil {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{"message": "request body exceeds 64 MiB"}})
 			return
 		}
@@ -245,6 +262,22 @@ func handleRelayRequest(runtime localRuntime) gin.HandlerFunc {
 	}
 }
 
+func compatibilityBody(c *gin.Context) ([]byte, error) {
+	if cached, ok := c.Get("localrouter_compatibility_body"); ok {
+		return cached.([]byte), nil
+	}
+	var body []byte
+	if c.Request.Body != nil {
+		var err error
+		body, err = io.ReadAll(io.LimitReader(c.Request.Body, maxRelayBodyBytes+1))
+		if err != nil || len(body) > maxRelayBodyBytes {
+			return nil, errors.New("request body is too large or unreadable")
+		}
+	}
+	c.Set("localrouter_compatibility_body", body)
+	return body, nil
+}
+
 func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localChannel, model string, body []byte) {
 	started := time.Now()
 	requestID := newRelayRequestID()
@@ -265,9 +298,14 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 		response, err := runtime.relayClient.Do(upstreamRequest)
 		if err != nil {
 			lastErr = err
+			if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+				writeCompatibilityRelayError(c, runtime, http.StatusBadGateway, "upstream_outcome_unknown", "upstream outcome is unknown; reconcile provider state before retrying", false)
+				logRelay(runtime, c, channel, model, requestID, started, usageMetrics{}, false, localLogTypeError, "upstream outcome unknown")
+				return
+			}
 			continue
 		}
-		if retryableRelayStatus(response.StatusCode) && index+1 < len(channels) {
+		if retryableRelayStatus(response.StatusCode) && safeCompatibilityRetry(c.Request.Method, response.StatusCode) && index+1 < len(channels) {
 			lastStatus = response.StatusCode
 			lastBody, _ = io.ReadAll(io.LimitReader(response.Body, 1<<20))
 			_ = response.Body.Close()
@@ -278,6 +316,10 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 		c.Header("X-Request-Id", requestID)
 		c.Status(response.StatusCode)
 		usage, streamed, copyErr := copyRelayResponse(c, response)
+		if copyErr != nil && !c.Writer.Written() {
+			c.Writer.Header().Del("Content-Length")
+			writeCompatibilityRelayError(c, runtime, http.StatusBadGateway, "upstream_response_incomplete", "upstream response could not be read completely; reconcile provider state before retrying", false)
+		}
 		entryType := localLogTypeConsume
 		content := "request completed"
 		if response.StatusCode < 200 || response.StatusCode >= 300 || copyErr != nil {
@@ -293,7 +335,7 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 	}
 	message := "all matching upstream channels failed"
 	if lastErr != nil {
-		message += ": " + lastErr.Error()
+		message = "upstream connection failed"
 	}
 	if len(lastBody) > 0 {
 		copyRelayError(c, status, lastBody)
@@ -377,6 +419,24 @@ func relayModel(c *gin.Context, body []byte) string {
 	}
 	if path := strings.Trim(c.Param("path"), "/"); path != "" {
 		return strings.SplitN(path, ":", 2)[0]
+	}
+	mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if err == nil && mediaType == "multipart/form-data" {
+		reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+		for {
+			part, err := reader.NextPart()
+			if err != nil {
+				return ""
+			}
+			if part.FormName() == "model" && part.FileName() == "" {
+				value, err := io.ReadAll(io.LimitReader(part, 257))
+				if err != nil || len(value) > 256 {
+					return ""
+				}
+				return strings.TrimSpace(string(value))
+			}
+			_ = part.Close()
+		}
 	}
 	var document struct {
 		Model string `json:"model"`
@@ -536,22 +596,22 @@ func copyRelayResponse(c *gin.Context, response *http.Response) (usageMetrics, b
 		return parseUsageMetrics(body), false, err
 	}
 
-	capture := &limitedCaptureWriter{limit: 2 << 20}
+	capture := &streamUsageCollector{}
 	writer := io.MultiWriter(c.Writer, capture)
 	buffer := make([]byte, 32<<10)
 	for {
 		count, readErr := response.Body.Read(buffer)
 		if count > 0 {
 			if _, err := writer.Write(buffer[:count]); err != nil {
-				return parseStreamUsageMetrics(capture.Bytes()), true, err
+				return capture.result(), true, err
 			}
 			c.Writer.Flush()
 		}
 		if errors.Is(readErr, io.EOF) {
-			return parseStreamUsageMetrics(capture.Bytes()), true, nil
+			return capture.result(), true, nil
 		}
 		if readErr != nil {
-			return parseStreamUsageMetrics(capture.Bytes()), true, readErr
+			return capture.result(), true, readErr
 		}
 	}
 }
@@ -581,6 +641,13 @@ func (writer *limitedCaptureWriter) Bytes() []byte { return writer.data }
 
 func retryableRelayStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500
+}
+
+func safeCompatibilityRetry(method string, status int) bool {
+	// 429 is an authoritative refusal. Timeouts and 5xx do not establish
+	// whether a paid POST was already accepted, even with an idempotency key
+	// belonging to a different provider.
+	return method == http.MethodGet || method == http.MethodHead || status == http.StatusTooManyRequests
 }
 
 func copyRelayError(c *gin.Context, status int, body []byte) {

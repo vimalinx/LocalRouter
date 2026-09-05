@@ -131,7 +131,7 @@ func (registry *protocolRegistry) forwardGRPC(c *gin.Context, definition protoco
 				return (&net.Dialer{}).DialContext(ctx, network, address)
 			},
 		}
-		client = &http.Client{Transport: transport}
+		client = &http.Client{Transport: transport, CheckRedirect: rejectUpstreamRedirect}
 	} else {
 		client = registry.client
 	}

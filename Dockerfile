@@ -51,6 +51,7 @@ ENV HOME=/var/lib/localrouter \
     LOCAL_GATEWAY_CACHE_DIR=/var/lib/localrouter/cache \
     LOCAL_GATEWAY_HOST=127.0.0.1 \
     LOCAL_GATEWAY_PORT=8317 \
+    LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=true \
     LOCAL_GATEWAY_LAN_ENABLED=true \
     LOCAL_GATEWAY_LAN_PORT=8318 \
     GIN_MODE=release
