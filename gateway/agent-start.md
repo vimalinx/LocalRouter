@@ -22,9 +22,13 @@ lr describe <pack> <operation_key>
 lr docs <pack>
 ```
 
+`lr tree` 返回供人阅读的文本树，不是 JSON。查看整包用 `lr show <pack>` 或 `lr catalog <pack>`；`lr describe` 必须同时传 Pack 和 operation。写脚本时先检查实际 JSON 结构：`lr status` 的服务数组是 `protocols`，`lr catalog` 的操作数组是 `operations`，`lr find model` 的匹配数组是 `matches`。不要猜字段，也不要因为离线解析失败而重复请求供应商。
+
 比较返回的供应商、ready、验证覆盖、请求 schema、费用和重试规则，明确选择一个 Pack 和 operation。服务目录的 ready 来自公共发现，不证明当前 Agent 已注册，更不证明它有调用权限；身份只看 lr init / lr whoami，授权还要核对有效策略、lr setup bundles 和预检。`ready: true` 不等于真实供应商调用已经验证。费用缺失是未知，不是免费。
 
 只找操作用 `lr find operation`；找池用 `lr find pool`；找模型用 `lr find model`。模型搜索可能请求供应商目录。需要动态模型时，最终执行 `lr find model --exact <pack>:<model-id>` 并要求唯一结果；示例模型名不证明可用。
+
+当前非 `--exact` 的模型搜索会读取所有就绪的模型目录，再筛选结果；把 Pack 名作为搜索词不会限制上游查询范围。不要对每个 Pack 重复做模糊搜索。确实需要覆盖全部模型服务时，可一次 `lr find model --all` 保存完整快照，离线按 Pack 选候选，再逐个精确确认；带 Pack 的 `--exact` 查询只访问该 Pack。没有供应商目录而采用请求 schema 枚举的模型，也要完成这个精确确认步骤。
 
 ## 3. 调用时把三类参数分开
 
@@ -35,7 +39,11 @@ lr call      <pack> <operation> <body-json> <path-params-json> <query-params-jso
 
 三份 JSON 的默认值都是 `{}`。GET 的 body 必须是 `{}`。例如，一个已发布 `GET /jobs/{jobId}` 的操作，其路径参数应放在第四个参数 `'{"jobId":"实际ID"}'`；查询参数如 `'{"limit":5}'` 放在第五个。`operation_id` 是语义标识，点号不改成斜杠；直接 HTTP 只用契约的 `call_url`。
 
+路径参数值必须是字符串。即使供应商返回数字 `jobId: 123`，也应传 `'{"jobId":"123"}'`，不要把它放入 body；Python 中先用 `str(resource_id)`。查询参数可以是字符串、数字或布尔值。以每个操作发布的路径名和必填查询字段为准，不把另一个操作的参数照搬过来。
+
 真实、付费或有副作用的调用要先取得该操作的授权。预检不调用供应商，非零退出必须处理。调用只执行一次，先保存原始响应和退出码，再离线解析；解析失败不能重发。未知结果先核对资源状态。
+
+批量脚本应在每次真实调用前保存唯一的开始记录，每项结束立即保存 stdout、stderr 和退出码；不能等整批结束才写证据。超时保存已收到的内容并标记结果未知，不重放已经开始的操作。总执行期限须覆盖各项期限，或拆成短批。聊天响应被输出上限截断、仅有推理片段时，不能算完成了用户请求。
 
 只有通过 LocalRouter 已发布工作流启动，并取得 LocalRouter Job ID 后，才保留 Pack、workflow 和 Job ID，用 `lr watch` 观察。普通供应商返回的 taskId/resourceId 不是 LocalRouter Job ID；没有已发布工作流时，用该 Pack 的状态查询操作核对资源，不能自行套用 `lr watch`。仅对声明支持取消的工作流使用 `lr cancel`。
 
