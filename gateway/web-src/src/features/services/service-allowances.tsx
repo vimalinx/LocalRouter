@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentProps } from 'react'
-import { ChevronDown, ChevronRight, Layers3, RefreshCcw, Search, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, Layers3, RefreshCcw, Search, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -18,13 +18,13 @@ type Rule = {
 type Receipt = { id: string; operation: string; token_id: number; amount: number }
 type SubAllowance = { id: string; name: string; configured: boolean; limit: number; spent: number; reserved: number; remaining: number }
 type Allowance = { operations?: SubAllowance[]; service: string; name: string; rule: Rule; spent: number; reserved: number; remaining: number; pending: Receipt[] }
-const selectClass = 'h-11 w-full cursor-pointer appearance-none rounded-lg border border-input bg-background pl-3 pr-9 text-sm outline-none transition-colors hover:border-muted-foreground/40 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50'
+const selectClass = 'h-10 w-full cursor-pointer appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm outline-none transition-colors hover:border-muted-foreground/40 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50'
 function AllowanceSelect(props: ComponentProps<'select'>) {
   return <span className='relative block'><select {...props} className={cn(selectClass, props.className)} /><ChevronDown aria-hidden='true' className='pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /></span>
 }
 function ServiceAvatar({ service }: { service: string }) {
   const color = supplierColor(service.startsWith('compatibility:') ? service : `protocol:${service}`)
-  return <span aria-hidden='true' className='flex size-10 shrink-0 items-center justify-center rounded-xl border text-xs font-semibold tracking-wide' style={{ color, borderColor: `color-mix(in oklch, ${color} 20%, transparent)`, backgroundColor: `color-mix(in oklch, ${color} 10%, transparent)` }}>{service.replace('compatibility:', '').slice(0, 2).toUpperCase()}</span>
+  return <span aria-hidden='true' className='flex size-8 shrink-0 items-center justify-center rounded-md border text-xs font-semibold tracking-wide' style={{ color, borderColor: `color-mix(in oklch, ${color} 20%, transparent)`, backgroundColor: `color-mix(in oklch, ${color} 10%, transparent)` }}>{service.replace('compatibility:', '').slice(0, 2).toUpperCase()}</span>
 }
 const splitOperations = (text: string) => text.split(/[\n,]/).map(value => value.trim()).filter(Boolean)
 const units = (amount: number, rule: Rule) => rule.unit === 'usd_micros' ? `$${new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 }).format(amount / 1e6)}` : `${new Intl.NumberFormat('zh-CN').format(amount)} 次`
@@ -60,7 +60,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
   const query = search.trim().toLowerCase()
   const visibleItems = items.filter(item => `${item.name} ${item.service}`.toLowerCase().includes(query))
   const batchItems = items.filter(item => `${item.name} ${item.service}`.toLowerCase().includes(batchSearch.trim().toLowerCase()))
-  const enabledCount = items.filter(item => item.rule.enabled).length
+  const configuredCount = items.filter(item => item.rule.revision > 0).length
   const operationQuery = operationSearch.trim().toLowerCase()
   const operations = (current?.operations || []).filter(op => `${op.id} ${op.name}`.toLowerCase().includes(operationQuery))
   const toggleSelection = (values: string[], id: string) => values.includes(id) ? values.filter(value => value !== id) : [...values, id]
@@ -113,39 +113,30 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
   const base = `/local/api/service-allowances/${encodeURIComponent(selected)}`
   if (loading) return <p role='status' className='p-4 text-sm'>正在读取服务额度…</p>
   return <div className='flex h-full min-h-0 flex-col gap-2 overflow-hidden'>
-    <div className='flex min-h-0 flex-1 flex-col overflow-hidden border-y lg:grid lg:grid-cols-[22rem_minmax(0,1fr)]'>
+    <div className='flex min-h-0 flex-1 flex-col overflow-hidden border-y lg:grid lg:grid-cols-[19rem_minmax(0,1fr)]'>
       <aside className='flex max-h-64 min-h-0 shrink-0 flex-col border-b lg:max-h-none lg:shrink lg:border-b-0 lg:border-r' aria-label='自主额度服务列表'>
         <div className='flex shrink-0 items-center justify-between border-b px-3 py-2'>
-          <label className='flex cursor-pointer items-center gap-1 text-sm font-medium'><Checkbox indeterminate={visibleItems.some(item => checkedServices.includes(item.service)) && !visibleItems.every(item => checkedServices.includes(item.service))} aria-label='选择全部筛选服务' disabled={busy || !visibleItems.length} checked={visibleItems.length > 0 && visibleItems.every(item => checkedServices.includes(item.service))} onChange={event => setCheckedServices(event.target.checked ? [...new Set([...checkedServices, ...visibleItems.map(item => item.service)])] : checkedServices.filter(id => !visibleItems.some(item => item.service === id)))} />服务 <span className='ml-1 text-muted-foreground'>{items.length}</span></label>
-          <span className='text-[11px] text-muted-foreground'>{enabledCount} 已启用 · {items.length - enabledCount} 未启用</span>
+          <label className='flex items-center gap-2 text-xs font-medium'><Checkbox indeterminate={visibleItems.some(item => checkedServices.includes(item.service)) && !visibleItems.every(item => checkedServices.includes(item.service))} aria-label='选择全部筛选服务' disabled={busy || !visibleItems.length} checked={visibleItems.length > 0 && visibleItems.every(item => checkedServices.includes(item.service))} onChange={event => setCheckedServices(event.target.checked ? [...new Set([...checkedServices, ...visibleItems.map(item => item.service)])] : checkedServices.filter(id => !visibleItems.some(item => item.service === id)))} />服务 <span className='ml-1 text-muted-foreground'>{items.length}</span></label>
+          <span className='text-[11px] text-muted-foreground'>{configuredCount} 已配置 · {items.length - configuredCount} 未配置</span>
         </div>
-        <div className='relative mx-3 my-2 shrink-0'>
+        <div className='relative m-2 shrink-0'>
           <Search aria-hidden='true' className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
-          <Input aria-label='搜索额度服务' placeholder='搜索服务名称' className='h-10 rounded-lg bg-muted/25 pl-8 text-sm' value={search} onChange={event => setSearch(event.target.value)} />
+          <Input aria-label='搜索额度服务' placeholder='搜索服务名称' className='h-9 pl-8 text-xs' value={search} onChange={event => setSearch(event.target.value)} />
         </div>
-        <div className='mx-3 mb-3 flex shrink-0 items-center justify-between gap-2'><span className='text-xs text-muted-foreground'>{checkedServices.length ? `已选 ${checkedServices.length} 个服务` : '选择服务查看与配置'}</span><Button size='sm' variant={checkedServices.length ? 'default' : 'outline'} disabled={busy || !checkedServices.length} onClick={() => { setBatchOpen(true); setBatchSearch(''); setError(''); setMessage('') }}><SlidersHorizontal aria-hidden='true' />批量设置{checkedServices.length ? ` (${checkedServices.length})` : ''}</Button></div>
-        <nav aria-label='自主额度服务' className='min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 pb-3 [scrollbar-gutter:stable]'>
+        <div className='mx-2 mb-2 flex shrink-0 items-center justify-between gap-2'><span className='text-[11px] text-muted-foreground'>选择服务配置额度</span><Button size='sm' variant='outline' disabled={busy || !checkedServices.length} onClick={() => { setBatchOpen(true); setBatchSearch(''); setError(''); setMessage('') }}>批量设置{checkedServices.length ? ` (${checkedServices.length})` : ''}</Button></div>
+        <nav aria-label='自主额度服务' className='min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-1.5 pt-0 [scrollbar-gutter:stable]'>
           {visibleItems.map(item => {
             const selectedItem = item.service === selected
-            const quota = item.rule.enabled && item.rule.mode === 'quota'
-            const usedPercent = item.rule.limit > 0 ? Math.max(0, Math.min(100, (item.spent + item.reserved) / item.rule.limit * 100)) : 0
-            return <div key={item.service} className={cn('group relative rounded-xl border transition-colors', selectedItem ? '!border-primary/35 bg-primary/7 shadow-xs' : checkedServices.includes(item.service) ? '!border-primary/20 bg-primary/4' : '!border-transparent hover:!border-border hover:bg-muted/35')}>
-              <button type='button' disabled={busy} aria-label={`${item.name} 自主额度`} aria-current={selectedItem ? 'page' : undefined}
-                className='flex min-h-20 w-full min-w-0 cursor-pointer items-start gap-3 rounded-xl py-3 pl-3 pr-11 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait' onClick={() => selectService(item)}>
-                <ServiceAvatar service={item.service} />
-                <span className='min-w-0 flex-1'>
-                  <span className='flex items-center gap-1'><span className='min-w-0 break-words text-sm font-medium leading-5'>{item.name}</span>{selectedItem && <ChevronRight aria-hidden='true' className='size-3.5 shrink-0 text-primary' />}</span>
-                  <span className={cn('mt-1.5 flex items-center gap-1.5 text-xs', item.rule.enabled ? 'text-primary' : 'text-muted-foreground')}><span aria-hidden='true' className={cn('size-1.5 rounded-full', item.rule.enabled ? 'bg-primary' : 'bg-muted-foreground/40')} />{allowanceMode(item.rule)}</span>
-                {quota && <>
-                  <span className='mt-3 block text-xs text-muted-foreground'>剩余额度</span>
-                  <span className={cn('mt-1 block break-all text-3xl font-semibold leading-tight tracking-tight tabular-nums', item.remaining <= 0 && 'text-amber-700 dark:text-amber-300')}>{units(item.remaining, item.rule)}</span>
-                  <span className='mt-1 block text-xs tabular-nums text-muted-foreground'>总额度 {units(item.rule.limit, item.rule)} · {item.rule.period === 'day' ? '每天' : item.rule.period === 'month' ? '每月' : '一次性'}</span>
-                  <span aria-hidden='true' className='mt-2 block h-1.5 overflow-hidden rounded-full bg-background'><span className={cn('block h-full rounded-full', item.remaining <= 0 ? 'bg-amber-500' : 'bg-primary/60')} style={{ width: `${usedPercent}%` }} /></span>
-                </>}
-                {quota && Object.keys(item.rule.operation_limits || {}).length > 0 && <span className='mt-2 block text-xs text-muted-foreground'>{Object.keys(item.rule.operation_limits || {}).length} 项独立子额度</span>}
-                {item.rule.enabled && item.pending.length > 0 && <span className='mt-2 block text-xs text-amber-700 dark:text-amber-300'>{item.pending.length} 笔费用待核对</span>}
+            const color = supplierColor(item.service.startsWith('compatibility:') ? item.service : `protocol:${item.service}`)
+            return <div key={item.service} className='flex items-start gap-0.5'><Checkbox className='mt-2.5' aria-label={`选择服务 ${item.name}`} disabled={busy} checked={checkedServices.includes(item.service)} onChange={() => setCheckedServices(previous => toggleSelection(previous, item.service))} /><button type='button' disabled={busy} aria-label={`${item.name} 自主额度`} aria-current={selectedItem ? 'page' : undefined}
+              className={cn('flex min-h-14 min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-md px-2.5 py-2.5 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait', selectedItem && 'bg-muted text-foreground')}
+              style={{ boxShadow: selectedItem ? `inset 2px 0 ${color}` : undefined }} onClick={() => selectService(item)}>
+              <span className='mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md' style={{ color, backgroundColor: `color-mix(in oklch, ${color} 12%, transparent)` }}><ShieldCheck aria-hidden='true' className='size-4' /></span>
+              <span className='min-w-0 flex-1'>
+                <span className='block break-words text-xs font-medium'>{item.name}</span>
+                <span className={cn('mt-1 block text-xs tabular-nums', item.rule.revision > 0 ? 'font-medium text-foreground' : 'text-muted-foreground')}>{item.rule.revision > 0 ? units(item.rule.limit, item.rule) : '未配置'}</span>
               </span>
-            </button><Checkbox className='absolute right-2 top-2.5' aria-label={`选择服务 ${item.name}`} disabled={busy} checked={checkedServices.includes(item.service)} onChange={() => setCheckedServices(previous => toggleSelection(previous, item.service))} /></div>
+            </button></div>
           })}
           {!visibleItems.length && <p role='status' className='p-3 text-xs text-muted-foreground'>{items.length ? '没有匹配的服务。' : '暂无服务。'}</p>}
         </nav>
@@ -156,22 +147,20 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
           <Button variant='ghost' size='sm' disabled={busy} onClick={() => void refresh()} aria-label='刷新服务额度'><RefreshCcw aria-hidden='true' className={cn('size-3.5', busy && 'animate-spin')} /><span className='hidden sm:inline'>刷新</span></Button>
         </header>
         <div className='max-w-4xl space-y-5 p-4 sm:p-5'>
-          {!current?.rule.enabled && <p className='text-sm text-muted-foreground'>自主额度未启用。可先保存配置，再手动开启。</p>}
+          {!current?.rule.enabled && <p className='text-sm text-muted-foreground'>{current?.rule.revision ? '配置已保存，尚未启用。' : '未配置。可先设置额度并保存。'}</p>}
           {error && !batchOpen && <p role='alert' className='text-sm text-destructive'>{error}</p>}
           {message && <p role='status' className='text-sm'>{message}</p>}
           {draft && current && <>
-        {current.rule.enabled && current.rule.mode === 'quota' && <section aria-label='当前服务额度' className='border-b pb-5'>
-          <p className='text-sm text-muted-foreground'>剩余额度</p>
-          <p className={cn('mt-2 break-all text-5xl font-semibold tracking-tight tabular-nums', current.remaining <= 0 && 'text-amber-700 dark:text-amber-300')}>{units(current.remaining, current.rule)}</p>
-          <dl className='mt-4 flex flex-wrap gap-x-8 gap-y-3 text-sm'>
-            <div><dt className='text-muted-foreground'>总额度</dt><dd className='mt-1 text-lg font-medium tabular-nums'>{units(current.rule.limit, current.rule)}</dd></div>
-            <div><dt className='text-muted-foreground'>已用</dt><dd className='mt-1 text-lg font-medium tabular-nums'>{units(current.spent, current.rule)}</dd></div>
-            <div><dt className='text-muted-foreground'>待核对</dt><dd className='mt-1 text-lg font-medium tabular-nums'>{units(current.reserved, current.rule)}</dd></div>
+        {current.rule.revision > 0 && <section aria-label='当前服务额度' className='border-b pb-3'>
+          <dl className='flex flex-wrap items-end gap-x-6 gap-y-2 text-xs'>
+            <div><dt className='text-muted-foreground'>配置额度</dt><dd className='mt-1 text-xl font-semibold tabular-nums'>{units(current.rule.limit, current.rule)}</dd></div>
+            <div><dt className='text-muted-foreground'>周期</dt><dd className='mt-1 text-sm'>{current.rule.period === 'day' ? '每天' : current.rule.period === 'month' ? '每月' : '一次性'}</dd></div>
+            {current.rule.enabled && <><div><dt className='text-muted-foreground'>已用</dt><dd className='mt-1 text-sm tabular-nums'>{units(current.spent, current.rule)}</dd></div><div><dt className='text-muted-foreground'>待核对</dt><dd className='mt-1 text-sm tabular-nums'>{units(current.reserved, current.rule)}</dd></div></>}
           </dl>
         </section>}
         <form className='space-y-4' onSubmit={event => { event.preventDefault(); void mutate(base, 'PUT', { ...draft, limit: Math.round(Number(limitText) * (draft.unit === 'requests' ? 1 : 1e6)), approval_operations: splitOperations(approvalText), denied_operations: splitOperations(deniedText), operation_limits: Object.fromEntries(Object.entries(subLimits).map(([id, value]) => [id, Math.round(Number(value) * (draft.unit === 'usd_micros' ? 1e6 : 1))])) }, draft.enabled ? '规则已保存并启用。' : '规则已保存，额度功能关闭。') }}>
           <fieldset disabled={busy} className='space-y-4'>
-            <div className='flex items-center justify-between gap-4 rounded-xl border bg-muted/20 px-4 py-3'><div><p className='text-sm font-medium'>自主使用限制</p><p className='mt-1 text-xs text-muted-foreground'>手动开启，保存后生效</p></div><ActivationToggle checked={draft.enabled} label='启用此服务的自主使用限制' disabled={busy} onChange={() => setDraft({ ...draft, enabled: !draft.enabled })} /></div>
+            <div className='flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2'><div><p className='text-sm font-medium'>自主使用限制</p><p className='mt-1 text-xs text-muted-foreground'>手动开启，保存后生效</p></div><ActivationToggle checked={draft.enabled} label='启用此服务的自主使用限制' disabled={busy} onChange={() => setDraft({ ...draft, enabled: !draft.enabled })} /></div>
             <label className='block space-y-1 text-sm'><span>使用方式</span><AllowanceSelect value={draft.mode} onChange={event => setDraft({ ...draft, mode: event.target.value as Rule['mode'] })}><option value='quota'>额度内自主使用</option><option value='approval'>始终需要批准</option><option value='deny'>禁止使用</option></AllowanceSelect></label>
             {draft.mode === 'quota' && <>
               <div className='grid gap-3 sm:grid-cols-3'>
@@ -196,7 +185,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
                     const configured = Object.hasOwn(subLimits, op.id)
                     return <TableRow key={op.id} className={cn(checkedOperations.includes(op.id) && 'bg-primary/5 hover:bg-primary/8')}>
                       <TableCell className='px-2 py-2'><Checkbox aria-label={`选择操作 ${op.id}`} checked={checkedOperations.includes(op.id)} onChange={() => setCheckedOperations(previous => toggleSelection(previous, op.id))} /></TableCell>
-                      <TableCell className='max-w-0 py-2'><span className='block break-words text-xs font-medium'>{op.name || op.id}</span><code className='block break-all text-[10px] text-muted-foreground'>{op.id}</code>{current.rule.enabled && <span className='mt-2 block text-sm tabular-nums'>{op.configured ? `剩余 ${units(op.remaining, current.rule)}` : '共用服务总额度'}</span>}</TableCell>
+                      <TableCell className='max-w-0 py-2'><span className='block break-words text-xs font-medium'>{op.name || op.id}</span><code className='block break-all text-[10px] text-muted-foreground'>{op.id}</code><span className='mt-1 block text-xs tabular-nums text-muted-foreground'>{op.configured ? `配置额度 ${units(op.limit, current.rule)}` : '未配置'}</span></TableCell>
                       <TableCell className='py-2'><label className='mb-1 flex min-h-8 cursor-pointer items-center gap-1 text-xs'><Checkbox aria-label={`设置 ${op.id} 子额度`} checked={configured} onChange={event => setSubLimit(op.id, event.target.checked ? '3' : undefined)} />单独设置</label><Input aria-label={`${op.id} 子额度`} className='h-8 text-xs' type='number' min='0' max={draft.unit === 'usd_micros' ? 1e6 : 1e12} step={draft.unit === 'usd_micros' ? 0.000001 : 1} required={configured} disabled={!configured} placeholder='未设置' value={subLimits[op.id] ?? ''} onChange={event => setSubLimit(op.id, event.target.value)} /></TableCell>
                     </TableRow>
                   })}
@@ -236,7 +225,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
         <div className='space-y-2'>
           <div className='relative'><Search aria-hidden='true' className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input aria-label='筛选批量设置服务' placeholder='搜索并选择服务' className='rounded-lg pl-9' value={batchSearch} onChange={event => setBatchSearch(event.target.value)} /></div>
           <div className='max-h-64 space-y-1 overflow-y-auto rounded-xl border p-2' aria-label='批量服务选择'>
-            {batchItems.map(item => <label key={item.service} className={cn('flex min-h-16 cursor-pointer items-center gap-3 rounded-lg border px-2 py-2 transition-colors', checkedServices.includes(item.service) ? '!border-primary/20 bg-primary/7' : '!border-transparent hover:bg-muted/50')}>
+            {batchItems.map(item => <label key={item.service} className={cn('flex min-h-12 cursor-pointer items-center gap-2 rounded-lg border px-2 py-2 transition-colors', checkedServices.includes(item.service) ? '!border-primary/20 bg-primary/7' : '!border-transparent hover:bg-muted/50')}>
               <ServiceAvatar service={item.service} /><span className='min-w-0 flex-1'><span className='block text-sm font-medium'>{item.name}</span><span className='mt-1 block text-xs text-muted-foreground'>{allowanceMode(item.rule)}</span></span><Checkbox aria-label={`批量选择 ${item.name}`} checked={checkedServices.includes(item.service)} onChange={() => setCheckedServices(previous => toggleSelection(previous, item.service))} />
             </label>)}
             {!batchItems.length && <p className='p-3 text-sm text-muted-foreground'>没有匹配的服务。</p>}
