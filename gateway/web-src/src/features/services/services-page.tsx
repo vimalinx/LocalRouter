@@ -45,7 +45,7 @@ export function ServicesPage(props: {
         </div>
       </header>
 
-      <div className={cn('min-h-0 flex-1', activeTab !== 'services' ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden')}>
+      <div className={cn('min-h-0 flex-1', activeTab === 'models' ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden')}>
         {activeTab === 'allowances' ? <ServiceAllowances adminToken={props.adminToken} /> : activeTab === 'services' ? (
           <ProtocolsPage embedded protocols={props.protocols} adminToken={props.adminToken} onChanged={props.onChanged} onOpenEditor={props.editorAvailable === false ? undefined : () => setEditorOpen(true)} />
         ) : (

@@ -1,6 +1,6 @@
 # 服务共享自主额度
 
-此功能默认关闭，不改变现有 Token 和能力包权限。人从控制台「服务与渠道 → 自主额度」选择一个服务，配置并保存启用。Agent 没有配置、提额或批准自己的 MCP/Service API。
+此功能默认关闭，不改变现有 Token 和能力包权限。人从控制台「服务与渠道 → 自主额度」从可搜索的服务列表选择服务，配置并保存启用。新配置以每月 3 美元为基础额度，仍须手动开启。Agent 没有配置、提额或批准自己的 MCP/Service API。
 
 每个完整 Protocol Pack 共用一个额度池；兼容渠道按 Channel Profile 共用一个池（`compatibility:<profile-key>`），同类 Profile 下的多个渠道不是多个独立池。已登记的 Agent 共享余额，bootstrap 身份不能使用启用后的额度池。
 
@@ -10,6 +10,8 @@
 - `approval`：每次需人批准。
 - `deny`：禁止调用，单次批准不能覆盖禁止。
 - 操作级 `approval_operations` 和 `denied_operations` 使用精确 operation ID，或 `*`。兼容渠道使用 `METHOD /request/path`，例如 `POST /v1/chat/completions`。
+- `operation_limits` 可为已发布操作配置独立子额度，单位和周期继承服务。一次调用必须同时满足子额度与服务总额度；未配置子额度的操作仅受总额度约束。兼容动态模型路径使用页面公布的操作模板，多个模型共用该操作的子额度。
+- 可多选服务批量设置总额度（初始值 3 美元），也可在单个服务内多选操作批量填入子额度后保存。批量设置保留每个服务的启用状态、周期、子额度及批准规则；任何一项冲突或校验失败，整批不保存。已有子额度时须先保存清除子额度，才可更改计量单位。
 - 周期支持一次性、UTC 自然日、UTC 自然月。用量产生后单位和周期不可改，避免改配置清空消费；可修改额度总量。任何规则保存都会撤销尚未使用的单次批准。
 - 未开启功能时遵守原有授权方式，不能把“关闭”理解成获得无限自主使用许可。
 
@@ -29,6 +31,7 @@
 
 - `GET /local/api/service-allowances`
 - `PUT /local/api/service-allowances/:service`，发送完整 rule，必须带读取到的 revision。
+- `POST /local/api/service-allowances/batch`，发送 `{services: [{service, rule}]}`，每条 rule 必须带 revision，最多 100 个服务，原子保存。
 - `POST /local/api/service-allowances/:service/grants`，发送 `{token_id, operation}`。
 - `POST /local/api/service-allowances/:service/receipts/:receipt/reconcile`，发送 `{amount, reason}`。
 

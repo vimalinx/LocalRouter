@@ -889,6 +889,7 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 		admin.PUT("/token-policies/:id", runtime.policies.handlePut)
 		admin.DELETE("/token-policies/:id", runtime.policies.handleDelete)
 		admin.GET("/service-allowances", humanAllowanceAccess, handleAllowanceList(runtime))
+		admin.POST("/service-allowances/batch", humanAllowanceAccess, handleAllowanceBatch(runtime))
 		admin.PUT("/service-allowances/:service", humanAllowanceAccess, handleAllowancePut(runtime))
 		admin.POST("/service-allowances/:service/grants", humanAllowanceAccess, handleAllowanceGrant(runtime))
 		admin.POST("/service-allowances/:service/receipts/:receipt/reconcile", humanAllowanceAccess, handleAllowanceReconcile(runtime))

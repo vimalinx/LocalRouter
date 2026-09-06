@@ -13,6 +13,9 @@ published.
   by default; Token and capability-bundle permissions still apply.
 - Added per-operation approval/prohibition, expiring one-call approvals,
   persistent atomic reservations, and human reconciliation of unknown costs.
+- Added a searchable per-service allowance list, manual operation sub-budgets,
+  and atomic batch configuration. New budgets start at USD 3 per month and
+  remain disabled until manually enabled; child and service limits both apply.
 - Added the service allowance console and non-consuming Agent preflight checks.
   Pack calls, workflow/MCP projections, and compatibility channel dispatches
   enforce the configured limits; Agents cannot edit them through service or
