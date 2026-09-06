@@ -34,6 +34,9 @@ Usage: lr <command> [arguments]
 
 Start here
   lr init                           Check identity and return the next safe step (read-only)
+  lr identity bind <agent-code> <token-file>
+                                    Verify and remember an issued identity for this Agent session
+  lr identity forget                Forget this session's locator; never revoke or delete a Token
   lr guide                          Read the short Agent getting-started guide
 
 Discover
@@ -58,6 +61,8 @@ Discover
   lr env                            Show non-secret LocalRouter configuration
 
 Call
+  lr exec <pack> <operation> [json] [path-params-json] [query-params-json]
+                                    Check identity, exact dynamic model and preflight, then call once
   lr preflight <pack> <operation> [json] [path-params-json] [query-params-json]
                                     Validate auth, readiness and input without an upstream call
   lr call <pack> <operation> [json] [path-params-json] [query-params-json]
@@ -201,7 +206,60 @@ verify_lan_contract() {
 }
 
 discovery() {
+  if [[ -n "${lr_contract_cache:-}" ]]; then printf '%s\n' "$lr_contract_cache"; return; fi
   curl --noproxy '*' --fail-with-body --silent --show-error "$discovery_url"
+}
+
+# Session-scoped locators avoid silently sharing an identity with another Agent
+# in the same workspace. No Token value is copied into this binding.
+agent_binding_path() {
+  local session_key="${LOCALROUTER_AGENT_SESSION:-${CODEX_THREAD_ID:-}}"
+  [[ -n "$session_key" ]] || return 1
+  local binding_key
+  binding_key="$(printf '%s\0%s\0%s' "$base_url" "$PWD" "$session_key" | sha256sum)"
+  printf '%s/localrouter/agent-bindings/%s.json' "$xdg_data_home" "${binding_key%% *}"
+}
+
+load_agent_binding() {
+  [[ -z "${LOCALROUTER_API_TOKEN_FILE:-}" ]] || return 0
+  local binding_path
+  binding_path="$(agent_binding_path)" || return 0
+  [[ -e "$binding_path" || -L "$binding_path" ]] || return 0
+  [[ -f "$binding_path" && ! -L "$binding_path" && "$(stat -c '%u:%a' "$binding_path")" = "$EUID:600" ]] || fail "invalid private Agent binding; use lr identity forget or an explicit Service Token locator"
+  agent_binding="$(cat "$binding_path")"
+  jq -e --arg origin "$base_url" --arg workspace "$PWD" '.origin == $origin and .workspace == $workspace and (.agent_code|type) == "string" and (.token_file|type) == "string" and (.token_file|startswith("/"))' >/dev/null <<<"$agent_binding" || fail "Agent binding does not match this workspace and service origin"
+  api_token_file="$(jq -r '.token_file' <<<"$agent_binding")"
+}
+
+command_identity() {
+  local action="${1:-}" binding_path
+  binding_path="$(agent_binding_path)" || fail "set LOCALROUTER_AGENT_SESSION to this Agent's stable session ID; Codex sessions use CODEX_THREAD_ID automatically"
+  case "$action" in
+    bind)
+      [[ $# = 3 && -n "$2" && "$3" = /* ]] || fail "use lr identity bind <agent-code> </absolute/mode-600/token-file>"
+      local identity
+      identity="$(bearer_request "$3" GET "$base_url/agent/whoami")" || { printf '%s\n' "$identity"; return 1; }
+      jq -e --arg agent "$2" --arg workspace "$PWD" '.identity_ready == true and .agent_code == $agent and .workspace == $workspace and .service_access == true and .maintenance_access == false' >/dev/null <<<"$identity" || {
+        json_fail "agent_identity_mismatch" "issued identity must match the Agent code and current workspace, and be service-only" "check lr init with the explicit locator; do not borrow another Agent identity or register through /local/api"
+        return 1
+      }
+      local binding_dir="${binding_path%/*}" temporary
+      [[ ! -L "$binding_dir" ]] || fail "Agent binding directory cannot be a symlink"
+      (umask 077; mkdir -p "$binding_dir")
+      [[ "$(stat -c '%u:%a' "$binding_dir")" = "$EUID:700" ]] || fail "Agent binding directory must be private and owned by the current user"
+      temporary="$(mktemp "$binding_dir/.binding.XXXXXX")"
+      chmod 600 "$temporary"
+      jq -n --arg origin "$base_url" --arg workspace "$PWD" --arg agent "$2" --arg token_file "$3" '{origin:$origin,workspace:$workspace,agent_code:$agent,token_file:$token_file}' >"$temporary"
+      mv -f -- "$temporary" "$binding_path"
+      jq -n --arg agent "$2" --arg workspace "$PWD" '{ready:true,agent_code:$agent,workspace:$workspace,scope:"current-agent-session",token_value_copied:false,next_action:"Use lr exec for an authorized operation; this session now reuses the issued identity automatically."}'
+      ;;
+    forget)
+      [[ $# = 1 ]] || fail "identity forget takes no arguments"
+      [[ ! -e "$binding_path" && ! -L "$binding_path" ]] || rm -- "$binding_path"
+      printf '{"forgotten":true,"token_deleted":false}\n'
+      ;;
+    *) fail "use lr identity bind <agent-code> <token-file> or lr identity forget" ;;
+  esac
 }
 
 read_bearer_token() {
@@ -238,7 +296,11 @@ bearer_request() {
   local request_url="$3"
   local body="${4:-}"
   local max_time_seconds="${5:-}"
-  local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --request "$method")
+  local response_output="${6:-}"
+  local curl_arguments=(--noproxy '*' --config /dev/fd/3 --fail-with-body --silent --no-buffer --request "$method")
+  if [[ -n "$response_output" ]]; then
+    curl_arguments+=(--output "$response_output" --write-out '%{http_code}')
+  fi
   if [[ -n "${LOCALROUTER_TASK_ID:-}" ]]; then
     [[ "$LOCALROUTER_TASK_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$ ]] || fail "invalid LOCALROUTER_TASK_ID"
     curl_arguments+=(--header "X-LocalRouter-Task-Id: $LOCALROUTER_TASK_ID")
@@ -447,6 +509,16 @@ command_find_model() {
   : >"$model_rows"
   : >"$source_rows"
   : >"$failure_rows"
+  if [[ -n "$requested_pack" ]]; then
+    jq -c --arg pack "$requested_pack" '
+      [.protocols[] | select(.id == $pack)] as $packs
+      | if ($packs|length) == 0 then
+          {pack:$pack,code:"pack_not_found",reason:"selected Pack is not published",next_action:"use lr tree to select a published Pack"}
+        elif $packs[0].ready != true then
+          {pack:$pack,code:"pack_not_ready",status:$packs[0].status,reason:"selected Pack is not ready for model discovery",next_action:"inspect lr status and lr show for this Pack before querying models"}
+        else empty end
+    ' <<<"$contract" >>"$failure_rows"
+  fi
   jq -c --arg requested_pack "$requested_pack" '
     .protocols[] as $protocol
     | select($protocol.ready == true)
@@ -477,11 +549,14 @@ command_find_model() {
   ' <<<"$contract" >>"$source_rows"
   while IFS=$'\t' read -r pack_id pack_name pack_description operation_key call_url; do
     [[ -n "$pack_id" ]] || continue
-    local response parsed
-    if response="$(authenticated_request GET "$base_url$call_url" '' "$catalog_timeout" 2>/dev/null)" && parsed="$(jq -c '
+    local response parsed http_status request_exit=0
+    : >"$search_tmp/response.json"
+    http_status="$(authenticated_request GET "$base_url$call_url" '' "$catalog_timeout" "$search_tmp/response.json" 2>"$search_tmp/request.stderr")" || request_exit=$?
+    response="$(cat "$search_tmp/response.json" 2>/dev/null || true)"
+    if [[ "$request_exit" = 0 ]] && parsed="$(jq -c '
       if (.data | type) == "array" then .data
       elif (.models | type) == "array" then .models
-      else [] end
+      else error("unrecognized model catalog response") end
       | map(
           if type == "string" then {id: .}
           elif type == "object" then . + {
@@ -491,11 +566,23 @@ command_find_model() {
           else {id: ""} end
         )
       | map(select((.id | type) == "string" and .id != ""))
-    ' <<<"$response")"; then
+    ' <<<"$response" 2>/dev/null)"; then
       jq -cn --arg pack "$pack_id" --arg operation_key "$operation_key" --arg call_url "$call_url" --argjson count "$(jq 'length' <<<"$parsed")" '{pack:$pack,operation_key:$operation_key,call_url:$call_url,status:"ok",models:$count}' >>"$source_rows"
       jq -c --arg pack "$pack_id" --arg pack_name "$pack_name" --arg description "$pack_description" --arg operation_key "$operation_key" '.[] | . + {pack:$pack,pack_name:$pack_name,pack_description:$description,operation_key:$operation_key,source_kind:"catalog-operation",model_key:($pack + ":" + .id)}' <<<"$parsed" >>"$model_rows"
     else
-      jq -cn --arg pack "$pack_id" --arg operation_key "$operation_key" --arg call_url "$call_url" '{pack:$pack,operation_key:$operation_key,call_url:$call_url,reason:"model catalog call failed"}' >>"$failure_rows"
+      # Preserve the gateway's structured reason instead of treating every
+      # failure as an empty model catalogue. Never print an arbitrary upstream
+      # body, curl diagnostic, credential, or private trace header here.
+      local detail='{}'
+      detail="$(jq -ce 'select(.success == false and (.code|type) == "string") | with_entries(select(.key as $key | ["code","message","reason","retryable","owner","retry_after","next_action","alternatives"] | index($key)))' <<<"$response" 2>/dev/null)" || detail='{}'
+      jq -cn --arg pack "$pack_id" --arg operation_key "$operation_key" --arg call_url "$call_url" --arg http_status "$http_status" --argjson request_exit "$request_exit" --argjson detail "$detail" '
+        {pack:$pack,operation_key:$operation_key,call_url:$call_url,http_status:($http_status|tonumber? // null),request_exit_code:$request_exit}
+        + (if ($detail|length)>0 then $detail else {
+            code:(if $request_exit == 0 then "model_catalog_invalid_response" else "model_catalog_request_failed" end),
+            reason:(if $request_exit == 0 then "model catalog response is not a supported catalogue object" else "model catalog request failed; inspect http_status and the provider readiness" end),
+            next_action:"resolve the catalogue failure before selecting a model; do not treat this response as model absence"
+          } end)
+      ' >>"$failure_rows"
     fi
   done < <(jq -r --arg requested_pack "$requested_pack" '
     .protocols[] as $protocol
@@ -506,6 +593,10 @@ command_find_model() {
     | select((.methods // []) | index("GET"))
     | [$protocol.id, $protocol.name, $protocol.description, .operation_key, .call_url] | @tsv
   ' <<<"$contract")
+
+  if [[ -n "$requested_pack" && ! -s "$source_rows" && ! -s "$failure_rows" ]]; then
+    jq -cn --arg pack "$requested_pack" '{pack:$pack,code:"model_catalog_unavailable",reason:"selected Pack publishes neither a model catalogue nor a model schema enum",next_action:"inspect lr describe for the supported dynamic inputs; no model availability was inferred"}' >>"$failure_rows"
+  fi
 
   local output
   output="$(jq -n \
@@ -561,13 +652,18 @@ command_find_model() {
           query: $query,
           match_mode: (if $exact_only then "exact-only" elif ($query | length) == 0 then "catalog" elif ($exact_matches | length) > 0 then "exact" else "fuzzy" end),
           live: true,
+          success: (($failures|length) == 0),
+          code: (if ($failures|length)>0 then "model_discovery_incomplete" else null end),
+          complete: (($failures|length) == 0),
           count: ($all_matches | length),
           returned: ($matches | length),
           truncated: (($matches | length) < ($all_matches | length)),
           matches: $matches,
           sources: $sources,
           failures: $failures,
-          exact_next_step: (if $exact_only and ($all_matches | length) == 0
+          exact_next_step: (if ($failures|length)>0
+            then "model discovery is incomplete; inspect failures[].code/reason/next_action before retrying or selecting a model"
+            elif $exact_only and ($all_matches | length) == 0
             then "no exact live model matched; refresh with lr find model --exact <pack>:<model-id> or choose a model_key returned by lr find model"
             elif (($matches | length) < ($all_matches | length))
             then "refine the query, increase --limit, or use --all; then choose one model_key and compatible operation before lr describe/preflight"
@@ -578,6 +674,7 @@ command_find_model() {
     ')"
   find "$search_tmp" -depth -delete
   printf '%s\n' "$output"
+  [[ "$(jq '.failures|length' <<<"$output")" = 0 ]]
 }
 
 command_find_model_cli() {
@@ -689,7 +786,8 @@ command_find() {
       models_file="$search_tmp/models.json"
       pools_file="$search_tmp/pools.json"
       command_find_operation "$search_text" >"$operations_file"
-      command_find_model "$search_text" 20 false >"$models_file"
+      local model_status=0
+      command_find_model "$search_text" 20 false >"$models_file" || model_status=$?
       command_find_pool "$search_text" >"$pools_file"
       local output
       output="$(jq -n --arg query "$search_text" --slurpfile operations "$operations_file" --slurpfile models "$models_file" --slurpfile pools "$pools_file" '
@@ -707,6 +805,7 @@ command_find() {
       }')"
       find "$search_tmp" -depth -delete
       printf '%s\n' "$output"
+      return "$model_status"
       ;;
   esac
 }
@@ -845,8 +944,12 @@ command_init() {
     jq -n --arg file "$api_token_file" --arg console "$base_url/#tokens" '{ready:false,code:"agent_identity_required",token_file:$file,registration_url:$console,next_action:"Ask the human to issue a dedicated Service Token in Agent Workbench and save it in a private mode-600 file. Set LOCALROUTER_API_TOKEN_FILE to that path and rerun lr init. Do not read an administrator credential.",can_continue:["lr guide","lr tree","lr docs <pack>"]}'
     return 1
   fi
-  identity="$(authenticated_request GET "$base_url/agent/whoami")"
-  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready // false),next_action:(if .identity_ready then "Identity is ready. Use lr find operation <intent> and lr describe; for a missing service use lr setup templates. Read lr guide before calling." else "This is a shared/bootstrap identity, not your independent Agent identity. Ask the human to issue a dedicated Service Token in Agent Workbench, save it mode 0600, set LOCALROUTER_API_TOKEN_FILE to its path, then rerun lr init. Do not issue Tokens through /local/api." end)}' <<<"$identity"
+  identity="$(authenticated_request GET "$base_url/agent/whoami")" || { printf '%s\n' "$identity"; return 1; }
+  if [[ -n "${agent_binding:-}" ]] && ! jq -e --argjson binding "$agent_binding" '.agent_code == $binding.agent_code and .workspace == $binding.workspace' >/dev/null <<<"$identity"; then
+    json_fail "agent_identity_mismatch" "the bound Token no longer matches this Agent session" "bind the correct issued identity with lr identity bind; no fallback identity was selected"
+    return 1
+  fi
+  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready // false),next_action:(if .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." else "This is a shared/bootstrap identity, not your independent Agent identity. Ask the human to issue a dedicated Service Token in Agent Workbench, save it mode 0600, then lr identity bind <agent-code> <token-file>. Do not issue Tokens through /local/api." end)}' <<<"$identity"
   [[ "$(jq -r '.identity_ready // false' <<<"$identity")" == true ]]
 }
 
@@ -1013,6 +1116,48 @@ command_call() {
     return 1
   fi
   authenticated_request "$method" "$base_url$request_path" "$body"
+}
+
+# An authorized operation has one preparation path. Reuse one current contract
+# within this execution, resolve its dynamic model once, and never replay the
+# final request (including when a later parser or streaming consumer fails).
+command_exec() {
+  (($# >= 2 && $# <= 5)) || fail "exec accepts pack, operation, body, path parameters and query parameters"
+  local pack_id="$1" operation_id="$2" body path_parameters query_parameters
+  validate_pack_id "$pack_id"
+  operation_id="$(normalize_operation_selector "$pack_id" "$operation_id")"
+  validate_operation_id "$operation_id"
+  body="$(json_argument "${3-}")"
+  path_parameters="$(json_argument "${4-}")"
+  query_parameters="$(json_argument "${5-}")"
+  lr_contract_cache="$(discovery)" || return 1
+  local identity descriptor prepared field value model_result
+  identity="$(command_init)" || { printf '%s\n' "$identity"; return 1; }
+  jq -e --arg workspace "$PWD" '.workspace == $workspace and .service_access == true and .maintenance_access == false' >/dev/null <<<"$identity" || {
+    json_fail "agent_identity_mismatch" "the issued service identity does not belong to this workspace" "bind the correct identity once with lr identity bind <agent-code> <token-file>"
+    return 1
+  }
+  descriptor="$(command_describe "$pack_id" "$operation_id")" || { printf '%s\n' "$descriptor"; return 1; }
+  jq -e --argjson contract "$lr_contract_cache" '.contract_digest == $contract.contract.digest and .contract_schema_version == $contract.contract.schema_version' >/dev/null <<<"$descriptor" || {
+    json_fail "contract_changed" "the service contract changed during preparation; no operation was sent" "start a fresh lr exec to prepare against the current contract"
+    return 1
+  }
+  while IFS= read -r field; do
+    [[ -n "$field" ]] || continue
+    value="$(jq -r --arg field "$field" --argjson path "$path_parameters" '.[$field] // $path[$field] // empty' <<<"$body")"
+    [[ -n "$value" ]] || { json_fail "dynamic_input_required" "missing dynamic input: $field" "provide an exact published value in the request"; return 1; }
+    model_result="$(command_find_model "$pack_id:$value" 20 true)" || { printf '%s\n' "$model_result"; return 1; }
+    jq -e --arg pack "$pack_id" --arg model "$value" --arg operation "$pack_id.$operation_id" '.count == 1 and .complete == true and .matches[0].pack == $pack and .matches[0].id == $model and any(.matches[0].compatible_operations[]; .operation_key == $operation)' >/dev/null <<<"$model_result" || {
+      json_fail "exact_model_unavailable" "no unique exact model compatible with $pack_id.$operation_id: $value" "choose an exact model_key and compatible operation from the current model catalogue; no generation was sent"
+      return 1
+    }
+  done < <(jq -r '.dynamic_inputs // {} | keys[]' <<<"$descriptor")
+  prepared="$(command_preflight "$pack_id" "$operation_id" "$body" "$path_parameters" "$query_parameters")" || { printf '%s\n' "$prepared"; return 1; }
+  jq -e --argjson descriptor "$descriptor" '.contract_digest == $descriptor.contract_digest and .schema_version == $descriptor.contract_schema_version' >/dev/null <<<"$prepared" || {
+    json_fail "contract_changed" "the service contract changed before dispatch; no operation was sent" "start a fresh lr exec to prepare against the current contract"
+    return 1
+  }
+  command_call "$pack_id" "$operation_id" "$body" "$path_parameters" "$query_parameters"
 }
 
 command_run() {
@@ -1208,12 +1353,14 @@ validate_loopback_url "$maintenance_mcp_url"
 
 command_name="${1:-help}"
 shift || true
+if [[ "$command_name" != identity && "$command_name" != help ]]; then load_agent_binding; fi
 if [[ "$command_name" != "help" && ("${1:-}" == "-h" || "${1:-}" == "--help") ]]; then
   usage
   exit 0
 fi
 case "$command_name" in
   init) command_init "$@" ;;
+  identity) command_identity "$@" ;;
   guide) command_guide "$@" ;;
   status) command_status "$@" ;;
   tree) command_tree "$@" ;;
@@ -1229,6 +1376,7 @@ case "$command_name" in
   runtime-openai) command_runtime_openai "$@" ;;
   preflight) command_preflight "$@" ;;
   call) command_call "$@" ;;
+  exec) command_exec "$@" ;;
   run) command_run "$@" ;;
   watch) command_watch "$@" ;;
   cancel) command_cancel "$@" ;;

@@ -534,3 +534,97 @@ func TestServiceAllowanceLegacyActivationMigration(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceAllowanceModelDiscoveryExemption(t *testing.T) {
+	rt, owner, _, _, server := serviceWorkspaceFixture(t)
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"fixture-model"}]}`))
+	}))
+	defer upstream.Close()
+	def := protocolDefinition{SchemaVersion: protocolSchemaVersion, ID: "catalogtest", Name: "Catalog fixture", Description: "Isolated discovery allowance regression", Enabled: true, BaseURL: upstream.URL, Auth: protocolAuth{Type: "none"}, Routes: []protocolRoute{
+		{OperationID: "models", Capabilities: []string{"ai.models"}, Methods: []string{"GET"}, Path: "/models", Summary: "Model catalogue"},
+		{OperationID: "chat", Methods: []string{"POST"}, Path: "/chat", Summary: "Generate"},
+		{OperationID: "ordinary-get", Methods: []string{"GET"}, Path: "/read", Summary: "Ordinary read is not model discovery"},
+	}}
+	writeProtocolDefinition(t, rt.config.ProtocolDir, def)
+	require.NoError(t, rt.protocols.reload())
+	// Reproduce a legacy enabled dollar configuration with no usable prices.
+	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+		doc.Settings.Enabled = true
+		rule := defaultAllowanceRule()
+		rule.Enabled = true
+		rule.Limit = 0
+		rule.OperationLimits = map[string]int64{"models": 0}
+		doc.Rules[def.ID] = rule
+		return nil
+	}))
+	status, body := setupHTTP(t, server, owner, "POST", "/agent/preflight", map[string]any{"pack": def.ID, "operation": "models"})
+	require.Equal(t, 200, status)
+	require.Contains(t, string(body), `"budget_exempt":true`)
+	require.EqualValues(t, 0, calls.Load())
+	status, body = setupHTTP(t, server, owner, "GET", "/p/catalogtest/models", nil)
+	require.Equal(t, 200, status, string(body))
+	require.EqualValues(t, 1, calls.Load())
+	require.NoError(t, rt.policies.allowances.transaction(false, func(doc *serviceAllowanceDocument) error { require.Empty(t, doc.Receipts); return nil }))
+	for _, path := range []string{"/p/catalogtest/chat", "/p/catalogtest/read"} {
+		method := "POST"
+		if strings.HasSuffix(path, "read") {
+			method = "GET"
+		}
+		status, body = setupHTTP(t, server, owner, method, path, map[string]any{})
+		require.Equal(t, 403, status, string(body))
+		require.Contains(t, string(body), "service_approval_required")
+	}
+	require.EqualValues(t, 1, calls.Load())
+	// Discovery exemption must not override explicit human prohibition.
+	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+		rule := doc.Rules[def.ID]
+		rule.DeniedOperations = []string{"models"}
+		doc.Rules[def.ID] = rule
+		return nil
+	}))
+	status, body = setupHTTP(t, server, owner, "GET", "/p/catalogtest/models", nil)
+	require.Equal(t, 403, status)
+	require.Contains(t, string(body), "service_use_denied")
+	require.EqualValues(t, 1, calls.Load())
+	// A declared GET catalogue that is rewritten to POST is not exempt.
+	def.Routes[0].UpstreamMethod = "POST"
+	require.False(t, protocolAllowanceExempt(def, "models"))
+}
+
+func TestServiceAllowanceRejectsUnpriceableEnablement(t *testing.T) {
+	rt, _, _, _, server := serviceWorkspaceFixture(t)
+	def := protocolDefinition{SchemaVersion: protocolSchemaVersion, ID: "pricingtest", Name: "Pricing fixture", Description: "Isolated dollar configuration regression", Enabled: true, BaseURL: "https://example.invalid", Auth: protocolAuth{Type: "none"}, Routes: []protocolRoute{
+		{OperationID: "models", Capabilities: []string{"ai.models"}, Methods: []string{"GET"}, Path: "/models", Summary: "Catalogue"},
+		{OperationID: "chat", Methods: []string{"POST"}, Path: "/chat", Summary: "Chat"},
+	}}
+	writeProtocolDefinition(t, rt.config.ProtocolDir, def)
+	require.NoError(t, rt.protocols.reload())
+	rule := defaultAllowanceRule()
+	rule.Enabled = true
+	status, body := setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowances/pricingtest", rule)
+	require.Equal(t, 400, status, string(body))
+	require.Contains(t, string(body), "chat")
+	require.NoError(t, rt.policies.allowances.transaction(false, func(doc *serviceAllowanceDocument) error { require.Empty(t, doc.Rules); return nil }))
+	rule.Enabled = false
+	status, body = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowances/pricingtest", rule)
+	require.Equal(t, 200, status, string(body))
+	rule.Enabled = true
+	rule.Revision = 1
+	rule.ApprovalOperations = []string{"chat"}
+	status, body = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowances/pricingtest", rule)
+	require.Equal(t, 200, status, string(body))
+	// A legacy invalid rule cannot be silently reactivated by the master switch.
+	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+		stored := doc.Rules[def.ID]
+		stored.ApprovalOperations = nil
+		doc.Rules[def.ID] = stored
+		return nil
+	}))
+	status, body = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowance-settings", serviceAllowanceSettings{Enabled: true})
+	require.Equal(t, 400, status, string(body))
+	require.NoError(t, rt.policies.allowances.transaction(false, func(doc *serviceAllowanceDocument) error { require.False(t, doc.Settings.Enabled); return nil }))
+}

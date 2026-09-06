@@ -8,6 +8,15 @@ published.
 
 ### 0.2.0 maintenance branch
 
+- Exempted explicitly published read-only model discovery from generation
+  budgets while preserving explicit deny/approval and Token/pool policies.
+- Reject unpriceable automatic USD allowances when enabling a rule or the
+  master switch; surface unsupported operations before a failed call.
+- Added session-scoped identity locator binding and `lr exec` to perform
+  identity, contract, exact model and preflight checks before one request.
+- Preserve structured model catalogue failures and HTTP status; failed
+  discovery exits nonzero and is explicitly marked incomplete.
+
 - Added a default-off master switch for shared allowances, with collapsed
   configuration while off, preserved usage on re-enable, and migration that
   retains already-active policies.

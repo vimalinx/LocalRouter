@@ -118,3 +118,25 @@ it('does not reveal configuration when enabling fails', async () => {
   expect(toggle).not.toBeChecked()
   expect(screen.queryByRole('textbox', { name: '搜索额度服务' })).not.toBeInTheDocument()
 })
+it('explains unsupported dollar budgets and excludes discovery from sub-budgets', async () => {
+  vi.mocked(adminRequest).mockResolvedValue([{ ...item, rule: { ...rule, unit: 'usd_micros', limit: 3000000, enabled: true, revision: 1, operation_limits: { models: 3000000, generate: 3000000 } }, money_supported: false, money_unsupported_operations: ['generate'], operations: [
+    { id: 'models', name: '模型目录', budget_exempt: true, configured: true, limit: 3000000, spent: 0, reserved: 0, remaining: 3000000 },
+    { id: 'generate', name: '生成', budget_exempt: false, configured: true, limit: 3000000, spent: 0, reserved: 0, remaining: 3000000 },
+  ] }])
+  const user = userEvent.setup(); render(<ServiceAllowances adminToken='' />)
+  expect(await screen.findByRole('note')).toHaveTextContent('美元额度无法自动生效')
+  expect(screen.queryByRole('checkbox', { name: '选择操作 models' })).not.toBeInTheDocument()
+  expect(screen.getByRole('checkbox', { name: '选择操作 generate' })).toBeInTheDocument()
+  await user.selectOptions(screen.getByLabelText('计量单位'), 'requests')
+  expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('generate 子额度')).toBeDisabled()
+})
+it('allows repairing saved rules while keeping the master switch off', async () => {
+  vi.mocked(adminRequest).mockResolvedValueOnce({ enabled: false, revision: 2, has_saved_rules: true }).mockResolvedValueOnce([item])
+  const user = userEvent.setup(); render(<AllowancePage adminToken='' />)
+  await user.click(await screen.findByRole('button', { name: '编辑已保存的配置' }))
+  expect(await screen.findByRole('textbox', { name: '搜索额度服务' })).toBeInTheDocument()
+  expect(screen.getByRole('switch', { name: '启用自主额度' })).not.toBeChecked()
+  expect(adminRequest).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(adminRequest).mock.calls.every(call => !call[2]?.method)).toBe(true)
+})

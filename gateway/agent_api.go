@@ -136,8 +136,10 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"binding": "service-token", "registration": "operator-issued", "console": console,
 			"required_fields": []string{"agent_code", "agent_name", "workspace"},
 			"whoami":          "/agent/whoami", "secret_values_returned": false, "start_command": "lr init", "getting_started": "/docs/agent-start.md",
+			"reuse_command": "lr identity bind <agent-code> <token-file>", "reuse_scope": "Agent session, workspace and service origin; locator only",
 		},
-		"flow": []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
+		"flow":       []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
+		"daily_call": gin.H{"cli": "lr exec <pack> <operation> [json] [path-params-json] [query-params-json]", "automatic_checks": []string{"independent-identity", "current-contract", "exact-dynamic-model", "preflight"}, "dispatches": 1, "requires_operation_authorization": true},
 		"service_workspace": gin.H{
 			"mode": "agent-led", "templates": "/agent/service-templates", "proposals": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 			"prepare_schema": serviceProposalSchema(),
@@ -465,7 +467,7 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		var allowance *serviceAllowanceDecision
 		if runtime.policies != nil && runtime.policies.allowances != nil {
 			definition, _ := registry.get(descriptor.Pack)
-			decision, _, err := runtime.policies.allowances.evaluate(descriptor.Pack, descriptor.Operation, runtime.policies.allowanceIdentity(c.GetInt(tokenPolicyContextID)), fixedAllowanceQuote(definition, descriptor.Operation), false)
+			decision, _, err := runtime.policies.allowances.evaluate(descriptor.Pack, descriptor.Operation, runtime.policies.allowanceIdentity(c.GetInt(tokenPolicyContextID)), fixedAllowanceQuote(definition, descriptor.Operation), false, protocolAllowanceExempt(definition, descriptor.Operation))
 			allowance = &decision
 			if err != nil {
 				addCheck("service_allowance", "fail", "cannot read shared service allowance", true)
@@ -576,13 +578,24 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		}
 		var code any
 		var reason any
+		var blockedAt any
+		owner := "agent"
 		if !ok {
 			code = "preflight_blocked"
-			reason = "one or more blocking preflight checks failed"
+			for _, check := range checks {
+				if check.Blocking && check.Status == "fail" {
+					blockedAt = check.Name
+					reason = check.Message
+					if check.Name == "authorization" || check.Name == "service_allowance" || check.Name == "readiness" {
+						owner = "localrouter"
+					}
+					break
+				}
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"object": "localrouter.preflight", "success": ok, "ok": ok, "code": code,
-			"reason": reason, "retryable": false, "owner": "agent", "upstream_called": false,
+			"reason": reason, "blocked_at": blockedAt, "retryable": false, "owner": owner, "upstream_called": false,
 			"contract_digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion, "operation": descriptor,
 			"checks": checks, "next_action": nextAction, "alternatives": alternatives, "service_allowance": allowance,
 		})

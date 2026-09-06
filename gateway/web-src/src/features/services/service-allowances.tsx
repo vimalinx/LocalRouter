@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentProps } from 'react'
+import { useEffect, useRef, useState, type ComponentProps } from 'react'
 import { ChevronDown, Layers3, RefreshCcw, Search, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,8 +16,8 @@ type Rule = {
   approval_operations: string[]; denied_operations: string[]; operation_limits?: Record<string, number>
 }
 type Receipt = { id: string; operation: string; token_id: number; amount: number }
-type SubAllowance = { id: string; name: string; configured: boolean; limit: number; spent: number; reserved: number; remaining: number }
-type Allowance = { operations?: SubAllowance[]; service: string; name: string; rule: Rule; spent: number; reserved: number; remaining: number; pending: Receipt[] }
+type SubAllowance = { budget_exempt?: boolean; id: string; name: string; configured: boolean; limit: number; spent: number; reserved: number; remaining: number }
+type Allowance = { money_supported?: boolean; money_unsupported_operations?: string[]; operations?: SubAllowance[]; service: string; name: string; rule: Rule; spent: number; reserved: number; remaining: number; pending: Receipt[] }
 const selectClass = 'h-10 w-full cursor-pointer appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm outline-none transition-colors hover:border-muted-foreground/40 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50'
 function AllowanceSelect(props: ComponentProps<'select'>) {
   return <span className='relative block'><select {...props} className={cn(selectClass, props.className)} /><ChevronDown aria-hidden='true' className='pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /></span>
@@ -31,13 +31,14 @@ const units = (amount: number, rule: Rule) => rule.unit === 'usd_micros' ? `$${n
 const allowanceMode = (rule: Rule) => !rule.enabled ? '未启用' : rule.mode === 'quota' ? '额度内自主' : rule.mode === 'approval' ? '需批准' : '禁止使用'
 
 export function ServiceAllowances({ adminToken }: { adminToken: string }) {
-  const [settings, setSettings] = useState<{ enabled: boolean; revision: number } | null>(null)
+  const [settings, setSettings] = useState<{ enabled: boolean; revision: number; has_saved_rules?: boolean } | null>(null)
+  const [editingSaved, setEditingSaved] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
     let live = true
-    setSettings(null); setError('')
-    adminRequest<{ enabled: boolean; revision: number }>('/local/api/service-allowance-settings', adminToken)
+    setSettings(null); setError(''); setEditingSaved(false)
+    adminRequest<{ enabled: boolean; revision: number; has_saved_rules?: boolean }>('/local/api/service-allowance-settings', adminToken)
       .then(result => { if (live) setSettings(result) })
       .catch(err => { if (live) setError(String(err)) })
     return () => { live = false }
@@ -46,7 +47,8 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
     if (!settings || busy) return
     setBusy(true); setError('')
     try {
-      setSettings(await adminRequest('/local/api/service-allowance-settings', adminToken, { method: 'PUT', body: JSON.stringify({ ...settings, enabled: !settings.enabled }) }))
+      setSettings(await adminRequest('/local/api/service-allowance-settings', adminToken, { method: 'PUT', body: JSON.stringify({ enabled: !settings.enabled, revision: settings.revision }) }))
+      setEditingSaved(false)
     } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
     finally { setBusy(false) }
   }
@@ -57,12 +59,13 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
     </div>
     {error && <p role='alert' className='px-4 pb-3 text-sm text-destructive'>{error} <Button size='sm' variant='ghost' onClick={() => window.location.reload()}>重新加载</Button></p>}
     {!settings && !error && <p role='status' className='px-4 py-3 text-sm text-muted-foreground'>正在读取设置…</p>}
-    {settings && !settings.enabled && <p className='border-t px-4 py-5 text-sm text-muted-foreground'>关闭时沿用现有调用权限，不检查自主额度。已保存的服务配置和用量会保留。</p>}
-    {settings?.enabled && <div className='min-h-0 flex-1'><ServiceAllowanceConfiguration adminToken={adminToken} /></div>}
+    {settings && !settings.enabled && <div className='shrink-0 border-t px-4 py-3 text-sm text-muted-foreground'><p>关闭时沿用现有调用权限，不检查自主额度。已保存的服务配置和用量会保留。</p>{settings.has_saved_rules && <Button size='sm' variant='ghost' className='mt-2' onClick={() => setEditingSaved(!editingSaved)}>{editingSaved ? '收起配置' : '编辑已保存的配置'}</Button>}{editingSaved && <p className='mt-1 text-xs'>当前总开关关闭，修改配置不会开启总开关。</p>}</div>}
+    {(settings?.enabled || editingSaved) && <div className='min-h-0 flex-1'><ServiceAllowanceConfiguration adminToken={adminToken} /></div>}
   </div>
 }
 
 export function ServiceAllowanceConfiguration({ adminToken }: { adminToken: string }) {
+  const errorRef = useRef<HTMLParagraphElement>(null)
   const [items, setItems] = useState<Allowance[]>([])
   const [search, setSearch] = useState('')
   const [checkedServices, setCheckedServices] = useState<string[]>([])
@@ -94,7 +97,8 @@ export function ServiceAllowanceConfiguration({ adminToken }: { adminToken: stri
   const batchItems = items.filter(item => `${item.name} ${item.service}`.toLowerCase().includes(batchSearch.trim().toLowerCase()))
   const configuredCount = items.filter(item => item.rule.revision > 0).length
   const operationQuery = operationSearch.trim().toLowerCase()
-  const operations = (current?.operations || []).filter(op => `${op.id} ${op.name}`.toLowerCase().includes(operationQuery))
+  const budgetOperations = (current?.operations || []).filter(op => !op.budget_exempt)
+  const operations = budgetOperations.filter(op => `${op.id} ${op.name}`.toLowerCase().includes(operationQuery))
   const toggleSelection = (values: string[], id: string) => values.includes(id) ? values.filter(value => value !== id) : [...values, id]
   function setSubLimit(id: string, value?: string) {
     setSubLimits(previous => { const next = { ...previous }; if (value === undefined) delete next[id]; else next[id] = value; return next })
@@ -142,6 +146,7 @@ export function ServiceAllowanceConfiguration({ adminToken }: { adminToken: stri
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); return false }
     finally { setBusy(false) }
   }
+  useEffect(() => { if (error && !batchOpen) errorRef.current?.scrollIntoView?.({ block: 'nearest' }) }, [error, batchOpen, loading])
   const base = `/local/api/service-allowances/${encodeURIComponent(selected)}`
   if (loading) return <p role='status' className='p-4 text-sm'>正在读取服务额度…</p>
   return <div className='flex h-full min-h-0 flex-col gap-2 overflow-hidden'>
@@ -180,7 +185,7 @@ export function ServiceAllowanceConfiguration({ adminToken }: { adminToken: stri
         </header>
         <div className='max-w-4xl space-y-5 p-4 sm:p-5'>
           {!current?.rule.enabled && <p className='text-sm text-muted-foreground'>{current?.rule.revision ? '配置已保存，尚未启用。' : '未配置。可先设置额度并保存。'}</p>}
-          {error && !batchOpen && <p role='alert' className='text-sm text-destructive'>{error}</p>}
+          {error && !batchOpen && <p ref={errorRef} role='alert' className='text-sm text-destructive'>{error}</p>}
           {message && <p role='status' className='text-sm'>{message}</p>}
           {draft && current && <>
         {current.rule.revision > 0 && <section aria-label='当前服务额度' className='border-b pb-3'>
@@ -193,18 +198,19 @@ export function ServiceAllowanceConfiguration({ adminToken }: { adminToken: stri
         <form className='space-y-4' onSubmit={event => { event.preventDefault(); void mutate(base, 'PUT', { ...draft, limit: Math.round(Number(limitText) * (draft.unit === 'requests' ? 1 : 1e6)), approval_operations: splitOperations(approvalText), denied_operations: splitOperations(deniedText), operation_limits: Object.fromEntries(Object.entries(subLimits).map(([id, value]) => [id, Math.round(Number(value) * (draft.unit === 'usd_micros' ? 1e6 : 1))])) }, draft.enabled ? '规则已保存并启用。' : '规则已保存，额度功能关闭。') }}>
           <fieldset disabled={busy} className='space-y-4'>
             <div className='flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2'><div><p className='text-sm font-medium'>自主使用限制</p><p className='mt-1 text-xs text-muted-foreground'>手动开启，保存后生效</p></div><ActivationToggle checked={draft.enabled} label='启用此服务的自主使用限制' disabled={busy} onChange={() => setDraft({ ...draft, enabled: !draft.enabled })} /></div>
+            {current.money_supported === false && draft.unit === 'usd_micros' && draft.mode === 'quota' && <p role='note' className='text-sm text-amber-600 dark:text-amber-400'>此服务的部分操作没有固定调用价格，美元额度无法自动生效。请选择调用次数，或将这些操作设为单次批准；未调整前不能保存启用。操作：{current.money_unsupported_operations?.join('、')}</p>}
             <label className='block space-y-1 text-sm'><span>使用方式</span><AllowanceSelect value={draft.mode} onChange={event => setDraft({ ...draft, mode: event.target.value as Rule['mode'] })}><option value='quota'>额度内自主使用</option><option value='approval'>始终需要批准</option><option value='deny'>禁止使用</option></AllowanceSelect></label>
             {draft.mode === 'quota' && <>
               <div className='grid gap-3 sm:grid-cols-3'>
-                <label className='block space-y-1 text-sm'><span>计量单位</span><AllowanceSelect disabled={Object.keys(subLimits).length > 0} value={draft.unit} onChange={event => setDraft({ ...draft, unit: event.target.value as Rule['unit'], limit: event.target.value === 'usd_micros' ? 3000000 : 3 })}><option value='requests'>调用次数</option><option value='usd_micros'>美元</option></AllowanceSelect></label>
+                <label className='block space-y-1 text-sm'><span>计量单位</span><AllowanceSelect value={draft.unit} onChange={event => { setSubLimits({}); setDraft({ ...draft, operation_limits: {}, unit: event.target.value as Rule['unit'], limit: event.target.value === 'usd_micros' ? 3000000 : 3 }) }}><option value='requests'>调用次数</option><option value='usd_micros'>美元</option></AllowanceSelect></label>
                 <label className='block space-y-1 text-sm'><span>总额度</span><Input type='number' required min='0' max={draft.unit === 'requests' ? 1e12 : 1e6} step={draft.unit === 'requests' ? 1 : 0.000001} value={limitText} onChange={event => setLimitText(event.target.value)} /></label>
                 <label className='block space-y-1 text-sm'><span>额度周期</span><AllowanceSelect value={draft.period} onChange={event => setDraft({ ...draft, period: event.target.value as Rule['period'] })}><option value='once'>一次性</option><option value='day'>每天（UTC）</option><option value='month'>每月（UTC）</option></AllowanceSelect></label>
               </div>
-              <p className='text-sm text-muted-foreground'>多个 Agent 合计扣减。次数按获准调用计，不因失败退回。美元仅支持已确认的固定调用价格；变动或未知费用需单独批准。已有用量后不能更换单位和周期。</p>
+              <p className='text-sm text-muted-foreground'>多个 Agent 合计扣减。次数按获准调用计，不因失败退回。美元仅支持已确认的固定调用价格；变动或未知费用需单独批准。已有用量后不能更换单位和周期。切换单位会清空表单中的子额度，保存后生效。</p>
             </>}
             {draft.mode === 'quota' && <section className='space-y-3 border-y py-4' aria-label='操作子额度'>
-              <div className='flex flex-wrap items-center justify-between gap-2'><h3 className='flex items-center gap-2 text-sm font-semibold'><Layers3 aria-hidden='true' className='size-4 text-muted-foreground' />操作子额度 <span className='font-normal text-muted-foreground'>{(current.operations || []).length} 项操作</span></h3><span className='text-xs text-muted-foreground'>{Object.keys(subLimits).length} 项已设置</span></div>
-              <p className='text-xs text-muted-foreground'>每项可单独配置，也可批量填写。子额度和服务总额度同时生效，共用计量单位与周期；未设置的操作只受总额度约束。金额初始值为 $3。</p>
+              <div className='flex flex-wrap items-center justify-between gap-2'><h3 className='flex items-center gap-2 text-sm font-semibold'><Layers3 aria-hidden='true' className='size-4 text-muted-foreground' />操作子额度 <span className='font-normal text-muted-foreground'>{budgetOperations.length} 项操作</span></h3><span className='text-xs text-muted-foreground'>{budgetOperations.filter(op => Object.hasOwn(subLimits, op.id)).length} 项已设置</span></div>
+              <p className='text-xs text-muted-foreground'>模型目录读取不扣自主额度。每项可单独配置，也可批量填写。子额度和服务总额度同时生效，共用计量单位与周期；未设置的操作只受总额度约束。金额初始值为 $3。</p>
               <Input aria-label='搜索子额度操作' placeholder='搜索操作名称或 ID' className='h-9 text-xs' value={operationSearch} onChange={event => setOperationSearch(event.target.value)} />
               <div className='flex flex-wrap items-center gap-2'>
                 <label className='flex min-h-9 items-center gap-2 text-xs'><Checkbox indeterminate={operations.some(op => checkedOperations.includes(op.id)) && !operations.every(op => checkedOperations.includes(op.id))} aria-label='选择全部筛选操作' checked={operations.length > 0 && operations.every(op => checkedOperations.includes(op.id))} disabled={!operations.length} onChange={event => setCheckedOperations(event.target.checked ? [...new Set([...checkedOperations, ...operations.map(op => op.id)])] : checkedOperations.filter(id => !operations.some(op => op.id === id)))} />全选操作</label>

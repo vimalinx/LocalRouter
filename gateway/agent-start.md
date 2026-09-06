@@ -8,11 +8,13 @@
 
 - `ready: true` 表示当前 Token 对应一个已注册 Agent。核对 agent_code、workspace 是否确实属于你；共用别人的 Token 不会获得独立身份。
 - `ready: false` 或非零退出表示身份未准备好。`identity_kind: bootstrap` 是系统默认身份，不能当作你的独立身份。
-- 请人到返回的 registration_url（本机 `/#tokens`）登记 agent_code、agent_name、workspace，签发 Service Token，并保存到权限 0600 的私有文件。将 `LOCALROUTER_API_TOKEN_FILE` 设为该文件的绝对路径，再运行 `lr init`。变量保存路径，不保存 Token 值。不要把 Token 发到聊天里。
+- 请人到返回的 registration_url（本机 `/#tokens`）登记 agent_code、agent_name、workspace，签发 Service Token，并保存到权限 0600 的私有文件。首次可将 `LOCALROUTER_API_TOKEN_FILE` 设为该文件的绝对路径检查身份，然后运行 `lr identity bind <agent-code> <token-file>` 保存本 Agent 会话的文件定位器。绑定会核对 agent_code、当前工作目录和服务权限，不创建身份，不复制 Token 值。Codex 自动使用会话 ID；其他宿主设置稳定且独立的 `LOCALROUTER_AGENT_SESSION`。不同会话、目录或 LocalRouter 地址不会共用绑定；显式文件变量始终优先。不要把 Token 发到聊天里。
 
 身份未准备好时，可以继续 `lr guide`、`lr tree` 和 `lr docs <pack>` 阅读公共契约；不要自行读管理员凭据或借免密 `/local/api` 签发身份。
 
-## 2. 找到已经存在的服务
+已完成接入、明确了服务和模型后，日常调用使用 `lr exec` 即可。无需每次手动重复 init、目录查询和 preflight；工具会自动执行必要检查。需要更换绑定时运行 `lr identity bind`，`lr identity forget` 只忘记定位器，不删除或撤销 Token。
+
+## 2. 首次选择服务或排查问题
 
 ```sh
 lr status
@@ -26,11 +28,21 @@ lr docs <pack>
 
 比较返回的供应商、ready、验证覆盖、请求 schema、费用和重试规则，明确选择一个 Pack 和 operation。服务目录的 ready 来自公共发现，不证明当前 Agent 已注册，更不证明它有调用权限；身份只看 lr init / lr whoami，授权还要核对有效策略、lr setup bundles 和预检。`ready: true` 不等于真实供应商调用已经验证。费用缺失是未知，不是免费。
 
-只找操作用 `lr find operation`；找池用 `lr find pool`；找模型用 `lr find model`。模型搜索可能请求供应商目录。需要动态模型时，最终执行 `lr find model --exact <pack>:<model-id>` 并要求唯一结果；示例模型名不证明可用。
+只找操作用 `lr find operation`；找池用 `lr find pool`；找模型用 `lr find model`。模型搜索可能请求供应商目录。需要动态模型时，最终执行 `lr find model --exact <pack>:<model-id>` 并要求唯一结果；`lr exec` 会按当前契约自动执行同样的精确检查，不需要在它前面再查一次。示例模型名不证明可用。模型查询失败时 `success=false`、`complete=false` 且退出非零；读取 `failures[].code/reason/http_status/next_action`，不要把这时的零条匹配解释成模型不存在。
 
 当前非 `--exact` 的模型搜索会读取所有就绪的模型目录，再筛选结果；把 Pack 名作为搜索词不会限制上游查询范围。不要对每个 Pack 重复做模糊搜索。确实需要覆盖全部模型服务时，可一次 `lr find model --all` 保存完整快照，离线按 Pack 选候选，再逐个精确确认；带 Pack 的 `--exact` 查询只访问该 Pack。没有供应商目录而采用请求 schema 枚举的模型，也要完成这个精确确认步骤。
 
-## 3. 调用时把三类参数分开
+## 3. 日常调用
+
+取得目标操作的调用授权后，推荐一次完成准备和调用：
+
+```text
+lr exec <pack> <operation> <body-json> <path-params-json> <query-params-json>
+```
+
+它核对独立身份，读取并复用本次执行的契约，解析精确模型与兼容操作，通过 preflight 后只发送一次正式请求，响应（包括 SSE）直接输出。失败停在原处，不自动重放正式请求。预检失败的 `blocked_at` 和 `reason` 指明第一处阻塞；`upstream_called=false` 表示预检未调用供应商。目录读取是单独的只读请求，不是生成。
+
+需要单独检查或已有外部运行时自行准备时，保留低层命令：
 
 ```text
 lr preflight <pack> <operation> <body-json> <path-params-json> <query-params-json>
@@ -75,6 +87,7 @@ Service Token 不具有维护权限。由人在 `/#tokens`（Agent 工作台）�
 ## 服务共享自主额度
 
 人可在「服务与渠道 → 自主额度」先开启默认关闭的总开关，再为单个服务启用共享额度，新配置基础额度为每月 3 美元，默认关闭，批量配置也不会自动启用。总开关关闭时沿用现有调用权限，暂停额度检查但保留配置和用量；重新开启不清零。升级时保留旧版本已启用的规则。
+明确公布的 GET/HEAD 模型目录读取不扣自主额度，但仍遵守 Token、能力包、号池和显式禁止/批准规则。缺乏固定价格的操作不能启用美元自动额度，须选择次数或单次批准；界面会在保存前提示。
 操作可设置独立子额度；调用同时受服务总额度与操作子额度约束，共用周期和单位。
 启用后，额度内的调用属于人预先批准的范围，仍须满足当前 Token/能力包权限并执行预检。
 `service_approval_required` 表示额度不足、操作必须批准或费用无法安全预估；返回人批准一次或调整额度，不自动重试，不自行修改配置。

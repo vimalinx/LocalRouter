@@ -23,15 +23,31 @@ os.chmod(root, 0o700)
 class Provider(http.server.BaseHTTPRequestHandler):
     calls = 0
     requests = []
+    model_calls = 0
+    generation_calls = 0
+    invalid_catalog = False
+    fail_generation = False
     def do_GET(self):
         type(self).calls += 1
         type(self).requests.append(self.path)
-        body = json.dumps({'id': 'fixture-document', 'state': 'succeeded', 'usage': {'pages': 3}, 'results': [{'title': '隔离演示文档', 'snippet': '这次响应来自本机测试服务。'}]}, ensure_ascii=False).encode()
+        if self.path == '/models':
+            type(self).model_calls += 1
+            value = {'unexpected': True} if type(self).invalid_catalog else {'data': [{'id': 'fixture-model'}]}
+            body = json.dumps(value).encode()
+        else:
+            body = json.dumps({'id': 'fixture-document', 'state': 'succeeded', 'usage': {'pages': 3}, 'results': [{'title': '隔离演示文档', 'snippet': '这次响应来自本机测试服务。'}]}, ensure_ascii=False).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+    def do_POST(self):
+        type(self).generation_calls += 1
+        self.rfile.read(int(self.headers.get('Content-Length', '0')))
+        body = b'{"error":"fixture failure"}' if type(self).fail_generation else b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
+        self.send_response(502 if type(self).fail_generation else 200)
+        self.send_header('Content-Type', 'application/json' if type(self).fail_generation else 'text/event-stream')
+        self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self, *unused): pass
 provider = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=provider.serve_forever, daemon=True).start()
@@ -50,7 +66,7 @@ def api(path, method='GET', body=None):
     with urllib.request.urlopen(request, timeout=5) as response:
         return json.load(response)
 def cli(*arguments):
-    result = subprocess.run([str(project / 'tools/lr'), *arguments], env=env, capture_output=True, text=True, timeout=20)
+    result = subprocess.run([str(project / 'tools/lr'), *arguments], env=env, cwd=root, capture_output=True, text=True, timeout=20)
     if result.returncode:
         raise AssertionError(f'lr {arguments[0]} failed: {result.stderr[:300]}')
     return result.stdout if arguments[0] == "tree" else json.loads(result.stdout)
@@ -78,8 +94,12 @@ try:
     definition = copy.deepcopy(template['example'])
     definition.update(id='demo-search', name='文档检索服务', description='本机隔离服务，用于验证 Agent 接入、授权与调用追踪。', base_url=f'http://127.0.0.1:{provider.server_port}')
     definition['routes'].append({'operation_id':'status','methods':['GET'],'path':'/jobs/{jobId}','summary':'Fixture path lookup'})
+    definition['routes'].extend([
+        {'operation_id':'models','capabilities':['ai.models'],'methods':['GET'],'path':'/models','summary':'Model catalogue'},
+        {'operation_id':'generate','capabilities':['ai.chat'],'methods':['POST'],'path':'/chat/completions','summary':'Streaming fixture','streaming':True,'request_example':{'model':'fixture-model','messages':[{'role':'user','content':'hi'}],'max_tokens':10},'retry':{'mode':'never','transport_errors':False}},
+    ])
     definition['routes'][0]['metering'] = {'resource_id_path':'id','state_path':'state','units':[{'unit':'page','path':'usage.pages','source':'response','mode':'snapshot'}]}
-    proposal_input = {'kind':'connection','reason':'为资料研究任务接入文档检索，只申请 search 操作。准备与授权不会调用上游。','connection':{'template_id':'read-api','template_version':'1','definition':definition},'bundle':{'id':'research-kit','name':'资料研究工具包','description':'受限的文档检索权限','members':[{'pack':'demo-search','operations':['search','status']}]}}
+    proposal_input = {'kind':'connection','reason':'为资料研究任务接入文档检索，只申请 search 操作。准备与授权不会调用上游。','connection':{'template_id':'read-api','template_version':'1','definition':definition},'bundle':{'id':'research-kit','name':'资料研究工具包','description':'受限的文档检索权限','members':[{'pack':'demo-search','operations':['search','status','models','generate']}]}}
     input_path = root / 'proposal.json'; input_path.write_text(json.dumps(proposal_input))
     proposal = payload(cli('setup','prepare','@'+str(input_path)))['proposal']
     assert proposal['state'] == 'awaiting_approval' and Provider.calls == 0
@@ -114,10 +134,53 @@ try:
     assert parse_qs(observed.query) == {'detail':['a&b / c']}, Provider.requests
     absent_template = subprocess.run([str(project/'tools/lr'),'setup','template','missing','1'],env=env,capture_output=True,timeout=20)
     assert absent_template.returncode != 0
-    print('Service workspace CLI / exact approval / single fixture call / trace accounting passed', flush=True)
+    if not args.demo:
+        env.update(XDG_DATA_HOME=str(root/'client-data'), LOCALROUTER_AGENT_SESSION='fixture-session')
+        bound = cli('identity','bind','service-fixture',str(token_path))
+        assert bound['ready'] and bound['token_value_copied'] is False
+        del env['LOCALROUTER_API_TOKEN_FILE']
+        assert cli('init')['agent_code'] == 'service-fixture'
+        # Another Agent in the same workspace must not reuse this binding.
+        other_env = dict(env, LOCALROUTER_AGENT_SESSION='different-session')
+        other = subprocess.run([str(project/'tools/lr'),'init'],env=other_env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert other.returncode != 0 and not json.loads(other.stdout)['ready']
+        wrong = subprocess.run([str(project/'tools/lr'),'identity','bind','wrong-agent',str(token_path)],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert wrong.returncode != 0 and cli('init')['agent_code'] == 'service-fixture'
+        before_models, before_generations = Provider.model_calls, Provider.generation_calls
+        response = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[{"role":"user","content":"fixture"}],"max_tokens":10,"stream":true}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert response.returncode == 0, (response.stdout,response.stderr)
+        assert response.stdout.endswith('data: [DONE]\n\n') and 'delta' in response.stdout
+        assert Provider.model_calls == before_models+1 and Provider.generation_calls == before_generations+1
+        # Gateway denial remains structured and is not presented as an empty catalogue.
+        api(f'/local/api/token-policies/{token_id}','PUT',{'surfaces':['p'],'packs':['demo-search'],'operations':['generate'],'models':['*']})
+        result = subprocess.run([str(project/'tools/lr'),'find','model','--exact','demo-search:fixture-model'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        data = json.loads(result.stdout)
+        assert result.returncode != 0 and data['success'] is False and data['complete'] is False
+        failure = data['failures'][0]
+        assert failure['code'] == 'token_policy_denied' and failure['http_status'] == 403 and failure['retryable'] is False and failure['next_action']
+        assert Provider.model_calls == before_models+1
+        api(f'/local/api/token-policies/{token_id}','PUT',{'surfaces':['p'],'packs':['demo-search'],'operations':['*'],'models':['another-model']})
+        result = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        data = json.loads(result.stdout)
+        assert result.returncode != 0 and data['code'] == 'preflight_blocked' and data['blocked_at'] == 'authorization' and data['upstream_called'] is False
+        assert Provider.generation_calls == before_generations+1
+        api(f'/local/api/token-policies/{token_id}','DELETE')
+        unavailable = subprocess.run([str(project/'tools/lr'),'find','model','--exact','absent-pack:fixture-model'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert unavailable.returncode != 0 and json.loads(unavailable.stdout)['failures'][0]['code'] == 'pack_not_found'
+        Provider.invalid_catalog = True
+        result = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert result.returncode != 0 and json.loads(result.stdout)['failures'][0]['code'] == 'model_catalog_invalid_response'
+        assert Provider.generation_calls == before_generations+1
+        Provider.invalid_catalog = False
+        Provider.fail_generation = True
+        result = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert result.returncode != 0 and Provider.generation_calls == before_generations+2
+        # Forgetting a binding never deletes or revokes its issued Token.
+        assert cli('identity','forget')['token_deleted'] is False and token_path.exists()
+    print('Service workspace CLI / session identity / automatic preparation / single-call streaming / structured failures passed', flush=True)
     if args.demo:
         proposal_input['connection']['definition'].update(id='demo-reference', name='参考资料服务')
-        proposal_input['bundle']['members'] = [{'pack':'demo-search','operations':['search','status']},{'pack':'demo-reference','operations':['search','status']}]
+        proposal_input['bundle']['members'] = [{'pack':'demo-search','operations':['search','status','models','generate']},{'pack':'demo-reference','operations':['search','status','models','generate']}]
         proposal_input['reason'] = '研究 Agent 已验证文档检索，现在申请把参考资料服务加入同一工具包。一次授权包含服务接入与明确的调用权限。'
         input_path.write_text(json.dumps(proposal_input))
         pending = payload(cli('setup','prepare','@'+str(input_path)))['proposal']

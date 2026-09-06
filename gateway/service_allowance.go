@@ -82,6 +82,7 @@ func allowanceSettings(doc *serviceAllowanceDocument) serviceAllowanceSettings {
 
 type serviceAllowanceStore struct{ path string }
 type serviceAllowanceDecision struct {
+	BudgetExempt       bool   `json:"budget_exempt,omitempty"`
 	OperationLimit     *int64 `json:"operation_limit,omitempty"`
 	OperationRemaining *int64 `json:"operation_remaining,omitempty"`
 	Enabled            bool   `json:"enabled"`
@@ -218,7 +219,7 @@ func validateAllowanceRule(r *serviceAllowanceRule) error {
 func defaultAllowanceRule() serviceAllowanceRule {
 	return serviceAllowanceRule{Mode: "quota", Unit: "usd_micros", Limit: 3000000, Period: "month", ApprovalOperations: []string{}, DeniedOperations: []string{}}
 }
-func allowanceDecision(doc *serviceAllowanceDocument, service, operation string, tokenID int, quote int64, now time.Time) serviceAllowanceDecision {
+func allowanceDecision(doc *serviceAllowanceDocument, service, operation string, tokenID int, quote int64, now time.Time, budgetExempt ...bool) serviceAllowanceDecision {
 	r := doc.Rules[service]
 	d := serviceAllowanceDecision{Enabled: allowanceSettings(doc).Enabled && r.Enabled, Allowed: true, Message: "shared allowance is disabled; existing authorization applies", Unit: r.Unit}
 	if !d.Enabled {
@@ -246,6 +247,15 @@ func allowanceDecision(doc *serviceAllowanceDocument, service, operation string,
 	if r.Mode == "deny" || (allowanceMatches(r.DeniedOperations, operation) || allowanceMatches(r.DeniedOperations, canonical)) {
 		d.Code = "service_use_denied"
 		d.Message = "human policy prohibits this service operation"
+		return d
+	}
+	// Published model catalog reads are discovery, not autonomous generation.
+	// Explicit deny/approval rules and ordinary Token/pool controls still apply.
+	if len(budgetExempt) > 0 && budgetExempt[0] && r.Mode == "quota" && !allowanceMatches(r.ApprovalOperations, operation) && !allowanceMatches(r.ApprovalOperations, canonical) {
+		d.Allowed = true
+		d.BudgetExempt = true
+		d.Code = ""
+		d.Message = "model catalog discovery does not consume the service allowance"
 		return d
 	}
 	if tokenID <= 0 {
@@ -292,13 +302,13 @@ func allowanceDecision(doc *serviceAllowanceDocument, service, operation string,
 	d.Message = "within human-configured shared allowance"
 	return d
 }
-func (s *serviceAllowanceStore) evaluate(service, operation string, tokenID int, quote int64, reserve bool) (serviceAllowanceDecision, string, error) {
+func (s *serviceAllowanceStore) evaluate(service, operation string, tokenID int, quote int64, reserve bool, budgetExempt ...bool) (serviceAllowanceDecision, string, error) {
 	var d serviceAllowanceDecision
 	var id string
 	err := s.transaction(reserve, func(doc *serviceAllowanceDocument) error {
 		now := time.Now().UTC()
-		d = allowanceDecision(doc, service, operation, tokenID, quote, now)
-		if !reserve || !d.Enabled || !d.Allowed {
+		d = allowanceDecision(doc, service, operation, tokenID, quote, now, budgetExempt...)
+		if !reserve || !d.Enabled || !d.Allowed || d.BudgetExempt {
 			return errAllowanceNoChange
 		}
 		id = newRelayRequestID()
@@ -376,11 +386,11 @@ func (p *tokenPolicyStore) allowanceIdentity(tokenID int) int {
 	}
 	return tokenID
 }
-func (p *tokenPolicyStore) reserveAllowance(c *gin.Context, service, operation string, quote int64) (string, bool) {
+func (p *tokenPolicyStore) reserveAllowance(c *gin.Context, service, operation string, quote int64, budgetExempt ...bool) (string, bool) {
 	if p == nil || p.allowances == nil {
 		return "", true
 	}
-	d, id, err := p.allowances.evaluate(service, operation, p.allowanceIdentity(c.GetInt(tokenPolicyContextID)), quote, true)
+	d, id, err := p.allowances.evaluate(service, operation, p.allowanceIdentity(c.GetInt(tokenPolicyContextID)), quote, true, budgetExempt...)
 	if err != nil {
 		writeAgentError(c, 503, "service_allowance_unavailable", "cannot safely read or persist service allowance", "request was not admitted", false, "localrouter", "ask the operator to repair allowance storage", nil, nil, nil)
 		c.Abort()
@@ -473,7 +483,8 @@ func handleAllowanceList(runtime localRuntime) gin.HandlerFunc {
 					}
 				}
 				sort.Slice(pending, func(i, j int) bool { return pending[i].CreatedAt < pending[j].CreatedAt })
-				items = append(items, gin.H{"service": key, "name": services[key], "rule": rule, "spent": spent, "reserved": reserved, "remaining": rule.Limit - spent - reserved, "pending": pending, "operations": allowanceOperationViews(runtime, key, rule, doc)})
+				unsupported := unsupportedAllowanceMoneyOperations(runtime, key, rule)
+				items = append(items, gin.H{"service": key, "name": services[key], "rule": rule, "spent": spent, "reserved": reserved, "remaining": rule.Limit - spent - reserved, "pending": pending, "operations": allowanceOperationViews(runtime, key, rule, doc), "money_supported": len(unsupported) == 0, "money_unsupported_operations": unsupported})
 			}
 			return nil
 		})
@@ -502,13 +513,25 @@ func handleAllowanceSettings(runtime localRuntime) gin.HandlerFunc {
 			}
 		}
 		var settings serviceAllowanceSettings
+		var hasSavedRules bool
 		err := runtime.policies.allowances.transaction(write, func(doc *serviceAllowanceDocument) error {
 			settings = allowanceSettings(doc)
+			hasSavedRules = len(doc.Rules) > 0
 			if !write {
 				return nil
 			}
 			if settings.Revision != *input.Revision {
 				return errors.New("configuration changed; reload before saving")
+			}
+			if *input.Enabled && !settings.Enabled {
+				services := allowanceServices(runtime)
+				for service, rule := range doc.Rules {
+					if _, exists := services[service]; exists && rule.Enabled {
+						if err := validateAllowanceConfig(runtime, service, &rule); err != nil {
+							return fmt.Errorf("%s: %w", service, err)
+						}
+					}
+				}
 			}
 			settings.Enabled = *input.Enabled
 			settings.Revision++
@@ -526,7 +549,7 @@ func handleAllowanceSettings(runtime localRuntime) gin.HandlerFunc {
 			allowanceAdminError(c, err)
 			return
 		}
-		c.JSON(200, gin.H{"success": true, "data": settings})
+		c.JSON(200, gin.H{"success": true, "data": gin.H{"enabled": settings.Enabled, "revision": settings.Revision, "has_saved_rules": hasSavedRules}})
 	}
 }
 func handleAllowancePut(runtime localRuntime) gin.HandlerFunc {
@@ -640,8 +663,39 @@ func humanAllowanceAccess(c *gin.Context) {
 }
 
 func (p *tokenPolicyStore) beginProtocolAllowance(c *gin.Context, def protocolDefinition, operation string) (func(), bool) {
-	receipt, ok := p.reserveAllowance(c, def.ID, operation, fixedAllowanceQuote(def, operation))
+	receipt, ok := p.reserveAllowance(c, def.ID, operation, fixedAllowanceQuote(def, operation), protocolAllowanceExempt(def, operation))
 	return func() { p.finishAllowance(c, receipt, def, operation) }, ok
+}
+
+func protocolAllowanceExempt(def protocolDefinition, operation string) bool {
+	for _, route := range def.Routes {
+		if route.OperationID != operation || len(route.Methods) == 0 || !containsAnyString(route.Capabilities, []string{"ai.models", "openai.models", "media.models"}) {
+			continue
+		}
+		for _, method := range route.Methods {
+			if method != http.MethodGet && method != http.MethodHead {
+				return false
+			}
+		}
+		return route.UpstreamMethod == "" || route.UpstreamMethod == http.MethodGet || route.UpstreamMethod == http.MethodHead
+	}
+	return false
+}
+
+func unsupportedAllowanceMoneyOperations(runtime localRuntime, service string, rule serviceAllowanceRule) []string {
+	unsupported := []string{}
+	def, full := runtime.protocols.get(service)
+	for op := range allowanceOperationNames(runtime, service) {
+		if allowanceMatches(rule.ApprovalOperations, op) || allowanceMatches(rule.DeniedOperations, op) {
+			continue
+		}
+		if full && (protocolAllowanceExempt(def, op) || fixedAllowanceQuote(def, op) >= 0) {
+			continue
+		}
+		unsupported = append(unsupported, op)
+	}
+	sort.Strings(unsupported)
+	return unsupported
 }
 
 func allowanceOperationExists(runtime localRuntime, service, operation string) bool {
@@ -720,6 +774,7 @@ func allowanceOperationNames(runtime localRuntime, service string) map[string]st
 }
 func allowanceOperationViews(runtime localRuntime, service string, rule serviceAllowanceRule, doc *serviceAllowanceDocument) []gin.H {
 	names := allowanceOperationNames(runtime, service)
+	def, _ := runtime.protocols.get(service)
 	for operation := range rule.OperationLimits {
 		if _, ok := names[operation]; !ok {
 			names[operation] = operation
@@ -745,7 +800,7 @@ func allowanceOperationViews(runtime localRuntime, service string, rule serviceA
 			}
 		}
 		limit, configured := rule.OperationLimits[op]
-		result = append(result, gin.H{"id": op, "name": names[op], "configured": configured, "limit": limit, "spent": spent, "reserved": reserved, "remaining": limit - spent - reserved})
+		result = append(result, gin.H{"id": op, "name": names[op], "configured": configured, "limit": limit, "spent": spent, "reserved": reserved, "remaining": limit - spent - reserved, "budget_exempt": protocolAllowanceExempt(def, op)})
 	}
 	return result
 }
@@ -767,13 +822,15 @@ func validateAllowanceConfig(runtime localRuntime, service string, rule *service
 			return errors.New("unknown sub-allowance operation: " + op)
 		}
 	}
+	if rule.Enabled && rule.Mode == "quota" && rule.Unit == "usd_micros" {
+		if unsupported := unsupportedAllowanceMoneyOperations(runtime, service, *rule); len(unsupported) > 0 {
+			return fmt.Errorf("美元额度不能启用：操作 %s 没有已确认的固定调用价格。请选择调用次数、将这些操作设为单次批准，或关闭此服务的自主额度", strings.Join(unsupported, ", "))
+		}
+	}
 	return nil
 }
 func applyAllowanceRule(doc *serviceAllowanceDocument, service string, rule *serviceAllowanceRule) error {
 	old := doc.Rules[service]
-	if old.Unit != "" && old.Unit != rule.Unit && len(old.OperationLimits) > 0 {
-		return errors.New("clear existing operation sub-allowances before changing units")
-	}
 	if old.Revision != rule.Revision {
 		return errors.New("configuration changed; reload before saving")
 	}
@@ -816,7 +873,7 @@ func handleAllowanceBatch(runtime localRuntime) gin.HandlerFunc {
 			}
 			seen[item.Service] = true
 			if err := validateAllowanceConfig(runtime, item.Service, &item.Rule); err != nil {
-				allowanceAdminError(c, err)
+				allowanceAdminError(c, fmt.Errorf("%s: %w", item.Service, err))
 				return
 			}
 		}
@@ -824,7 +881,7 @@ func handleAllowanceBatch(runtime localRuntime) gin.HandlerFunc {
 			for i := range input.Services {
 				item := &input.Services[i]
 				if err := applyAllowanceRule(doc, item.Service, &item.Rule); err != nil {
-					return err
+					return fmt.Errorf("%s: %w", item.Service, err)
 				}
 			}
 			return nil
