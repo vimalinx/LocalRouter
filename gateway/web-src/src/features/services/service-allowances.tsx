@@ -129,7 +129,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
             const selectedItem = item.service === selected
             const quota = item.rule.enabled && item.rule.mode === 'quota'
             const usedPercent = item.rule.limit > 0 ? Math.max(0, Math.min(100, (item.spent + item.reserved) / item.rule.limit * 100)) : 0
-            return <div key={item.service} className={cn('group relative rounded-xl border transition-colors', selectedItem ? 'border-primary/35 bg-primary/7 shadow-xs' : checkedServices.includes(item.service) ? 'border-primary/20 bg-primary/4' : 'border-transparent hover:border-border hover:bg-muted/35')}>
+            return <div key={item.service} className={cn('group relative rounded-xl border transition-colors', selectedItem ? '!border-primary/35 bg-primary/7 shadow-xs' : checkedServices.includes(item.service) ? '!border-primary/20 bg-primary/4' : '!border-transparent hover:!border-border hover:bg-muted/35')}>
               <button type='button' disabled={busy} aria-label={`${item.name} 自主额度`} aria-current={selectedItem ? 'page' : undefined}
                 className='flex min-h-20 w-full min-w-0 cursor-pointer items-start gap-3 rounded-xl py-3 pl-3 pr-11 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait' onClick={() => selectService(item)}>
                 <ServiceAvatar service={item.service} />
@@ -236,7 +236,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
         <div className='space-y-2'>
           <div className='relative'><Search aria-hidden='true' className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' /><Input aria-label='筛选批量设置服务' placeholder='搜索并选择服务' className='rounded-lg pl-9' value={batchSearch} onChange={event => setBatchSearch(event.target.value)} /></div>
           <div className='max-h-64 space-y-1 overflow-y-auto rounded-xl border p-2' aria-label='批量服务选择'>
-            {batchItems.map(item => <label key={item.service} className={cn('flex min-h-16 cursor-pointer items-center gap-3 rounded-lg border px-2 py-2 transition-colors', checkedServices.includes(item.service) ? 'border-primary/20 bg-primary/7' : 'border-transparent hover:bg-muted/50')}>
+            {batchItems.map(item => <label key={item.service} className={cn('flex min-h-16 cursor-pointer items-center gap-3 rounded-lg border px-2 py-2 transition-colors', checkedServices.includes(item.service) ? '!border-primary/20 bg-primary/7' : '!border-transparent hover:bg-muted/50')}>
               <ServiceAvatar service={item.service} /><span className='min-w-0 flex-1'><span className='block text-sm font-medium'>{item.name}</span><span className='mt-1 block text-xs text-muted-foreground'>{allowanceMode(item.rule)}</span></span><Checkbox aria-label={`批量选择 ${item.name}`} checked={checkedServices.includes(item.service)} onChange={() => setCheckedServices(previous => toggleSelection(previous, item.service))} />
             </label>)}
             {!batchItems.length && <p className='p-3 text-sm text-muted-foreground'>没有匹配的服务。</p>}
