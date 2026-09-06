@@ -2,11 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +33,59 @@ func allowanceFixture(t *testing.T, limit int64) *serviceAllowanceStore {
 		return nil
 	}))
 	return s
+}
+
+func TestServiceAllowanceRecoversOnlyProvenUnsentAttempts(t *testing.T) {
+	for _, scenario := range []string{"recover", "all-dial-failures", "opaque-error", "headers-written"} {
+		t.Run(scenario, func(t *testing.T) {
+			rt, owner, _, _, server := serviceWorkspaceFixture(t)
+			def := protocolDefinition{SchemaVersion: protocolSchemaVersionV3, ID: "test", Name: "Retry fixture", Description: "Isolated pre-dispatch recovery", Enabled: true, BaseURL: "https://fixture.example.invalid", Auth: protocolAuth{Type: "none"}, Routes: []protocolRoute{{OperationID: "run", Methods: []string{"POST"}, Path: "/run", Summary: "Run", Retry: protocolRetryConfig{Mode: "safe", MaxAttempts: 2}}}}
+			writeProtocolDefinition(t, rt.config.ProtocolDir, def)
+			require.NoError(t, rt.protocols.reload())
+			require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+				doc.Settings.Enabled = true
+				rule := defaultAllowanceRule()
+				rule.Enabled = true
+				rule.Unit = "requests"
+				rule.Limit = 1
+				doc.Rules["test"] = rule
+				return nil
+			}))
+			var calls atomic.Int32
+			rt.protocols.client = &http.Client{Transport: auditTransport(func(request *http.Request) (*http.Response, error) {
+				attempt := calls.Add(1)
+				if scenario == "opaque-error" {
+					return nil, errors.New("fixture transport gives no execution evidence")
+				}
+				if scenario == "headers-written" {
+					httptrace.ContextClientTrace(request.Context()).WroteHeaders()
+				}
+				if attempt == 1 || scenario != "recover" {
+					return nil, &net.OpError{Op: "dial", Err: errors.New("fixture connection refused")}
+				}
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: request}, nil
+			})}
+			status, raw := setupHTTP(t, server, owner, "POST", "/p/test/run", map[string]any{})
+			decision, _, err := rt.policies.allowances.evaluate("test", "run", owner.ID, -1, false)
+			require.NoError(t, err)
+			if scenario == "recover" {
+				require.Equal(t, 200, status, string(raw))
+				require.EqualValues(t, 2, calls.Load())
+				require.Zero(t, decision.Remaining)
+			}
+			if scenario == "all-dial-failures" {
+				require.Equal(t, 502, status)
+				require.EqualValues(t, 2, calls.Load())
+				require.EqualValues(t, 1, decision.Remaining)
+			}
+			if scenario == "opaque-error" || scenario == "headers-written" {
+				require.Equal(t, 520, status)
+				require.EqualValues(t, 1, calls.Load())
+				require.Contains(t, string(raw), "upstream_outcome_unknown")
+				require.Zero(t, decision.Remaining)
+			}
+		})
+	}
 }
 func TestServiceAllowanceDefaultAndConcurrentRestart(t *testing.T) {
 	s := newServiceAllowanceStore(t.TempDir())

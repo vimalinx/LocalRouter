@@ -68,7 +68,9 @@ def api(path, method='GET', body=None):
 def cli(*arguments):
     result = subprocess.run([str(project / 'tools/lr'), *arguments], env=env, cwd=root, capture_output=True, text=True, timeout=20)
     if result.returncode:
-        raise AssertionError(f'lr {arguments[0]} failed: {result.stderr[:300]}')
+        try: message = json.dumps({k:v for k,v in json.loads(result.stdout).items() if k in ('message','code','reason','ready','next_action')})
+        except (ValueError, AttributeError): message = ''
+        raise AssertionError(f'lr {arguments[0]} failed: {message or result.stderr[:300]}')
     return result.stdout if arguments[0] == "tree" else json.loads(result.stdout)
 def payload(result):
     return result.get('structuredContent', result.get('result', {}).get('structuredContent', result))
@@ -151,6 +153,14 @@ try:
         assert response.returncode == 0, (response.stdout,response.stderr)
         assert response.stdout.endswith('data: [DONE]\n\n') and 'delta' in response.stdout
         assert Provider.model_calls == before_models+1 and Provider.generation_calls == before_generations+1
+        receipt = cli('result')['results'][0]
+        assert receipt['outcome'] == 'response_received' and receipt['exit_code'] == 0
+        assert Path(receipt['response_file']).read_text() == response.stdout
+        assert Path(receipt['response_file']).stat().st_mode & 0o777 == 0o600
+        before_trace_read = Provider.generation_calls
+        evidence = cli('result',receipt['id'],'--refresh')
+        assert evidence['provider_replayed'] is False and evidence['gateway_evidence']['total'] >= 1
+        assert Provider.generation_calls == before_trace_read
         # Gateway denial remains structured and is not presented as an empty catalogue.
         api(f'/local/api/token-policies/{token_id}','PUT',{'surfaces':['p'],'packs':['demo-search'],'operations':['generate'],'models':['*']})
         result = subprocess.run([str(project/'tools/lr'),'find','model','--exact','demo-search:fixture-model'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
@@ -175,6 +185,47 @@ try:
         Provider.fail_generation = True
         result = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
         assert result.returncode != 0 and Provider.generation_calls == before_generations+2
+        # One human scope approval replaces manual Token transfer. The CLI owns
+        # its private claim and credential, and resumes without printing either.
+        original_session = env['LOCALROUTER_AGENT_SESSION']
+        env['LOCALROUTER_AGENT_SESSION'] = 'enrollment-session'
+        requested_policy = {'packs':['demo-search'],'operations':['demo-search.models','demo-search.generate'],'models':['fixture-model'],'daily_request_limit':20}
+        enrolled = cli('identity','request','enrolled-fixture',json.dumps(requested_policy))
+        assert enrolled['state'] == 'pending' and not enrolled['ready']
+        assert 'token' not in enrolled and Provider.generation_calls == before_generations+2
+        pending_claim = subprocess.run([str(project/'tools/lr'),'identity','claim'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert pending_claim.returncode != 0 and not json.loads(pending_claim.stdout)['ready']
+        assert cli('identity','request','enrolled-fixture',json.dumps(requested_policy))['id'] == enrolled['id']
+        approval = api('/local/api/identity-requests/'+enrolled['id']+'/decision','POST',{'digest':enrolled['digest'],'approve':True})['data']
+        assert approval['state'] == 'approved' and 'key' not in approval
+        Provider.fail_generation = False
+        auto_claim = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10,"stream":true}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert auto_claim.returncode == 0 and auto_claim.stdout.endswith('data: [DONE]\n\n'), (auto_claim.stdout,auto_claim.stderr)
+        delivered = cli('identity','claim')
+        assert delivered['ready'] and 'token' not in delivered
+        whoami = cli('init'); assert whoami['agent_code'] == 'enrolled-fixture'
+        issued_id = whoami['token_id']
+        delivered_again = cli('identity','claim'); assert delivered_again == delivered
+        assert cli('init')['token_id'] == issued_id
+        private_token = Path(whoami['token_file'])
+        assert private_token.stat().st_mode & 0o777 == 0o600
+        assert private_token.read_text().strip() not in json.dumps(delivered)
+        Provider.fail_generation = False
+        response = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10,"stream":true}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert response.returncode == 0 and response.stdout.endswith('data: [DONE]\n\n'), (response.stdout,response.stderr)
+        denied = subprocess.run([str(project/'tools/lr'),'call','demo-search','search','{}','{}','{"q":"outside approved scope"}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert denied.returncode != 0 and json.loads(denied.stdout)['code'] == 'token_policy_denied'
+        expanded = dict(requested_policy,operations=['demo-search.models','demo-search.generate','demo-search.search'])
+        scope_request = cli('identity','access',json.dumps(expanded))
+        assert scope_request['state'] == 'pending' and scope_request['owner_token_id'] == issued_id
+        api('/local/api/identity-requests/'+scope_request['id']+'/decision','POST',{'digest':scope_request['digest'],'approve':True})
+        assert cli('identity','access-status',scope_request['id'])['state'] == 'approved'
+        assert cli('init')['token_id'] == issued_id
+        assert cli('call','demo-search','search','{}','{}','{"q":"now within approved scope"}')['state'] == 'succeeded'
+        api(f'/local/api/tokens/{issued_id}','DELETE')
+        revoked_claim = subprocess.run([str(project/'tools/lr'),'identity','claim'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert revoked_claim.returncode != 0 and private_token.read_text().strip() not in revoked_claim.stdout
+        env['LOCALROUTER_AGENT_SESSION'] = original_session
         # Forgetting a binding never deletes or revokes its issued Token.
         assert cli('identity','forget')['token_deleted'] is False and token_path.exists()
     print('Service workspace CLI / session identity / automatic preparation / single-call streaming / structured failures passed', flush=True)
@@ -184,7 +235,10 @@ try:
         proposal_input['reason'] = '研究 Agent 已验证文档检索，现在申请把参考资料服务加入同一工具包。一次授权包含服务接入与明确的调用权限。'
         input_path.write_text(json.dumps(proposal_input))
         pending = payload(cli('setup','prepare','@'+str(input_path)))['proposal']
-        (root/'demo.json').write_text(json.dumps({'url':base+'/#setup','pending_id':pending['id'],'gateway_pid':process.pid,'token_id':token_id}))
+        env.update(XDG_DATA_HOME=str(root/'client-data'),LOCALROUTER_AGENT_SESSION='browser-enrollment')
+        env.pop('LOCALROUTER_API_TOKEN_FILE',None)
+        identity_request=cli('identity','request','browser-agent',json.dumps({'packs':['demo-search'],'operations':['demo-search.models','demo-search.generate'],'models':['fixture-model'],'daily_request_limit':50,'max_in_flight':2}))
+        (root/'demo.json').write_text(json.dumps({'url':base+'/#tokens','pending_id':pending['id'],'identity_request':identity_request['id'],'gateway_pid':process.pid,'token_id':token_id}))
         print(json.dumps({'url':base+'/#setup','directory':str(root),'gateway_pid':process.pid}),flush=True)
         while process.poll() is None: time.sleep(1)
 finally:

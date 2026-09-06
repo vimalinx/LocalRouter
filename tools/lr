@@ -34,6 +34,14 @@ Usage: lr <command> [arguments]
 
 Start here
   lr init                           Check identity and return the next safe step (read-only)
+  lr identity request <agent-code> <policy-json|@file>
+                                    Request exact scope; human approves once in Agent Workbench
+  lr identity claim                 Privately receive and bind the approved identity
+  lr identity cancel                Withdraw a pending request before changing its scope
+  lr identity access <policy-json|@file>
+                                    Request a complete replacement scope; preserves Token and usage
+  lr identity access-status <access-id>
+                                    Inspect an owned scope change without applying it
   lr identity bind <agent-code> <token-file>
                                     Verify and remember an issued identity for this Agent session
   lr identity forget                Forget this session's locator; never revoke or delete a Token
@@ -61,6 +69,7 @@ Discover
   lr env                            Show non-secret LocalRouter configuration
 
 Call
+  lr result [call-id [--refresh]]    Inspect saved raw response/exit status; refresh queries traces only
   lr exec <pack> <operation> [json] [path-params-json] [query-params-json]
                                     Check identity, exact dynamic model and preflight, then call once
   lr preflight <pack> <operation> [json] [path-params-json] [query-params-json]
@@ -235,6 +244,25 @@ command_identity() {
   local action="${1:-}" binding_path
   binding_path="$(agent_binding_path)" || fail "set LOCALROUTER_AGENT_SESSION to this Agent's stable session ID; Codex sessions use CODEX_THREAD_ID automatically"
   case "$action" in
+    access)
+      load_agent_binding
+      [[ $# == 2 ]] || fail "use lr identity access <complete-policy-json|@file>"
+      local access_identity
+      access_identity="$(command_init)" || { printf '%s\n' "$access_identity"; return 1; }
+      local access_policy
+      access_policy="$(json_argument "$2")"
+      local access_response
+      access_response="$(authenticated_request POST "$base_url/agent/access-requests" "$(jq -cn --argjson policy "$access_policy" '{policy:$policy}')")" || { printf '%s\n' "$access_response"; return 1; }
+      jq '.data + {registration_url:"/#tokens",next_action:"Review the complete replacement scope in Agent Workbench; current policy remains in force until approval."}' <<<"$access_response"
+      ;;
+    access-status)
+      load_agent_binding
+      [[ $# == 2 && "$2" =~ ^access-[a-f0-9]{24}$ ]] || fail "use lr identity access-status <access-id>"
+      authenticated_request GET "$base_url/agent/access-requests/$2" | jq '.data'
+      ;;
+    request|claim|cancel)
+      command_identity_enroll "$@"
+      ;;
     bind)
       [[ $# = 3 && -n "$2" && "$3" = /* ]] || fail "use lr identity bind <agent-code> </absolute/mode-600/token-file>"
       local identity
@@ -260,6 +288,79 @@ command_identity() {
       ;;
     *) fail "use lr identity bind <agent-code> <token-file> or lr identity forget" ;;
   esac
+}
+
+# Enrollment has its own private proof and never reads the bootstrap/admin Token.
+# Request and claim are resumable; neither can approve the requested authority.
+command_identity_enroll() {
+  local action="$1" binding_path binding_dir enrollment_dir request_file claim_file response token_file temporary
+  [[ "$base_url" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$ ]] || fail "identity enrollment is available only on the loopback operator listener"
+  [[ -z "${LOCALROUTER_API_TOKEN_FILE:-}" ]] || fail "unset the explicit Service Token locator before enrolling a new identity; it would override the new binding"
+  binding_path="$(agent_binding_path)" || fail "set LOCALROUTER_AGENT_SESSION to this Agent's stable session ID"
+  binding_dir="$(dirname "$binding_path")"
+  mkdir -p -m 700 "$binding_dir"
+  [[ ! -L "$binding_dir" && "$(stat -c '%u:%a' "$binding_dir")" = "$EUID:700" ]] || fail "Agent binding directory must be private and owned by the current user"
+  enrollment_dir="${binding_path%.json}.enrollment"
+  mkdir -p -m 700 "$enrollment_dir"
+  [[ ! -L "$enrollment_dir" && "$(stat -c '%u:%a' "$enrollment_dir")" = "$EUID:700" ]] || fail "enrollment directory must be private and owned by the current user"
+  # Serialize one Agent session, including simultaneous resume after a lost response.
+  local enrollment_lock
+  exec {enrollment_lock}<"$enrollment_dir"
+  flock -x "$enrollment_lock"
+  request_file="$enrollment_dir/request.json"
+  claim_file="$enrollment_dir/claim"
+  token_file="$enrollment_dir/service-token"
+  if [[ "$action" == request ]]; then
+    [[ $# == 3 ]] || fail "use lr identity request <agent-code> <policy-json|@file>; choose exact packs and operations"
+    local body policy
+    policy="$(json_argument "$3")"
+    body="$(jq -cn --arg code "$2" --arg workspace "$PWD" --argjson policy "$policy" '{agent_code:$code,agent_name:$code,workspace:$workspace,runtime:"lr",policy:$policy}')"
+    if [[ -e "$request_file" || -L "$request_file" ]]; then
+      [[ -f "$request_file" && ! -L "$request_file" && "$(stat -c '%u:%a' "$request_file")" = "$EUID:600" ]] || fail "invalid enrollment request file"
+      [[ "$(cat "$request_file")" == "$body" ]] || fail "this session already has a different identity request; resume it, or lr identity cancel before replacing a pending request"
+    else
+      temporary="$(mktemp "$enrollment_dir/.request.XXXXXX")"
+      printf '%s\n' "$body" >"$temporary"
+      mv -- "$temporary" "$request_file"
+    fi
+    if [[ ! -e "$claim_file" && ! -L "$claim_file" ]]; then
+      temporary="$(mktemp "$enrollment_dir/.claim.XXXXXX")"
+      od -An -N32 -tx1 /dev/urandom | tr -d ' \n' >"$temporary"
+      printf '\n' >>"$temporary"
+      mv -- "$temporary" "$claim_file"
+    fi
+    response="$(bearer_request "$claim_file" POST "$base_url/agent/identity-requests" "$body" 30)" || { printf '%s\n' "$response"; return 1; }
+    jq --arg url "$base_url/#tokens" '.data + {registration_url:$url,ready:false,next_action:"Review this request once in Agent Workbench, then run lr identity claim. No Token copying is needed."}' <<<"$response"
+    return
+  fi
+  [[ $# == 1 ]] || fail "identity claim/cancel takes no arguments and resumes this Agent session's request"
+  [[ -f "$request_file" && ! -L "$request_file" && "$(stat -c '%u:%a' "$request_file")" = "$EUID:600" ]] || fail "no private request for this session; run lr identity request first"
+  read_bearer_token "$claim_file"
+  local claim_hash request_id agent_code
+  claim_hash="$(printf '%s' "$bearer_token" | sha256sum)"
+  request_id="identity-${claim_hash:0:24}"
+  if [[ "$action" == cancel ]]; then
+    response="$(bearer_request "$claim_file" DELETE "$base_url/agent/identity-requests/$request_id" '' 30)" || { printf '%s\n' "$response"; return 1; }
+    jq -e '.data.withdrawn == true' >/dev/null <<<"$response" || fail "request withdrawal was not confirmed"
+    rm -- "$request_file" "$claim_file"
+    jq '.data' <<<"$response"
+    return
+  fi
+  # Keep the secret response only in process memory. Never print raw claim output.
+  if ! response="$(bearer_request "$claim_file" POST "$base_url/agent/identity-requests/$request_id/claim" '{}' 30)"; then
+    jq '{success:false,code:(.code // "identity_claim_failed"),message:(.message // "credential delivery failed"),next_action:(.next_action // "inspect the existing request; do not create another identity")}' <<<"$response" || true
+    return 1
+  fi
+  if ! jq -e '.data.ready == true' >/dev/null <<<"$response"; then
+    jq '.data | del(.token)' <<<"$response"
+    return 1
+  fi
+  jq -e --argjson request "$(cat "$request_file")" '.data.request.agent_code == $request.agent_code and .data.request.workspace == $request.workspace and (.data.token | test("^sk-[A-Za-z0-9_-]+$"))' >/dev/null <<<"$response" || fail "credential response does not match the pending identity"
+  temporary="$(mktemp "$enrollment_dir/.token.XXXXXX")"
+  jq -r '.data.token' <<<"$response" >"$temporary"
+  mv -f -- "$temporary" "$token_file"
+  agent_code="$(jq -r '.data.request.agent_code' <<<"$response")"
+  command_identity bind "$agent_code" "$token_file"
 }
 
 read_bearer_token() {
@@ -941,7 +1042,7 @@ command_init() {
   local contract identity
   contract="$(discovery)"
   if [[ ! -f "$api_token_file" ]]; then
-    jq -n --arg file "$api_token_file" --arg console "$base_url/#tokens" '{ready:false,code:"agent_identity_required",token_file:$file,registration_url:$console,next_action:"Ask the human to issue a dedicated Service Token in Agent Workbench and save it in a private mode-600 file. Set LOCALROUTER_API_TOKEN_FILE to that path and rerun lr init. Do not read an administrator credential.",can_continue:["lr guide","lr tree","lr docs <pack>"]}'
+    jq -n --arg file "$api_token_file" --arg console "$base_url/#tokens" '{ready:false,code:"agent_identity_required",token_file:$file,registration_url:$console,next_action:"Use lr identity request <agent-code> <policy-json> to request exact service scope, then have the human approve it in Agent Workbench. lr identity claim saves and binds the approved credential privately. Existing issued mode-600 Token files can still be bound; never read an administrator credential.",can_continue:["lr guide","lr tree","lr docs <pack>"]}'
     return 1
   fi
   identity="$(authenticated_request GET "$base_url/agent/whoami")" || { printf '%s\n' "$identity"; return 1; }
@@ -949,7 +1050,7 @@ command_init() {
     json_fail "agent_identity_mismatch" "the bound Token no longer matches this Agent session" "bind the correct issued identity with lr identity bind; no fallback identity was selected"
     return 1
   fi
-  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready // false),next_action:(if .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." else "This is a shared/bootstrap identity, not your independent Agent identity. Ask the human to issue a dedicated Service Token in Agent Workbench, save it mode 0600, then lr identity bind <agent-code> <token-file>. Do not issue Tokens through /local/api." end)}' <<<"$identity"
+  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready // false),next_action:(if .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." else "This is a shared/bootstrap identity. Use lr identity request <agent-code> <policy-json> to request exact service scope; the human approves it once in Agent Workbench, then lr identity claim saves it privately. Existing issued files can use lr identity bind. Do not issue Tokens through /local/api." end)}' <<<"$identity"
   [[ "$(jq -r '.identity_ready // false' <<<"$identity")" == true ]]
 }
 
@@ -1132,6 +1233,14 @@ command_exec() {
   query_parameters="$(json_argument "${5-}")"
   lr_contract_cache="$(discovery)" || return 1
   local identity descriptor prepared field value model_result
+  local pending_binding
+  pending_binding="$(agent_binding_path)" || pending_binding=""
+  if [[ -z "${LOCALROUTER_API_TOKEN_FILE:-}" && -z "${agent_binding:-}" && -n "$pending_binding" && -f "${pending_binding%.json}.enrollment/request.json" ]]; then
+    # An approved pending handshake is completed by the normal call entry.
+    # Pending/denied requests return to the user without dispatching a call.
+    identity="$(command_identity claim)" || { printf '%s\n' "$identity"; return 1; }
+    load_agent_binding
+  fi
   identity="$(command_init)" || { printf '%s\n' "$identity"; return 1; }
   jq -e --arg workspace "$PWD" '.workspace == $workspace and .service_access == true and .maintenance_access == false' >/dev/null <<<"$identity" || {
     json_fail "agent_identity_mismatch" "the issued service identity does not belong to this workspace" "bind the correct identity once with lr identity bind <agent-code> <token-file>"
@@ -1157,7 +1266,73 @@ command_exec() {
     json_fail "contract_changed" "the service contract changed before dispatch; no operation was sent" "start a fresh lr exec to prepare against the current contract"
     return 1
   }
-  command_call "$pack_id" "$operation_id" "$body" "$path_parameters" "$query_parameters"
+  recorded_call "$pack_id" "$operation_id" "$body" "$path_parameters" "$query_parameters"
+}
+
+execution_directory() {
+  local binding
+  binding="$(agent_binding_path)" || {
+    local identity_key
+    identity_key="$(printf '%s\0%s\0%s' "$base_url" "$PWD" "$api_token_file" | sha256sum)"
+    binding="$xdg_data_home/localrouter/agent-bindings/${identity_key%% *}.json"
+  }
+  printf '%s.results' "${binding%.json}"
+}
+
+# Save the raw response before downstream parsing. The gateway owns bounded
+# safe retries; the CLI dispatches once and keeps unknown outcomes inspectable.
+recorded_call() {
+  local result_root result_dir temporary call_status output_status outcome
+  result_root="$(execution_directory)"
+  mkdir -p -m 700 "$result_root"
+  [[ ! -L "$result_root" && "$(stat -c '%u:%a' "$result_root")" = "$EUID:700" ]] || fail "execution directory must be private and owned by the current user"
+  result_dir="$(mktemp -d "$result_root/call-XXXXXXXXXXXX")"
+  chmod 700 "$result_dir"
+  temporary="$(mktemp "$result_dir/.receipt.XXXXXX")"
+  local LOCALROUTER_TRACE_ID="${LOCALROUTER_TRACE_ID:-}"
+  if [[ -z "$LOCALROUTER_TRACE_ID" ]]; then LOCALROUTER_TRACE_ID="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"; fi
+  jq -n --arg id "${result_dir##*/}" --arg pack "$1" --arg operation "$2" --arg trace "$LOCALROUTER_TRACE_ID" --arg origin "$base_url" --arg response "$result_dir/response" --arg stderr "$result_dir/stderr" '{id:$id,pack:$pack,operation:$operation,trace_id:$trace,origin:$origin,state:"dispatching",outcome:"unknown",response_file:$response,stderr_file:$stderr,started_at:(now|floor),next_action:"If interrupted, inspect the saved response and lr setup traces for this trace_id; do not replay an unknown operation."}' >"$temporary"
+  mv -- "$temporary" "$result_dir/receipt.json"
+  (umask 077; : >"$result_dir/response"; : >"$result_dir/stderr")
+  local -a pipeline_status
+  set +e
+  (set -e; command_call "$@") 2>"$result_dir/stderr" | tee -p "$result_dir/response"
+  pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  call_status="${pipeline_status[0]}"; output_status="${pipeline_status[1]}"
+  outcome=unknown
+  if [[ "$call_status" == 0 && "$output_status" == 0 ]]; then outcome=response_received; fi
+  temporary="$(mktemp "$result_dir/.receipt.XXXXXX")"
+  jq --arg outcome "$outcome" --argjson exit_code "$call_status" --argjson output_exit_code "$output_status" '. + {state:"finished",outcome:$outcome,exit_code:$exit_code,output_exit_code:$output_exit_code,finished_at:(now|floor)}' "$result_dir/receipt.json" >"$temporary"
+  mv -f -- "$temporary" "$result_dir/receipt.json"
+  cat "$result_dir/stderr" >&2
+  if [[ "$call_status" != 0 || "$output_status" != 0 ]]; then printf 'lr: response retained; inspect lr result %s before another call\n' "${result_dir##*/}" >&2; return 1; fi
+}
+
+command_result() {
+  local root id="${1:-}" receipt
+  root="$(execution_directory)"
+  [[ -d "$root" && ! -L "$root" && "$(stat -c '%u:%a' "$root")" = "$EUID:700" ]] || fail "no private execution receipts for this Agent session"
+  if [[ -z "$id" ]]; then
+    local -a receipts=("$root"/call-*/receipt.json)
+    [[ -e "${receipts[0]}" ]] || { printf '{"results":[]}\n'; return; }
+    for receipt in "${receipts[@]}"; do [[ -f "$receipt" && ! -L "$receipt" && "$(stat -c '%u:%a' "$receipt")" = "$EUID:600" ]] || fail "invalid execution receipt"; done
+    jq -s '{results:(sort_by(.started_at)|reverse)}' "${receipts[@]}"
+    return
+  fi
+  [[ "$id" =~ ^call-[A-Za-z0-9]{12}$ ]] || fail "use lr result [call-id]"
+  receipt="$root/$id/receipt.json"
+  [[ -f "$receipt" && ! -L "$receipt" && "$(stat -c '%u:%a' "$receipt")" = "$EUID:600" ]] || fail "execution receipt not found or not private"
+  if [[ "${2:-}" == --refresh ]]; then
+    local trace origin traces
+    trace="$(jq -r '.trace_id' "$receipt")"; origin="$(jq -r '.origin' "$receipt")"
+    [[ "$trace" =~ ^[a-f0-9]{32}$ && "$origin" == "$base_url" ]] || fail "receipt origin or trace is invalid"
+    traces="$(authenticated_request GET "$base_url/agent/traces?trace_id=$trace")" || { printf '%s\n' "$traces"; return 1; }
+    jq --argjson traces "$traces" '. + {gateway_evidence:$traces.data,provider_replayed:false,next_action:"Read response_file and gateway evidence; only a declared status operation or authoritative provider receipt can resolve an unknown resource outcome."}' "$receipt"
+    return
+  fi
+  [[ $# == 1 ]] || fail "use lr result [call-id [--refresh]]"
+  jq . "$receipt"
 }
 
 command_run() {
@@ -1353,7 +1528,10 @@ validate_loopback_url "$maintenance_mcp_url"
 
 command_name="${1:-help}"
 shift || true
-if [[ "$command_name" != identity && "$command_name" != help ]]; then load_agent_binding; fi
+case "$command_name" in
+  identity|help|guide|status|tree|show|docs) ;;
+  *) load_agent_binding ;;
+esac
 if [[ "$command_name" != "help" && ("${1:-}" == "-h" || "${1:-}" == "--help") ]]; then
   usage
   exit 0
@@ -1377,6 +1555,7 @@ case "$command_name" in
   preflight) command_preflight "$@" ;;
   call) command_call "$@" ;;
   exec) command_exec "$@" ;;
+  result) command_result "$@" ;;
   run) command_run "$@" ;;
   watch) command_watch "$@" ;;
   cancel) command_cancel "$@" ;;

@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "10"
+const agentContractSchemaVersion = "11"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -136,10 +136,11 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"binding": "service-token", "registration": "operator-issued", "console": console,
 			"required_fields": []string{"agent_code", "agent_name", "workspace"},
 			"whoami":          "/agent/whoami", "secret_values_returned": false, "start_command": "lr init", "getting_started": "/docs/agent-start.md",
+			"enrollment":    gin.H{"available": requestServerScope(c) != lanServiceScope, "request": "/agent/identity-requests", "cli": "lr identity request <agent-code> <policy-json>", "claim_cli": "lr identity claim", "approval": "human-reviewed exact scope", "delivery": "private claim; CLI saves mode-600 credential without displaying it", "scope_changes": "/agent/access-requests", "scope_change_cli": "lr identity access <complete-policy-json>"},
 			"reuse_command": "lr identity bind <agent-code> <token-file>", "reuse_scope": "Agent session, workspace and service origin; locator only",
 		},
 		"flow":       []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
-		"daily_call": gin.H{"cli": "lr exec <pack> <operation> [json] [path-params-json] [query-params-json]", "automatic_checks": []string{"independent-identity", "current-contract", "exact-dynamic-model", "preflight"}, "dispatches": 1, "requires_operation_authorization": true},
+		"daily_call": gin.H{"cli": "lr exec <pack> <operation> [json] [path-params-json] [query-params-json]", "automatic_checks": []string{"independent-identity", "current-contract", "exact-dynamic-model", "preflight"}, "dispatches": 1, "requires_operation_authorization": true, "receipts": "lr result [call-id]", "automatic_identity_claim": "approved pending enrollment only"},
 		"service_workspace": gin.H{
 			"mode": "agent-led", "templates": "/agent/service-templates", "proposals": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 			"prepare_schema": serviceProposalSchema(),
@@ -598,6 +599,7 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 			"reason": reason, "blocked_at": blockedAt, "retryable": false, "owner": owner, "upstream_called": false,
 			"contract_digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion, "operation": descriptor,
 			"checks": checks, "next_action": nextAction, "alternatives": alternatives, "service_allowance": allowance,
+			"resolution": preflightResolution(checks, policyStatus, nextAction),
 		})
 	}
 }
@@ -996,6 +998,28 @@ func writeAgentError(c *gin.Context, status int, code, message, reason string, r
 	for key, value := range extra {
 		payload[key] = value
 	}
+	stage, actor := "request", "agent"
+	switch {
+	case code == "upstream_outcome_unknown":
+		stage = "upstream_result"
+	case code == "service_approval_required" || code == "service_use_denied":
+		stage, actor = "service_allowance", "human"
+	case code == "token_policy_denied":
+		stage = "authorization"
+		if status != http.StatusTooManyRequests {
+			actor = "human"
+		}
+	case code == "service_token_required" || strings.HasPrefix(code, "identity_"):
+		stage = "identity"
+	case owner == "provider":
+		stage = "upstream"
+	}
+	payload["blocked_at"] = stage
+	payload["resolution"] = gin.H{"next_actor": actor, "next_action": nextAction, "approval_required": actor == "human", "automatic_replay": false}
+	if trace := serviceTraceContext(c); trace != nil {
+		payload["trace_id"], payload["upstream_called"] = trace.TraceID, trace.UpstreamCalled
+		payload["upstream_attempts"] = c.GetInt("localrouter_upstream_attempts")
+	}
 	c.JSON(status, payload)
 }
 
@@ -1111,4 +1135,20 @@ func agentJSONTypeMatches(typeName string, value any) bool {
 		return value == nil
 	}
 	return false
+}
+
+// Each completed check is reported as an action taken, not as a recovery claim.
+func preflightResolution(checks []agentPreflightCheck, policyStatus int, nextAction string) gin.H {
+	actions := []string{}
+	actor := "agent"
+	for _, check := range checks {
+		actions = append(actions, check.Name)
+		if check.Blocking && check.Status == "fail" {
+			if check.Name == "service_allowance" || (check.Name == "authorization" && policyStatus != http.StatusTooManyRequests) {
+				actor = "human"
+			}
+			break
+		}
+	}
+	return gin.H{"automatic_checks": actions, "next_actor": actor, "next_action": nextAction, "approval_required": actor == "human", "upstream_attempts": 0, "automatic_replay": false}
 }

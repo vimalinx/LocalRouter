@@ -548,8 +548,16 @@ func (store *tokenPolicyStore) handlePut(c *gin.Context) {
 		return
 	}
 	store.mu.Lock()
+	previous, existed := store.policies[id]
 	store.policies[id] = policy
 	err = store.saveLocked()
+	if err != nil {
+		if existed {
+			store.policies[id] = previous
+		} else {
+			delete(store.policies, id)
+		}
+	}
 	store.mu.Unlock()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist token policy"})
@@ -565,9 +573,15 @@ func (store *tokenPolicyStore) handleDelete(c *gin.Context) {
 		return
 	}
 	store.mu.Lock()
+	previous, existed := store.policies[id]
 	delete(store.policies, id)
-	delete(store.usage, id)
 	err = store.saveLocked()
+	if err != nil && existed {
+		store.policies[id] = previous
+	}
+	if err == nil {
+		delete(store.usage, id)
+	}
 	store.mu.Unlock()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist token policy"})

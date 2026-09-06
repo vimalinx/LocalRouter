@@ -84,7 +84,7 @@ func TestAgentResolveDescribePreflightAndWhoAmI(t *testing.T) {
 
 	unauthorized := agentAPIRequest(engine, http.MethodPost, "/agent/resolve", `{"query":"web.search"}`, false)
 	require.Equal(t, http.StatusUnauthorized, unauthorized.Code)
-	assert.JSONEq(t, `{"success":false,"code":"service_token_required","message":"local API token required","reason":"Authorization is missing or invalid","retryable":false,"owner":"localrouter","retry_after":null,"next_action":"read the configured mode-600 service Token file and retry with Authorization: Bearer","alternatives":[]}`, unauthorized.Body.String())
+	assert.JSONEq(t, `{"success":false,"code":"service_token_required","message":"local API token required","reason":"Authorization is missing or invalid","retryable":false,"owner":"localrouter","retry_after":null,"next_action":"read the configured mode-600 service Token file and retry with Authorization: Bearer","alternatives":[],"blocked_at":"identity","resolution":{"next_actor":"agent","next_action":"read the configured mode-600 service Token file and retry with Authorization: Bearer","approval_required":false,"automatic_replay":false}}`, unauthorized.Body.String())
 
 	resolved := agentAPIRequest(engine, http.MethodPost, "/agent/resolve", `{"query":"web.search"}`, true)
 	require.Equal(t, http.StatusOK, resolved.Code, resolved.Body.String())

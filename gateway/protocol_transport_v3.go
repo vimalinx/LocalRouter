@@ -266,9 +266,7 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 		}
 	}
 	excluded := make(map[string]bool)
-	if c.GetBool("localrouter_allowance_single_attempt") {
-		maxAttempts = 1
-	}
+	c.Set("localrouter_allowance_dispatch", "not_sent")
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		c.Set("localrouter_protocol_attempts", attempt+1)
 		acquired, acquireErr := registry.acquireCredential(definition, route, affinityKey, excluded)
@@ -337,11 +335,15 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 			c.Status(http.StatusServiceUnavailable)
 			return
 		}
+		c.Set("localrouter_allowance_dispatch", "unknown")
 		raw, definitelyNotSent, invokeErr := registry.invokeProtocolAdapter(c.Request.Context(), definition, route, envelopeBody)
+		if definitelyNotSent {
+			c.Set("localrouter_allowance_dispatch", "not_sent")
+		}
 		finishAttempt(0, !definitelyNotSent, invokeErr)
 		if invokeErr != nil {
 			_ = registry.releaseCredential(definition, acquired, http.StatusBadGateway, "")
-			if attempt+1 < maxAttempts && routeRetryAllowed(route, providerMethod, !definitelyNotSent, idempotencyKey, true, 0) {
+			if attempt+1 < maxAttempts && allowanceRetryAllowed(c, !definitelyNotSent) && routeRetryAllowed(route, providerMethod, !definitelyNotSent, idempotencyKey, true, 0) {
 				continue
 			}
 			if !definitelyNotSent && !routeMethodNaturallyIdempotent(providerMethod) && idempotencyKey == "" {
@@ -377,7 +379,10 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 			return
 		}
 		wroteProvider := adapted.Outcome != "not_sent"
-		if attempt+1 < maxAttempts && routeRetryAllowed(route, providerMethod, wroteProvider, idempotencyKey, false, adapted.Status) {
+		if !wroteProvider {
+			c.Set("localrouter_allowance_dispatch", "not_sent")
+		}
+		if attempt+1 < maxAttempts && allowanceRetryAllowed(c, wroteProvider) && routeRetryAllowed(route, providerMethod, wroteProvider, idempotencyKey, false, adapted.Status) {
 			continue
 		}
 		if route.Affinity.ResponseJSONPath != "" && adapted.Status >= 200 && adapted.Status < 400 {

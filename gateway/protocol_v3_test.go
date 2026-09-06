@@ -846,7 +846,9 @@ func TestProtocolV3GRPCTransportFailureReturnsAgentError(t *testing.T) {
 		"next_action":"reconcile provider state using the returned resource or idempotency key; do not replay blindly",
 		"alternatives":[],
 		"outcome":"unknown",
-		"operation_id":"grpc.mutate"
+		"operation_id":"grpc.mutate",
+        "blocked_at":"upstream_result",
+        "resolution":{"next_actor":"agent","next_action":"reconcile provider state using the returned resource or idempotency key; do not replay blindly","approval_required":false,"automatic_replay":false}
 	}`, response.Body.String())
 }
 

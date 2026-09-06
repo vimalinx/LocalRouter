@@ -35,6 +35,7 @@ type serviceAllowanceRule struct {
 	Revision           int64            `json:"revision"`
 }
 type serviceAllowanceReceipt struct {
+	GrantID              string `json:"grant_id,omitempty"`
 	ReconciliationReason string `json:"reconciliation_reason,omitempty"`
 	SettledAt            int64  `json:"settled_at,omitempty"`
 	ID                   string `json:"id"`
@@ -318,6 +319,7 @@ func (s *serviceAllowanceStore) evaluate(service, operation string, tokenID int,
 			g := doc.Grants[d.GrantID]
 			g.Used = true
 			doc.Grants[d.GrantID] = g
+			receipt.GrantID = d.GrantID
 			receipt.Approved = true
 			receipt.Amount = 0
 			receipt.Pending = false
@@ -409,6 +411,10 @@ func (p *tokenPolicyStore) reserveAllowance(c *gin.Context, service, operation s
 }
 func (p *tokenPolicyStore) finishAllowance(c *gin.Context, id string, def protocolDefinition, operation string) {
 	if id == "" || p == nil || p.allowances == nil {
+		return
+	}
+	if c.GetString("localrouter_allowance_dispatch") == "not_sent" {
+		_ = p.allowances.releaseNotSent(id)
 		return
 	}
 	// Only non-streaming successful, fully observed fixed-price responses settle.
@@ -892,4 +898,27 @@ func handleAllowanceBatch(runtime localRuntime) gin.HandlerFunc {
 		}
 		c.JSON(200, gin.H{"success": true, "data": input.Services})
 	}
+}
+
+// Reserved funds authorize at most one upstream dispatch. Proven local transport
+// failures before dispatch may recover within the Pack's existing retry bound.
+func allowanceRetryAllowed(c *gin.Context, written bool) bool {
+	return !c.GetBool("localrouter_allowance_single_attempt") || !written
+}
+
+func (s *serviceAllowanceStore) releaseNotSent(id string) error {
+	return s.transaction(true, func(doc *serviceAllowanceDocument) error {
+		receipt, ok := doc.Receipts[id]
+		if !ok || receipt.ReconciliationReason == "upstream_not_sent" {
+			return errAllowanceNoChange
+		}
+		receipt.Amount, receipt.Pending, receipt.SettledAt = 0, false, time.Now().Unix()
+		receipt.ReconciliationReason = "upstream_not_sent"
+		doc.Receipts[id] = receipt
+		if grant, ok := doc.Grants[receipt.GrantID]; ok && grant.Service == receipt.Service && grant.Operation == receipt.Operation && grant.TokenID == receipt.TokenID && grant.ExpiresAt > time.Now().Unix() {
+			grant.Used = false
+			doc.Grants[receipt.GrantID] = grant
+		}
+		return nil
+	})
 }

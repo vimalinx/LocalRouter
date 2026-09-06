@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -93,7 +94,8 @@ type localRequestLog struct {
 }
 
 type localStore struct {
-	db *sql.DB
+	identityMu sync.Mutex
+	db         *sql.DB
 }
 
 func openLocalStore(path string) (*localStore, error) {
@@ -171,6 +173,11 @@ func (store *localStore) initialize() error {
 			deleted_at DATETIME
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tokens_user_id ON tokens(user_id)`,
+		`CREATE TABLE IF NOT EXISTS identity_requests (
+            id TEXT PRIMARY KEY, claim_hash TEXT NOT NULL, document TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending', token_id INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+        )`,
 		`CREATE TABLE IF NOT EXISTS channels (
 			id INTEGER PRIMARY KEY,
 			type INTEGER DEFAULT 1,
@@ -216,6 +223,9 @@ func (store *localStore) initialize() error {
 		if _, err := store.db.Exec(statement); err != nil {
 			return fmt.Errorf("initialize local database: %w", err)
 		}
+	}
+	if err := store.ensureColumn("identity_requests", "issued_key_hash", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
 	}
 	if err := store.ensureColumn("channels", "upstream_profile", `TEXT NOT NULL DEFAULT '{}'`); err != nil {
 		return err

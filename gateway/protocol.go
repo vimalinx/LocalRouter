@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -979,6 +981,8 @@ func registerProtocolConsumerRoutes(engine *gin.Engine, runtime localRuntime) {
 	agent := engine.Group("/agent")
 	agent.Use(localAPITokenAuth(runtime))
 	agent.GET("/whoami", handleAgentWhoAmI(runtime))
+	agent.POST("/access-requests", handleIdentityAccessRequest(runtime))
+	agent.GET("/access-requests/:id", handleIdentityAccessRequest(runtime))
 	agent.POST("/resolve", runtime.protocols.handleAgentResolve(runtime))
 	agent.POST("/compare", runtime.protocols.handleAgentCompare(runtime))
 	agent.GET("/operations", runtime.protocols.handleAgentCatalog(runtime))
@@ -1343,9 +1347,7 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 		}
 	}
 	excluded := make(map[string]bool)
-	if c.GetBool("localrouter_allowance_single_attempt") {
-		maxAttempts = 1
-	}
+	c.Set("localrouter_allowance_dispatch", "not_sent")
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		c.Set("localrouter_protocol_attempts", attempt+1)
 		acquired, acquireErr := registry.acquireCredential(definition, route, affinityKey, excluded)
@@ -1369,8 +1371,11 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 		if targetName != "" {
 			c.Set("localrouter_protocol_target", targetName)
 		}
-		wroteRequest := false
-		trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { wroteRequest = true }}
+		var requestWritten atomic.Bool
+		trace := &httptrace.ClientTrace{
+			WroteHeaders: func() { requestWritten.Store(true) },
+			WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) },
+		}
 		requestContext := httptrace.WithClientTrace(ctx, trace)
 		providerMethod := c.Request.Method
 		if route.UpstreamMethod != "" {
@@ -1416,7 +1421,15 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "trace_unavailable"})
 			return
 		}
+		c.Set("localrouter_allowance_dispatch", "unknown")
 		response, requestErr := registry.client.Do(request)
+		// Absence of a trace callback is not proof of non-execution: custom
+		// transports and cancellation can return before callbacks finish.
+		definitelyNotSent := protocolDefinitelyNotSent(requestErr, requestWritten.Load())
+		wroteRequest := !definitelyNotSent
+		if definitelyNotSent {
+			c.Set("localrouter_allowance_dispatch", "not_sent")
+		}
 		responseStatus := 0
 		if response != nil {
 			responseStatus = response.StatusCode
@@ -1424,12 +1437,12 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 		finishAttempt(responseStatus, wroteRequest, requestErr)
 		if requestErr != nil {
 			_ = registry.releaseCredential(definition, acquired, http.StatusBadGateway, "")
-			if attempt+1 < maxAttempts && routeRetryAllowed(route, providerMethod, wroteRequest, idempotencyKey, true, 0) {
+			if attempt+1 < maxAttempts && allowanceRetryAllowed(c, wroteRequest) && routeRetryAllowed(route, providerMethod, wroteRequest, idempotencyKey, true, 0) {
 				continue
 			}
 			if wroteRequest && !routeMethodNaturallyIdempotent(providerMethod) && idempotencyKey == "" {
 				c.Set("localrouter_protocol_outcome", "unknown")
-				writeAgentError(c, routeUnknownOutcomeStatus(route), "upstream_outcome_unknown", "upstream request outcome is unknown", "the request was written but no authoritative response was received", false, "provider", "reconcile provider state using the returned resource or idempotency key; do not replay blindly", nil, registry.alternativeOperationRefs(c.GetInt(tokenPolicyContextID), definition.ID, route.OperationID), gin.H{"outcome": "unknown", "operation_id": route.OperationID})
+				writeAgentError(c, routeUnknownOutcomeStatus(route), "upstream_outcome_unknown", "upstream request outcome is unknown", "the request may have reached the provider but no authoritative response was received", false, "provider", "reconcile provider state using the returned resource or idempotency key; do not replay blindly", nil, registry.alternativeOperationRefs(c.GetInt(tokenPolicyContextID), definition.ID, route.OperationID), gin.H{"outcome": "unknown", "operation_id": route.OperationID})
 				return
 			}
 			if errors.Is(requestErr, context.DeadlineExceeded) {
@@ -1442,7 +1455,7 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 		if response.StatusCode == http.StatusUnauthorized && definition.Auth.Type == "oauth2" {
 			registry.invalidateOAuthToken(definition, acquired)
 		}
-		shouldRetry := attempt+1 < maxAttempts && routeRetryAllowed(route, providerMethod, true, idempotencyKey, false, response.StatusCode)
+		shouldRetry := attempt+1 < maxAttempts && allowanceRetryAllowed(c, true) && routeRetryAllowed(route, providerMethod, true, idempotencyKey, false, response.StatusCode)
 		if releaseErr := registry.releaseCredential(definition, acquired, response.StatusCode, response.Header.Get("Retry-After")); releaseErr != nil {
 			response.Body.Close()
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist protocol pool state"})
@@ -1632,4 +1645,16 @@ func (registry *protocolRegistry) handleDocsOne(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusNotFound, gin.H{"message": "unknown protocol"})
+}
+
+func protocolDefinitelyNotSent(err error, written bool) bool {
+	if err == nil || written {
+		return false
+	}
+	var networkError *net.OpError
+	if errors.As(err, &networkError) && networkError.Op == "dial" {
+		return true
+	}
+	var dnsError *net.DNSError
+	return errors.As(err, &dnsError)
 }

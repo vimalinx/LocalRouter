@@ -228,6 +228,7 @@ func serviceCallRuntime(runtime localRuntime, c *gin.Context) localRuntime {
 func (registry *protocolRegistry) startServiceAttempt(c *gin.Context, attempt int) (func(int, bool, error), error) {
 	trace := serviceTraceContext(c)
 	if trace == nil || registry.workspace == nil {
+		c.Set("localrouter_upstream_attempts", attempt)
 		return func(int, bool, error) {}, nil
 	}
 	child := *trace
@@ -240,6 +241,7 @@ func (registry *protocolRegistry) startServiceAttempt(c *gin.Context, attempt in
 		return nil, err
 	}
 	trace.UpstreamCalled = true
+	c.Set("localrouter_upstream_attempts", attempt)
 	return func(status int, wrote bool, err error) {
 		now := time.Now().UTC()
 		child.FinishedAt = &now

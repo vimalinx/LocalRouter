@@ -8,6 +8,18 @@ published.
 
 ### 0.2.0 maintenance branch
 
+- Added human-reviewed exact-scope identity enrollment with private resumable CLI
+  delivery, automatic claim on daily calls, and owned scope-change requests.
+  Approvals preserve counters, reject stale policy changes, and cannot revive
+  revoked identities; enrollment is absent from the LAN listener.
+- Added private raw execution receipts and trace-only reconciliation through
+  `lr result`; structured failures report the blocking stage and next actor.
+- Recover bounded pre-dispatch failures without spending a second allowance;
+  confirmed unsent calls release reservations, while unknown results stay held.
+- Preserve service scope when editing Agent limits, revoke Tokens before any
+  policy cleanup, roll back failed policy persistence in memory, and reject
+  service credentials on human console APIs.
+
 - Exempted explicitly published read-only model discovery from generation
   budgets while preserving explicit deny/approval and Token/pool policies.
 - Reject unpriceable automatic USD allowances when enabling a rule or the

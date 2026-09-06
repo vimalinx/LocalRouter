@@ -169,6 +169,7 @@ export type LocalToken = {
   unlimited_quota: boolean
   group: string
   accessed_time?: number
+  expired_time?: number
   created_time?: number
 }
 

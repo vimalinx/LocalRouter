@@ -8,7 +8,10 @@
 
 - `ready: true` 表示当前 Token 对应一个已注册 Agent。核对 agent_code、workspace 是否确实属于你；共用别人的 Token 不会获得独立身份。
 - `ready: false` 或非零退出表示身份未准备好。`identity_kind: bootstrap` 是系统默认身份，不能当作你的独立身份。
-- 请人到返回的 registration_url（本机 `/#tokens`）登记 agent_code、agent_name、workspace，签发 Service Token，并保存到权限 0600 的私有文件。首次可将 `LOCALROUTER_API_TOKEN_FILE` 设为该文件的绝对路径检查身份，然后运行 `lr identity bind <agent-code> <token-file>` 保存本 Agent 会话的文件定位器。绑定会核对 agent_code、当前工作目录和服务权限，不创建身份，不复制 Token 值。Codex 自动使用会话 ID；其他宿主设置稳定且独立的 `LOCALROUTER_AGENT_SESSION`。不同会话、目录或 LocalRouter 地址不会共用绑定；显式文件变量始终优先。不要把 Token 发到聊天里。
+- 新接入优先运行 `lr identity request <agent-code> <policy-json|@file>`，明确给出 `packs`、Pack 限定的 `operations`，以及需要的 `models`、`daily_request_limit`、`requests_per_minute`、`max_in_flight`、`expires_at`。操作必须来自当前公共契约；不要使用通配 Pack 或操作。CLI 自动携带当前工作目录，不读取系统默认 Token 或管理员凭据。此命令仅申请权限，不调用供应商、不自动批准。
+- 人在返回的 registration_url（本机 `/#tokens`）核对服务、操作、模型和额度，点击「批准以上范围」。随后 `lr identity claim` 自动将凭据保存到私有 0600 文件并绑定当前 Agent；下一次 `lr exec` 也会自动领取已批准申请。不要把 Token 发到聊天里。未批准的申请返回明确状态，不能继续调用。
+- 同一会话再次申请相同内容、领取中断后重试都复用原申请/原身份，不清零用量。申请及凭据领取窗口为申请后 24 小时。用 `lr identity cancel` 撤回未生效的申请后可提交修改版；已经批准的身份应通过工作台撤销。Token 默认长期有效，无需周期性重新签发；设置的授权截止时间不会自动延长。
+- 已有人签发的 Token 仍支持 `lr identity bind <agent-code> <token-file>`。绑定核对 agent_code、工作目录和服务权限，只保存定位器。Codex 自动使用会话 ID；其他宿主设置稳定、独立的 `LOCALROUTER_AGENT_SESSION`。不同 Agent 会话、目录或服务地址不共用绑定；显式 `LOCALROUTER_API_TOKEN_FILE` 始终优先，启用自动接入前需去掉这个覆盖项。跨机器 LAN 仍使用人签发并安全交付的 Service Token，身份领取只在 loopback 提供。
 
 身份未准备好时，可以继续 `lr guide`、`lr tree` 和 `lr docs <pack>` 阅读公共契约；不要自行读管理员凭据或借免密 `/local/api` 签发身份。
 
@@ -34,13 +37,17 @@ lr docs <pack>
 
 ## 3. 日常调用
 
-取得目标操作的调用授权后，推荐一次完成准备和调用：
+在人已批准的服务、操作、模型、有效期和资源上限内，调用已获授权，无需逐次询问用户。只有扩大范围或提高上限才再次请求决定。推荐一次完成准备和调用：
 
 ```text
 lr exec <pack> <operation> <body-json> <path-params-json> <query-params-json>
 ```
 
-它核对独立身份，读取并复用本次执行的契约，解析精确模型与兼容操作，通过 preflight 后只发送一次正式请求，响应（包括 SSE）直接输出。失败停在原处，不自动重放正式请求。预检失败的 `blocked_at` 和 `reason` 指明第一处阻塞；`upstream_called=false` 表示预检未调用供应商。目录读取是单独的只读请求，不是生成。
+它自动领取已批准的待接入身份，核对身份并复用本次执行的契约，解析精确模型与兼容操作，通过 preflight 后向网关发送一次正式请求。响应（包括 SSE）直接输出，同时保存原始响应、退出状态及追踪 ID 到当前 Agent 的私有结果目录。`lr result` 列出记录，`lr result <call-id>` 查看原始响应文件定位器；`lr result <call-id> --refresh` 查询同一调用的网关证据，不重发供应商请求。`response_received` 只表示收到响应，不代表业务任务完成；中断或失败时结果保留为 unknown，先读已有结果和已公布的状态查询操作。
+
+预检失败的 `blocked_at`、`reason`、`resolution.automatic_checks`、`resolution.next_actor` 和 `next_action` 说明拦截位置、已做检查以及谁需要做什么。`upstream_called=false` 表示预检未调用供应商。目录读取是单独的只读请求，不是生成。网关按照 Pack 既有重试上限处理安全重试；启用共享额度时仅能确认未发出的请求可自动恢复，已发送或结果未知的请求不会因额度预留而重复发出。确定未发出的终止请求自动释放预留额度。
+
+需要扩大服务/操作/模型范围或提高 Token 限额时，Agent 可用 `lr identity access <complete-policy-json|@file>` 提交完整替换策略，人仍在工作台批准；`lr identity access-status <access-id>` 检查进度。批准前继续执行原权限；批准后 Token 与累计用量保持不变，能力包和共享额度继续约束。期间有人修改策略时旧批准被拒绝，需重新准备。服务新增操作不会自动加入接入时批准的范围。资源访问粒度以已批准操作的契约为准，Token 模型限制不等于任意业务对象的访问控制。
 
 需要单独检查或已有外部运行时自行准备时，保留低层命令：
 

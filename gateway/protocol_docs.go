@@ -281,7 +281,9 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"service_templates": "/agent/service-templates", "onboarding": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 				"catalog": "/agent/operations", "resolve": "/agent/resolve", "describe": "/agent/operations/{pack}/{operation}",
 				"compare": "/agent/compare", "preflight": "/agent/preflight", "whoami": "/agent/whoami",
-				"workflow": "/w/{pack}/{workflow}", "docs": "/docs/agent.json", "getting_started": "/docs/agent-start.md", "start_command": "lr init",
+				"identity_enrollment": gin.H{"available": scope == loopbackScope, "scope": loopbackScope, "request": "/agent/identity-requests", "approval": "human-console", "claim": "private proof, no Service Token required"},
+				"access_requests":     "/agent/access-requests",
+				"workflow":            "/w/{pack}/{workflow}", "docs": "/docs/agent.json", "getting_started": "/docs/agent-start.md", "start_command": "lr init",
 				"selection_mode": "agent", "merged": false,
 			},
 			"agent_identity": gin.H{
@@ -320,6 +322,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 			"protocols":           registry.views(),
 			"authentication": gin.H{
 				"type": "bearer", "header": "Authorization", "applies_to": []string{"/agent/*", "/p/*", "/w/*", "/mcp", "/v1/*", "/v1beta/*"},
+				"exceptions": gin.H{"/agent/identity-requests": "loopback-only private enrollment proof; no service authority before human approval"},
 			},
 			"protocol_pack_versions": []string{"1", "2", "3"},
 		})

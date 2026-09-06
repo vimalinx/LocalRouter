@@ -6,6 +6,8 @@ import { TokensPage } from '@/features/tokens/tokens-page'
 import { adminRequest } from '@/lib/api'
 import type { LocalToken } from '@/lib/types'
 
+vi.mock('@/features/tokens/identity-requests', () => ({ IdentityRequests: () => null }))
+
 vi.mock('@/lib/api', () => ({
   adminRequest: vi.fn(),
   formatTimestamp: () => '—',
@@ -25,6 +27,27 @@ const defaultToken: LocalToken = {
 
 describe('TokensPage issuance', () => {
   beforeEach(() => vi.mocked(adminRequest).mockReset())
+
+  it('preserves service scope and expiry when editing limits, and revokes without dropping the policy first', async () => {
+    const user = userEvent.setup()
+    const token: LocalToken = { ...defaultToken, id: 9, name: 'scoped', agent_code: 'scoped-agent', agent_name: 'Scoped Agent', workspace: '/fixture', expired_time: 1900000000 }
+    const policy = { token_id: 9, surfaces: ['p'], packs: ['search'], operations: ['search.find'], models: ['chosen'], expires_at: 1900000000, daily_request_limit: 10 }
+    vi.mocked(adminRequest).mockResolvedValue(undefined as never)
+    render(<TokensPage adminToken='' tokens={[token]} usage={[]} policies={[policy]} maintenanceAccess={{ agent_tokens_enabled: false, default_auth: 'admin', admin_header: 'X-Local-Admin', agent_auth: 'bearer', agent_capability: 'localrouter.maintain', service_tokens: 'call-only', maintenance_tokens: 'maintenance-only' }} apiTokenFile='/fixture/token' onChanged={vi.fn().mockResolvedValue([token])} />)
+    await user.click(screen.getByRole('button', { name: '编辑 Agent Scoped Agent' }))
+    await user.clear(screen.getByLabelText('每日请求'))
+    await user.type(screen.getByLabelText('每日请求'), '12')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const policyWrite = vi.mocked(adminRequest).mock.calls.find(([path]) => path === '/local/api/token-policies/9')!
+    expect(JSON.parse(policyWrite[2]!.body as string)).toMatchObject({ ...policy, daily_request_limit: 12 })
+    const identityWrite = vi.mocked(adminRequest).mock.calls.find(([path]) => path === '/local/api/tokens')!
+    expect(JSON.parse(identityWrite[2]!.body as string).expired_time).toBe(1900000000)
+    await user.click(screen.getByRole('button', { name: '撤销令牌 scoped' }))
+    await user.click(screen.getByRole('button', { name: '确认撤销' }))
+    await waitFor(() => expect(adminRequest).toHaveBeenCalledWith('/local/api/tokens/9', '', { method: 'DELETE' }))
+    expect(vi.mocked(adminRequest).mock.calls.filter(([, , init]) => init?.method === 'DELETE').map(([path]) => path)).toEqual(['/local/api/tokens/9'])
+  })
 
   it('registers an Agent, binds its workspace and limits, then reveals the new value once', async () => {
     const user = userEvent.setup()

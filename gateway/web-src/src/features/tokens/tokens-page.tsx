@@ -2,6 +2,7 @@ import { Bot, Copy, Eye, EyeOff, KeyRound, Plus, RefreshCw, Save, Settings2, Shi
 import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 
+import { IdentityRequests } from './identity-requests'
 import { EmptyState } from '@/components/empty-state'
 import { SectionHeader } from '@/components/section-header'
 import { Badge } from '@/components/ui/badge'
@@ -239,7 +240,6 @@ export function TokensPage(props: {
   async function revokeToken() {
     if (!revokeTarget) return
     try {
-      await adminRequest<unknown>(`/local/api/token-policies/${revokeTarget.id}`, props.adminToken, { method: 'DELETE' })
       await adminRequest<unknown>(`/local/api/tokens/${revokeTarget.id}`, props.adminToken, { method: 'DELETE' })
       const revokedId = revokeTarget.id
       setRevokeTarget(null)
@@ -277,7 +277,7 @@ export function TokensPage(props: {
         await adminRequest('/local/api/tokens', props.adminToken, {
           method: 'PUT',
           body: JSON.stringify({
-            id: policyTarget.id, status: policyTarget.status, expired_time: -1,
+            id: policyTarget.id, status: policyTarget.status, expired_time: policyTarget.expired_time ?? -1,
             name: draft.tokenName.trim(), agent_code: draft.agentCode.trim(), agent_name: draft.agentName.trim(),
             workspace: draft.workspace.trim(), runtime: draft.runtime.trim(),
           }),
@@ -286,6 +286,7 @@ export function TokensPage(props: {
       await adminRequest(`/local/api/token-policies/${policyTarget.id}`, props.adminToken, {
         method: 'PUT',
         body: JSON.stringify({
+          ...props.policies?.find((item) => item.token_id === policyTarget.id),
           capabilities: draft.maintainer ? ['localrouter.maintain'] : [],
           requests_per_minute: integerValue(draft.requestsPerMinute),
           daily_request_limit: integerValue(draft.dailyRequestLimit),
@@ -313,13 +314,15 @@ export function TokensPage(props: {
           <Dialog open={issueOpen} onOpenChange={(open) => { setIssueOpen(open); if (!open) setDraft(emptyDraft) }}>
             <DialogTrigger asChild><Button><Plus aria-hidden='true' />注册 Agent</Button></DialogTrigger>
             <DialogContent className='sm:max-w-2xl'>
-              <DialogHeader><DialogTitle>注册 Agent 并签发 Token</DialogTitle><DialogDescription>编码在本机唯一；Token 与身份绑定，额度留空表示不限。</DialogDescription></DialogHeader>
+              <DialogHeader><DialogTitle>注册 Agent 并签发 Token</DialogTitle><DialogDescription>手动注册沿用现有全部服务权限，额度留空表示不限。要限定服务和操作，请让 Agent 提交接入申请。</DialogDescription></DialogHeader>
               <AgentForm id='issue-agent-form' draft={draft} onChange={setDraft} onSubmit={issueAgent} />
               <DialogFooter><Button variant='outline' type='button' onClick={() => setIssueOpen(false)}>取消</Button><Button form='issue-agent-form' type='submit' disabled={issuing}>{issuing ? '注册中…' : '注册并签发'}</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         }
       />
+
+      <IdentityRequests adminToken={props.adminToken} onChanged={props.onChanged} />
 
       <section className='border-y py-3' aria-labelledby='maintenance-title'>
         <div className='flex flex-wrap items-center gap-2'>
@@ -371,7 +374,7 @@ export function TokensPage(props: {
                   <div className='grid grid-cols-2 gap-x-4 gap-y-1 text-xs'>
                     <span className='text-muted-foreground'>额度</span><span className='text-right tabular-nums'>{quotaLabel(usage)}</span>
                     <span className='text-muted-foreground'>成本</span><span className='text-right tabular-nums'>{costLabel(usage)}</span>
-                    <span className='text-muted-foreground'>最后使用</span><span className='text-right'>{formatTimestamp(usage?.last_used_at || token.accessed_time)}</span>
+                    <span className='text-muted-foreground'>最后使用</span><span className='text-right'>{formatTimestamp(usage?.last_used_at || token.accessed_time || undefined)}</span>
                     <span className='text-muted-foreground'>Token</span><code className='truncate text-right'>{visible || token.key || '已遮罩'}</code>
                   </div>
                   <div className='flex flex-wrap gap-1 xl:justify-end'>

@@ -691,6 +691,7 @@ func buildServer(runtime localRuntime) *gin.Engine {
 	engine.Use(gin.Recovery(), serverScope(loopbackScope), localHostGuard(), localSecurityHeaders())
 
 	registerConsoleRoutes(engine, runtime)
+	registerIdentityRequestRoutes(engine, runtime)
 	registerLocalAdminRoutes(engine, runtime)
 	registerProtocolRoutes(engine, runtime)
 	registerRelayRoutesWithRuntime(engine, runtime)
@@ -858,6 +859,7 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 	admin := engine.Group("/local/api")
 	admin.Use(localAdminAuth(runtime.adminAuth, runtime.adminToken, runtime.rootUser))
 	registerServiceAdminRoutes(admin, runtime)
+	registerIdentityAdminRoutes(admin, runtime)
 	{
 		admin.GET("/summary", localSummary(runtime))
 		admin.POST("/update/check", handleUpdateCheck(runtime))
@@ -927,6 +929,10 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 
 func localAdminAuth(setting *adminAuthStore, expected *adminTokenStore, root localUser) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.GetHeader("Authorization") != "" || c.GetHeader("X-Api-Key") != "" || c.GetHeader("X-Goog-Api-Key") != "" || c.Query("key") != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "human_console_required", "message": "service and maintenance credentials cannot authorize human console APIs"})
+			return
+		}
 		if !setting.isEnabled() {
 			setLocalAdministrator(c, root)
 			c.Next()
