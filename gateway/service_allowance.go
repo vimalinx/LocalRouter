@@ -56,11 +56,30 @@ type serviceAllowanceGrant struct {
 	Used      bool   `json:"used"`
 }
 type serviceAllowanceDocument struct {
+	Settings *serviceAllowanceSettings          `json:"settings,omitempty"`
 	Version  int                                `json:"version"`
 	Rules    map[string]serviceAllowanceRule    `json:"rules"`
 	Receipts map[string]serviceAllowanceReceipt `json:"receipts"`
 	Grants   map[string]serviceAllowanceGrant   `json:"grants"`
 }
+type serviceAllowanceSettings struct {
+	Enabled  bool  `json:"enabled"`
+	Revision int64 `json:"revision"`
+}
+
+// Only legacy documents infer activation. Once stored, an explicit global off
+// stays off even when individual rules remain enabled for later reuse.
+func allowanceSettings(doc *serviceAllowanceDocument) serviceAllowanceSettings {
+	if doc.Settings != nil {
+		return *doc.Settings
+	}
+	settings := serviceAllowanceSettings{}
+	for _, rule := range doc.Rules {
+		settings.Enabled = settings.Enabled || rule.Enabled
+	}
+	return settings
+}
+
 type serviceAllowanceStore struct{ path string }
 type serviceAllowanceDecision struct {
 	OperationLimit     *int64 `json:"operation_limit,omitempty"`
@@ -125,6 +144,11 @@ func (s *serviceAllowanceStore) transaction(write bool, fn func(*serviceAllowanc
 			return errors.New("invalid allowance receipt in storage")
 		}
 	}
+	settings := allowanceSettings(&doc)
+	if settings.Revision < 0 {
+		return errors.New("invalid allowance settings in storage")
+	}
+	doc.Settings = &settings
 	if err = fn(&doc); err != nil {
 		if errors.Is(err, errAllowanceNoChange) {
 			return nil
@@ -196,8 +220,8 @@ func defaultAllowanceRule() serviceAllowanceRule {
 }
 func allowanceDecision(doc *serviceAllowanceDocument, service, operation string, tokenID int, quote int64, now time.Time) serviceAllowanceDecision {
 	r := doc.Rules[service]
-	d := serviceAllowanceDecision{Enabled: r.Enabled, Allowed: true, Message: "shared allowance is disabled; existing authorization applies", Unit: r.Unit}
-	if !r.Enabled {
+	d := serviceAllowanceDecision{Enabled: allowanceSettings(doc).Enabled && r.Enabled, Allowed: true, Message: "shared allowance is disabled; existing authorization applies", Unit: r.Unit}
+	if !d.Enabled {
 		return d
 	}
 	d.Allowed = false
@@ -460,6 +484,51 @@ func handleAllowanceList(runtime localRuntime) gin.HandlerFunc {
 		c.JSON(200, gin.H{"success": true, "data": items})
 	}
 }
+func handleAllowanceSettings(runtime localRuntime) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var input struct {
+			Enabled  *bool  `json:"enabled"`
+			Revision *int64 `json:"revision"`
+		}
+		write := c.Request.Method == http.MethodPut
+		if write {
+			if err := decodeAllowanceRequest(c, &input); err != nil {
+				allowanceAdminError(c, err)
+				return
+			}
+			if input.Enabled == nil || input.Revision == nil {
+				allowanceAdminError(c, errors.New("enabled and revision are required"))
+				return
+			}
+		}
+		var settings serviceAllowanceSettings
+		err := runtime.policies.allowances.transaction(write, func(doc *serviceAllowanceDocument) error {
+			settings = allowanceSettings(doc)
+			if !write {
+				return nil
+			}
+			if settings.Revision != *input.Revision {
+				return errors.New("configuration changed; reload before saving")
+			}
+			settings.Enabled = *input.Enabled
+			settings.Revision++
+			doc.Settings = &settings
+			if !settings.Enabled {
+				for id, grant := range doc.Grants {
+					if !grant.Used {
+						delete(doc.Grants, id)
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			allowanceAdminError(c, err)
+			return
+		}
+		c.JSON(200, gin.H{"success": true, "data": settings})
+	}
+}
 func handleAllowancePut(runtime localRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		service := c.Param("service")
@@ -512,7 +581,7 @@ func handleAllowanceGrant(runtime localRuntime) gin.HandlerFunc {
 		grant := serviceAllowanceGrant{ID: newRelayRequestID(), Service: service, Operation: input.Operation, TokenID: input.TokenID, ExpiresAt: time.Now().Add(time.Hour).Unix()}
 		err = runtime.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
 			r := doc.Rules[service]
-			if !r.Enabled || r.Mode == "deny" || (allowanceMatches(r.DeniedOperations, input.Operation) || allowanceMatches(r.DeniedOperations, canonicalAllowanceOperation(service, input.Operation))) {
+			if !allowanceSettings(doc).Enabled || !r.Enabled || r.Mode == "deny" || (allowanceMatches(r.DeniedOperations, input.Operation) || allowanceMatches(r.DeniedOperations, canonicalAllowanceOperation(service, input.Operation))) {
 				return errors.New("service allowance is disabled or operation is prohibited")
 			}
 			doc.Grants[grant.ID] = grant

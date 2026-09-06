@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"net/http"
@@ -19,6 +20,7 @@ func allowanceFixture(t *testing.T, limit int64) *serviceAllowanceStore {
 	t.Helper()
 	s := newServiceAllowanceStore(t.TempDir())
 	require.NoError(t, s.transaction(true, func(doc *serviceAllowanceDocument) error {
+		doc.Settings.Enabled = true
 		r := defaultAllowanceRule()
 		r.Unit = "requests"
 		r.Enabled = true
@@ -191,6 +193,8 @@ func TestServiceAllowanceHTTPPreflightAndHumanBoundary(t *testing.T) {
 	}
 	status, body := setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowances/allowtest", rule)
 	require.Equal(t, 200, status, string(body))
+	status, body = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowance-settings", serviceAllowanceSettings{Enabled: true})
+	require.Equal(t, 200, status, string(body))
 	// Optimistic revisions prevent two human editors overwriting each other.
 	status, _ = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowances/allowtest", rule)
 	require.Equal(t, 400, status)
@@ -252,6 +256,7 @@ func TestServiceAllowanceCompatibilitySharedAcrossAgents(t *testing.T) {
 	require.True(t, ok)
 	service := "compatibility:" + profile.Key
 	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+		doc.Settings.Enabled = true
 		r := defaultAllowanceRule()
 		r.Unit = "requests"
 		r.Enabled = true
@@ -432,4 +437,100 @@ func TestServiceAllowanceBatchDefaultsAndRollback(t *testing.T) {
 	a.Rule.OperationLimits = map[string]int64{"does.not.exist": 1}
 	status, _ = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowances/"+a.Service, a.Rule)
 	require.Equal(t, 400, status)
+}
+
+func TestServiceAllowanceGlobalSettingsLifecycle(t *testing.T) {
+	rt, owner, _, maintainer, server := serviceWorkspaceFixture(t)
+	read := func() serviceAllowanceSettings {
+		status, body := setupHTTP(t, server, localToken{}, "GET", "/local/api/service-allowance-settings", nil)
+		require.Equal(t, 200, status, string(body))
+		var result struct {
+			Data serviceAllowanceSettings `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(body, &result))
+		return result.Data
+	}
+	require.Equal(t, serviceAllowanceSettings{}, read())
+	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+		r := defaultAllowanceRule()
+		r.Enabled = true
+		r.Unit = "requests"
+		r.Limit = 1
+		doc.Rules["test"] = r
+		return nil
+	}))
+	// Enabling a service alone cannot activate the feature.
+	d, id, err := rt.policies.allowances.evaluate("test", "run", owner.ID, -1, true)
+	require.NoError(t, err)
+	require.False(t, d.Enabled)
+	require.True(t, d.Allowed)
+	require.Empty(t, id)
+	for _, token := range []localToken{owner, maintainer} {
+		status, _ := setupHTTP(t, server, token, "PUT", "/local/api/service-allowance-settings", serviceAllowanceSettings{Enabled: true})
+		require.Equal(t, 403, status)
+	}
+	status, body := setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowance-settings", serviceAllowanceSettings{Enabled: true})
+	require.Equal(t, 200, status, string(body))
+	d, id, err = rt.policies.allowances.evaluate("test", "run", owner.ID, -1, true)
+	require.NoError(t, err)
+	require.True(t, d.Enabled)
+	require.True(t, d.Allowed)
+	require.NotEmpty(t, id)
+	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+		doc.Grants["unused"] = serviceAllowanceGrant{ID: "unused", Service: "test", Operation: "run", TokenID: owner.ID, ExpiresAt: time.Now().Add(time.Hour).Unix()}
+		return nil
+	}))
+	status, _ = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowance-settings", serviceAllowanceSettings{})
+	require.Equal(t, 400, status) // stale write must not disable enforcement
+	require.True(t, read().Enabled)
+	status, _ = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowance-settings", map[string]any{"revision": 1})
+	require.Equal(t, 400, status)
+	status, body = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowance-settings", serviceAllowanceSettings{Revision: 1})
+	require.Equal(t, 200, status, string(body))
+	restarted := newServiceAllowanceStore(filepath.Dir(rt.policies.allowances.path))
+	d, nextID, err := restarted.evaluate("test", "run", owner.ID, -1, true)
+	require.NoError(t, err)
+	require.False(t, d.Enabled)
+	require.Empty(t, nextID)
+	require.NoError(t, restarted.transaction(false, func(doc *serviceAllowanceDocument) error {
+		require.True(t, doc.Rules["test"].Enabled)
+		require.Contains(t, doc.Receipts, id)
+		require.Empty(t, doc.Grants)
+		return nil
+	}))
+	status, body = setupHTTP(t, server, localToken{}, "PUT", "/local/api/service-allowance-settings", serviceAllowanceSettings{Enabled: true, Revision: 2})
+	require.Equal(t, 200, status, string(body))
+	d, _, err = restarted.evaluate("test", "run", owner.ID, -1, true)
+	require.NoError(t, err)
+	require.True(t, d.Enabled)
+	require.False(t, d.Allowed)
+	require.EqualValues(t, 0, d.Remaining)
+}
+
+func TestServiceAllowanceLegacyActivationMigration(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			s := newServiceAllowanceStore(t.TempDir())
+			r := defaultAllowanceRule()
+			r.Enabled = enabled
+			r.Mode = "deny"
+			doc := serviceAllowanceDocument{Version: 1, Rules: map[string]serviceAllowanceRule{"test": r}, Receipts: map[string]serviceAllowanceReceipt{}, Grants: map[string]serviceAllowanceGrant{}}
+			data, err := json.Marshal(doc)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(s.path, data, 0600))
+			d, _, err := s.evaluate("test", "run", 2, -1, true)
+			require.NoError(t, err)
+			require.Equal(t, enabled, d.Enabled)
+			require.Equal(t, !enabled, d.Allowed)
+			require.NoError(t, s.transaction(true, func(doc *serviceAllowanceDocument) error {
+				require.Equal(t, enabled, doc.Settings.Enabled)
+				return nil
+			}))
+			data, err = os.ReadFile(s.path)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(data, &doc))
+			require.NotNil(t, doc.Settings)
+			require.Equal(t, enabled, doc.Settings.Enabled)
+		})
+	}
 }

@@ -1,6 +1,6 @@
 # 服务共享自主额度
 
-此功能默认关闭，不改变现有 Token 和能力包权限。人从控制台「服务与渠道 → 自主额度」从可搜索的服务列表选择服务，配置并保存启用。新配置以每月 3 美元为基础额度，仍须手动开启。Agent 没有配置、提额或批准自己的 MCP/Service API。
+此功能设有默认关闭的总开关，不改变现有 Token 和能力包权限。人从控制台「服务与渠道 → 自主额度」开启总开关后，从可搜索的服务列表选择服务，配置并保存启用。关闭总开关时收起配置区，所有服务暂停自主额度检查；已保存的规则、用量和待核对记录保留，重新开启继续使用，未使用的单次批准会撤销。旧版本若已有启用的服务规则，升级保留总开关开启，避免意外撤销现有调用限制；旧版本没有启用规则及新安装均默认关闭。新配置以每月 3 美元为基础额度，仍须手动开启。Agent 没有配置、提额或批准自己的 MCP/Service API。
 
 每个完整 Protocol Pack 共用一个额度池；兼容渠道按 Channel Profile 共用一个池（`compatibility:<profile-key>`），同类 Profile 下的多个渠道不是多个独立池。已登记的 Agent 共享余额，bootstrap 身份不能使用启用后的额度池。
 
@@ -29,6 +29,8 @@
 
 人工接口：
 
+- `GET /local/api/service-allowance-settings`，读取总开关及 revision。
+- `PUT /local/api/service-allowance-settings`，发送 `{enabled, revision}`，立即生效，冲突时须重新读取；单独保存服务规则不会自动开启总开关。
 - `GET /local/api/service-allowances`
 - `PUT /local/api/service-allowances/:service`，发送完整 rule，必须带读取到的 revision。
 - `POST /local/api/service-allowances/batch`，发送 `{services: [{service, rule}]}`，每条 rule 必须带 revision，最多 100 个服务，原子保存。

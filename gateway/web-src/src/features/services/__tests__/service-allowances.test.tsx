@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, it, vi } from 'vitest'
-import { ServiceAllowances } from '../service-allowances'
+import { ServiceAllowanceConfiguration as ServiceAllowances, ServiceAllowances as AllowancePage } from '../service-allowances'
 import { adminRequest } from '@/lib/api'
 vi.mock('@/lib/api', () => ({ adminRequest: vi.fn() }))
 const rule = { enabled: false, mode: 'quota', unit: 'requests', period: 'month', limit: 0, revision: 0, approval_operations: [], denied_operations: [] }
@@ -87,4 +87,34 @@ it('saves multiple service limits atomically and preserves their enabled states'
   expect(vi.mocked(adminRequest).mock.calls[1][0]).toBe('/local/api/service-allowances/batch')
   const body = JSON.parse(String(vi.mocked(adminRequest).mock.calls[1][2]?.body))
   expect(body.services.map((entry: { rule: { limit: number; enabled: boolean; unit: string } }) => [entry.rule.limit, entry.rule.enabled, entry.rule.unit])).toEqual([[3000000, false, 'usd_micros'], [3000000, true, 'usd_micros']])
+})
+
+it('keeps the whole feature collapsed until the human enables it and persists off', async () => {
+  vi.mocked(adminRequest).mockResolvedValueOnce({ enabled: false, revision: 0 })
+    .mockResolvedValueOnce({ enabled: true, revision: 1 }).mockResolvedValueOnce([item])
+    .mockResolvedValueOnce({ enabled: false, revision: 2 })
+  const user = userEvent.setup(); render(<AllowancePage adminToken='' />)
+  const toggle = await screen.findByRole('switch', { name: '启用自主额度' })
+  await waitFor(() => expect(toggle).toBeEnabled())
+  expect(toggle).not.toBeChecked()
+  expect(screen.queryByRole('textbox', { name: '搜索额度服务' })).not.toBeInTheDocument()
+  expect(adminRequest).toHaveBeenCalledTimes(1)
+  await user.click(toggle)
+  expect(await screen.findByRole('textbox', { name: '搜索额度服务' })).toBeInTheDocument()
+  expect(toggle).toBeChecked()
+  expect(JSON.parse(String(vi.mocked(adminRequest).mock.calls[1][2]?.body))).toEqual({ enabled: true, revision: 0 })
+  await user.click(toggle)
+  await waitFor(() => expect(toggle).not.toBeChecked())
+  expect(screen.queryByRole('textbox', { name: '搜索额度服务' })).not.toBeInTheDocument()
+  expect(JSON.parse(String(vi.mocked(adminRequest).mock.calls[3][2]?.body))).toEqual({ enabled: false, revision: 1 })
+})
+it('does not reveal configuration when enabling fails', async () => {
+  vi.mocked(adminRequest).mockResolvedValueOnce({ enabled: false, revision: 2 }).mockRejectedValueOnce(new Error('配置已变更'))
+  const user = userEvent.setup(); render(<AllowancePage adminToken='' />)
+  const toggle = await screen.findByRole('switch', { name: '启用自主额度' })
+  await waitFor(() => expect(toggle).toBeEnabled())
+  await user.click(toggle)
+  expect(await screen.findByRole('alert')).toHaveTextContent('配置已变更')
+  expect(toggle).not.toBeChecked()
+  expect(screen.queryByRole('textbox', { name: '搜索额度服务' })).not.toBeInTheDocument()
 })

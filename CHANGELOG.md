@@ -8,6 +8,9 @@ published.
 
 ### 0.2.0 maintenance branch
 
+- Added a default-off master switch for shared allowances, with collapsed
+  configuration while off, preserved usage on re-enable, and migration that
+  retains already-active policies.
 - Added human-configured, opt-in shared service allowances with request-count
   and confirmed fixed-price USD budgets. All existing services remain disabled
   by default; Token and capability-bundle permissions still apply.

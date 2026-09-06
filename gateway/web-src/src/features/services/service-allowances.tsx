@@ -31,6 +31,38 @@ const units = (amount: number, rule: Rule) => rule.unit === 'usd_micros' ? `$${n
 const allowanceMode = (rule: Rule) => !rule.enabled ? '未启用' : rule.mode === 'quota' ? '额度内自主' : rule.mode === 'approval' ? '需批准' : '禁止使用'
 
 export function ServiceAllowances({ adminToken }: { adminToken: string }) {
+  const [settings, setSettings] = useState<{ enabled: boolean; revision: number } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let live = true
+    setSettings(null); setError('')
+    adminRequest<{ enabled: boolean; revision: number }>('/local/api/service-allowance-settings', adminToken)
+      .then(result => { if (live) setSettings(result) })
+      .catch(err => { if (live) setError(String(err)) })
+    return () => { live = false }
+  }, [adminToken])
+  async function toggle() {
+    if (!settings || busy) return
+    setBusy(true); setError('')
+    try {
+      setSettings(await adminRequest('/local/api/service-allowance-settings', adminToken, { method: 'PUT', body: JSON.stringify({ ...settings, enabled: !settings.enabled }) }))
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
+    finally { setBusy(false) }
+  }
+  return <div className='flex h-full min-h-0 flex-col overflow-hidden'>
+    <div className='flex shrink-0 items-center justify-between gap-4 px-4 py-3'>
+      <div><h2 className='text-sm font-medium'>启用自主额度</h2><p className='mt-1 text-xs text-muted-foreground'>{settings?.enabled ? '已开启，可按服务配置使用限制。' : '默认关闭，按需开启后配置服务额度。'}</p></div>
+      <ActivationToggle checked={settings?.enabled ?? false} label='启用自主额度' disabled={busy || !settings} onChange={() => void toggle()} />
+    </div>
+    {error && <p role='alert' className='px-4 pb-3 text-sm text-destructive'>{error} <Button size='sm' variant='ghost' onClick={() => window.location.reload()}>重新加载</Button></p>}
+    {!settings && !error && <p role='status' className='px-4 py-3 text-sm text-muted-foreground'>正在读取设置…</p>}
+    {settings && !settings.enabled && <p className='border-t px-4 py-5 text-sm text-muted-foreground'>关闭时沿用现有调用权限，不检查自主额度。已保存的服务配置和用量会保留。</p>}
+    {settings?.enabled && <div className='min-h-0 flex-1'><ServiceAllowanceConfiguration adminToken={adminToken} /></div>}
+  </div>
+}
+
+export function ServiceAllowanceConfiguration({ adminToken }: { adminToken: string }) {
   const [items, setItems] = useState<Allowance[]>([])
   const [search, setSearch] = useState('')
   const [checkedServices, setCheckedServices] = useState<string[]>([])
