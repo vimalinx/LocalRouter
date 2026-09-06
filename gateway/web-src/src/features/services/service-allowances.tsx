@@ -102,7 +102,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
   const base = `/local/api/service-allowances/${encodeURIComponent(selected)}`
   if (loading) return <p role='status' className='p-4 text-sm'>正在读取服务额度…</p>
   return <div className='flex h-full min-h-0 flex-col gap-2 overflow-hidden'>
-    <div className='flex min-h-0 flex-1 flex-col overflow-hidden border-y lg:grid lg:grid-cols-[19rem_minmax(0,1fr)]'>
+    <div className='flex min-h-0 flex-1 flex-col overflow-hidden border-y lg:grid lg:grid-cols-[22rem_minmax(0,1fr)]'>
       <aside className='flex max-h-64 min-h-0 shrink-0 flex-col border-b lg:max-h-none lg:shrink lg:border-b-0 lg:border-r' aria-label='自主额度服务列表'>
         <div className='flex shrink-0 items-center justify-between border-b px-3 py-2'>
           <label className='flex items-center gap-2 text-xs font-medium'><input type='checkbox' aria-label='选择全部筛选服务' disabled={busy || !visibleItems.length} checked={visibleItems.length > 0 && visibleItems.every(item => checkedServices.includes(item.service))} onChange={event => setCheckedServices(event.target.checked ? [...new Set([...checkedServices, ...visibleItems.map(item => item.service)])] : checkedServices.filter(id => !visibleItems.some(item => item.service === id)))} />服务 <span className='ml-1 text-muted-foreground'>{items.length}</span></label>
@@ -112,7 +112,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
           <Search aria-hidden='true' className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
           <Input aria-label='搜索额度服务' placeholder='搜索服务名称' className='h-9 pl-8 text-xs' value={search} onChange={event => setSearch(event.target.value)} />
         </div>
-        <div className='mx-2 mb-2 flex shrink-0 items-center justify-between gap-2'><span className='text-[11px] text-muted-foreground'>基础额度 $3 · 手动启用</span><Button size='sm' variant='outline' disabled={busy || !checkedServices.length} onClick={() => { setBatchOpen(true); setError(''); setMessage('') }}>批量设置{checkedServices.length ? ` (${checkedServices.length})` : ''}</Button></div>
+        <div className='mx-2 mb-2 flex shrink-0 items-center justify-between gap-2'><span className='text-[11px] text-muted-foreground'>手动配置与启用</span><Button size='sm' variant='outline' disabled={busy || !checkedServices.length} onClick={() => { setBatchOpen(true); setError(''); setMessage('') }}>批量设置{checkedServices.length ? ` (${checkedServices.length})` : ''}</Button></div>
         <nav aria-label='自主额度服务' className='min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-1.5 pt-0 [scrollbar-gutter:stable]'>
           {visibleItems.map(item => {
             const selectedItem = item.service === selected
@@ -120,15 +120,19 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
             const quota = item.rule.enabled && item.rule.mode === 'quota'
             const usedPercent = item.rule.limit > 0 ? Math.max(0, Math.min(100, (item.spent + item.reserved) / item.rule.limit * 100)) : 0
             return <div key={item.service} className='flex items-start gap-0.5'><input className='ml-1.5 mt-4 shrink-0' type='checkbox' aria-label={`选择服务 ${item.name}`} disabled={busy} checked={checkedServices.includes(item.service)} onChange={() => setCheckedServices(previous => toggleSelection(previous, item.service))} /><button type='button' disabled={busy} aria-label={`${item.name} 自主额度`} aria-current={selectedItem ? 'page' : undefined}
-              className={cn('flex min-h-20 min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-md px-2.5 py-2.5 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait', selectedItem && 'bg-muted text-foreground')}
+              className={cn('flex min-h-14 min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-md px-2.5 py-2.5 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait', selectedItem && 'bg-muted text-foreground')}
               style={{ boxShadow: selectedItem ? `inset 2px 0 ${color}` : undefined }} onClick={() => selectService(item)}>
               <span className='mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md' style={{ color, backgroundColor: `color-mix(in oklch, ${color} 12%, transparent)` }}><ShieldCheck aria-hidden='true' className='size-4' /></span>
               <span className='min-w-0 flex-1'>
-                <span className='flex items-start justify-between gap-1.5'><span className='min-w-0 break-words text-xs font-medium'>{item.name}</span><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', item.rule.enabled ? 'bg-primary/10 text-primary' : 'bg-background/60 text-muted-foreground')}>{allowanceMode(item.rule)}</span></span>
-                <span className='mt-1 block text-[11px] tabular-nums text-muted-foreground'>{quota ? `剩余 ${units(item.remaining, item.rule)} / ${units(item.rule.limit, item.rule)}` : item.rule.enabled ? '逐次执行人工规则' : item.rule.revision === 0 ? `基础额度 ${units(item.rule.limit, item.rule)} · 待配置` : item.rule.limit > 0 ? `已配置 ${units(item.rule.limit, item.rule)}，未启用` : '尚未启用自主额度'}</span>
-                {quota && <span aria-hidden='true' className='mt-1.5 block h-1 overflow-hidden rounded-full bg-background'><span className={cn('block h-full rounded-full', item.remaining <= 0 ? 'bg-amber-500' : 'bg-primary/60')} style={{ width: `${usedPercent}%` }} /></span>}
-                {Object.keys(item.rule.operation_limits || {}).length > 0 && <span className='mt-1 block text-[10px] text-muted-foreground'>{Object.keys(item.rule.operation_limits || {}).length} 项独立子额度</span>}
-                {item.pending.length > 0 && <span className='mt-1 block text-[10px] text-amber-700 dark:text-amber-300'>{item.pending.length} 笔费用待核对</span>}
+                <span className='flex items-start justify-between gap-1.5'><span className='min-w-0 break-words text-sm font-medium'>{item.name}</span><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', item.rule.enabled ? 'bg-primary/10 text-primary' : 'bg-background/60 text-muted-foreground')}>{allowanceMode(item.rule)}</span></span>
+                {quota && <>
+                  <span className='mt-3 block text-xs text-muted-foreground'>剩余额度</span>
+                  <span className={cn('mt-1 block break-all text-3xl font-semibold leading-tight tracking-tight tabular-nums', item.remaining <= 0 && 'text-amber-700 dark:text-amber-300')}>{units(item.remaining, item.rule)}</span>
+                  <span className='mt-1 block text-xs tabular-nums text-muted-foreground'>总额度 {units(item.rule.limit, item.rule)} · {item.rule.period === 'day' ? '每天' : item.rule.period === 'month' ? '每月' : '一次性'}</span>
+                  <span aria-hidden='true' className='mt-2 block h-1.5 overflow-hidden rounded-full bg-background'><span className={cn('block h-full rounded-full', item.remaining <= 0 ? 'bg-amber-500' : 'bg-primary/60')} style={{ width: `${usedPercent}%` }} /></span>
+                </>}
+                {quota && Object.keys(item.rule.operation_limits || {}).length > 0 && <span className='mt-2 block text-xs text-muted-foreground'>{Object.keys(item.rule.operation_limits || {}).length} 项独立子额度</span>}
+                {item.rule.enabled && item.pending.length > 0 && <span className='mt-2 block text-xs text-amber-700 dark:text-amber-300'>{item.pending.length} 笔费用待核对</span>}
               </span>
             </button></div>
           })}
@@ -137,14 +141,23 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
       </aside>
       <section aria-label={current ? `${current.name} 额度配置` : '额度配置'} className='min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]'>
         <header className='flex items-start justify-between gap-3 border-b px-4 py-3 sm:px-5'>
-          <div className='min-w-0'><h2 className='break-words text-base font-semibold'>{current?.name || '服务自主使用额度'}</h2><p className='mt-1 text-xs text-muted-foreground'>{current ? `${allowanceMode(current.rule)} · ${current.service.startsWith('compatibility:') ? '兼容模型渠道' : 'Protocol Pack'}` : '从左侧选择服务配置共享额度。'}</p></div>
+          <div className='min-w-0'><h2 className='break-words text-base font-semibold'>{current?.name || '服务自主使用额度'}</h2><p className='mt-1 text-xs text-muted-foreground'>{current ? `${allowanceMode(current.rule)} · ${current.service.startsWith('compatibility:') ? '模型渠道' : '通用服务'}` : '从左侧选择服务配置共享额度。'}</p></div>
           <Button variant='ghost' size='sm' disabled={busy} onClick={() => void refresh()} aria-label='刷新服务额度'><RefreshCcw aria-hidden='true' className={cn('size-3.5', busy && 'animate-spin')} /><span className='hidden sm:inline'>刷新</span></Button>
         </header>
         <div className='max-w-4xl space-y-5 p-4 sm:p-5'>
-          <p className='text-sm text-muted-foreground'>默认关闭。只有人保存并启用后，已登记的 Agent 才能在共享额度内免逐次确认；原有访问权限仍然有效。</p>
+          {!current?.rule.enabled && <p className='text-sm text-muted-foreground'>自主额度未启用。可先保存配置，再手动开启。</p>}
           {error && !batchOpen && <p role='alert' className='text-sm text-destructive'>{error}</p>}
           {message && <p role='status' className='text-sm'>{message}</p>}
           {draft && current && <>
+        {current.rule.enabled && current.rule.mode === 'quota' && <section aria-label='当前服务额度' className='border-b pb-5'>
+          <p className='text-sm text-muted-foreground'>剩余额度</p>
+          <p className={cn('mt-2 break-all text-5xl font-semibold tracking-tight tabular-nums', current.remaining <= 0 && 'text-amber-700 dark:text-amber-300')}>{units(current.remaining, current.rule)}</p>
+          <dl className='mt-4 flex flex-wrap gap-x-8 gap-y-3 text-sm'>
+            <div><dt className='text-muted-foreground'>总额度</dt><dd className='mt-1 text-lg font-medium tabular-nums'>{units(current.rule.limit, current.rule)}</dd></div>
+            <div><dt className='text-muted-foreground'>已用</dt><dd className='mt-1 text-lg font-medium tabular-nums'>{units(current.spent, current.rule)}</dd></div>
+            <div><dt className='text-muted-foreground'>待核对</dt><dd className='mt-1 text-lg font-medium tabular-nums'>{units(current.reserved, current.rule)}</dd></div>
+          </dl>
+        </section>}
         <form className='space-y-4' onSubmit={event => { event.preventDefault(); void mutate(base, 'PUT', { ...draft, limit: Math.round(Number(limitText) * (draft.unit === 'requests' ? 1 : 1e6)), approval_operations: splitOperations(approvalText), denied_operations: splitOperations(deniedText), operation_limits: Object.fromEntries(Object.entries(subLimits).map(([id, value]) => [id, Math.round(Number(value) * (draft.unit === 'usd_micros' ? 1e6 : 1))])) }, draft.enabled ? '规则已保存并启用。' : '规则已保存，额度功能关闭。') }}>
           <fieldset disabled={busy} className='space-y-4'>
             <label className='flex min-h-11 items-center gap-2 text-sm'><input type='checkbox' checked={draft.enabled} onChange={event => setDraft({ ...draft, enabled: event.target.checked })} />启用此服务的自主使用限制</label>
@@ -156,7 +169,6 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
                 <label className='block space-y-1 text-sm'><span>额度周期</span><select className={selectClass} value={draft.period} onChange={event => setDraft({ ...draft, period: event.target.value as Rule['period'] })}><option value='once'>一次性</option><option value='day'>每天（UTC）</option><option value='month'>每月（UTC）</option></select></label>
               </div>
               <p className='text-sm text-muted-foreground'>多个 Agent 合计扣减。次数按获准调用计，不因失败退回。美元仅支持已确认的固定调用价格；变动或未知费用需单独批准。已有用量后不能更换单位和周期。</p>
-              <p className='text-sm'>当前已用 {units(current.spent, current.rule)} · 待核对 {units(current.reserved, current.rule)} · 剩余 {units(current.remaining, current.rule)}</p>
             </>}
             {draft.mode === 'quota' && <section className='space-y-3 border-y py-4' aria-label='操作子额度'>
               <div className='flex flex-wrap items-center justify-between gap-2'><h3 className='text-sm font-semibold'>操作子额度 <span className='font-normal text-muted-foreground'>{(current.operations || []).length} 项操作</span></h3><span className='text-xs text-muted-foreground'>{Object.keys(subLimits).length} 项已设置</span></div>
@@ -173,7 +185,7 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
                     const configured = Object.hasOwn(subLimits, op.id)
                     return <TableRow key={op.id}>
                       <TableCell className='px-2 py-2'><input type='checkbox' aria-label={`选择操作 ${op.id}`} checked={checkedOperations.includes(op.id)} onChange={() => setCheckedOperations(previous => toggleSelection(previous, op.id))} /></TableCell>
-                      <TableCell className='max-w-0 py-2'><span className='block break-words text-xs font-medium'>{op.name || op.id}</span><code className='block break-all text-[10px] text-muted-foreground'>{op.id}</code><span className='mt-1 block text-[10px] text-muted-foreground'>{op.configured ? `剩余 ${units(op.remaining, current.rule)} · 已用 ${units(op.spent, current.rule)}` : '共用服务总额度'}</span></TableCell>
+                      <TableCell className='max-w-0 py-2'><span className='block break-words text-xs font-medium'>{op.name || op.id}</span><code className='block break-all text-[10px] text-muted-foreground'>{op.id}</code>{current.rule.enabled && <span className='mt-2 block text-sm tabular-nums'>{op.configured ? `剩余 ${units(op.remaining, current.rule)}` : '共用服务总额度'}</span>}</TableCell>
                       <TableCell className='py-2'><label className='mb-1 flex min-h-6 items-center gap-1.5 text-[11px]'><input aria-label={`设置 ${op.id} 子额度`} type='checkbox' checked={configured} onChange={event => setSubLimit(op.id, event.target.checked ? '3' : undefined)} />单独设置</label><Input aria-label={`${op.id} 子额度`} className='h-8 text-xs' type='number' min='0' max={draft.unit === 'usd_micros' ? 1e6 : 1e12} step={draft.unit === 'usd_micros' ? 0.000001 : 1} required={configured} disabled={!configured} placeholder='未设置' value={subLimits[op.id] ?? ''} onChange={event => setSubLimit(op.id, event.target.value)} /></TableCell>
                     </TableRow>
                   })}
