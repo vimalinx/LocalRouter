@@ -297,6 +297,10 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 			lastErr = err
 			continue
 		}
+		_, allowanceOK := runtime.policies.reserveAllowance(c, "compatibility:"+profile.Key, c.Request.Method+" "+c.Request.URL.Path, -1)
+		if !allowanceOK {
+			return
+		}
 		response, err := runtime.relayClient.Do(upstreamRequest)
 		if err != nil {
 			lastErr = err

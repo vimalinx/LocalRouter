@@ -70,6 +70,11 @@ func (registry *protocolRegistry) forwardGRPC(c *gin.Context, definition protoco
 		}
 		query.Set(key, scalar)
 	}
+	finishAllowance, allowanceOK := registry.policies.beginProtocolAllowance(c, definition, route.OperationID)
+	if !allowanceOK {
+		return
+	}
+	defer finishAllowance()
 	acquired, err := registry.acquireCredential(definition, route, "", map[string]bool{})
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "protocol credential is unavailable"})
@@ -234,6 +239,11 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 	if route.Affinity.RequestPathParam != "" {
 		affinityKey = matched.Params[route.Affinity.RequestPathParam]
 	}
+	finishAllowance, allowanceOK := registry.policies.beginProtocolAllowance(c, definition, route.OperationID)
+	if !allowanceOK {
+		return
+	}
+	defer finishAllowance()
 	maxAttempts := 1
 	if definition.Pool != nil && definition.Pool.Mode == "local" {
 		maxAttempts = definition.Pool.MaxAttempts
@@ -256,6 +266,9 @@ func (registry *protocolRegistry) forwardAdapter(c *gin.Context, definition prot
 		}
 	}
 	excluded := make(map[string]bool)
+	if c.GetBool("localrouter_allowance_single_attempt") {
+		maxAttempts = 1
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		c.Set("localrouter_protocol_attempts", attempt+1)
 		acquired, acquireErr := registry.acquireCredential(definition, route, affinityKey, excluded)
@@ -462,6 +475,11 @@ func (registry *protocolRegistry) forwardWebSocket(c *gin.Context, definition pr
 		}
 		query.Set(key, scalar)
 	}
+	finishAllowance, allowanceOK := registry.policies.beginProtocolAllowance(c, definition, route.OperationID)
+	if !allowanceOK {
+		return
+	}
+	defer finishAllowance()
 	maxAttempts := 1
 	if definition.Pool != nil && definition.Pool.Mode == "local" {
 		maxAttempts = definition.Pool.MaxAttempts
@@ -472,6 +490,9 @@ func (registry *protocolRegistry) forwardWebSocket(c *gin.Context, definition pr
 	excluded := make(map[string]bool)
 	var upstream *websocket.Conn
 	var acquired acquiredProtocolCredential
+	if c.GetBool("localrouter_allowance_single_attempt") {
+		maxAttempts = 1
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		c.Set("localrouter_protocol_attempts", attempt+1)
 		candidate, err := registry.acquireCredential(definition, route, "", excluded)

@@ -50,6 +50,7 @@ type tokenPolicyUsage struct {
 }
 
 type tokenPolicyStore struct {
+	allowances              *serviceAllowanceStore
 	workspace               *serviceWorkspace
 	path                    string
 	mu                      sync.Mutex
@@ -61,8 +62,9 @@ type tokenPolicyStore struct {
 
 func newTokenPolicyStore(dataDir string) (*tokenPolicyStore, error) {
 	store := &tokenPolicyStore{
-		path:     filepath.Join(dataDir, "token-policies.json"),
-		policies: make(map[int]localTokenPolicy), usage: make(map[int]*tokenPolicyUsage),
+		path:       filepath.Join(dataDir, "token-policies.json"),
+		allowances: newServiceAllowanceStore(dataDir),
+		policies:   make(map[int]localTokenPolicy), usage: make(map[int]*tokenPolicyUsage),
 	}
 	exists, err := inspectPrivateRegularFile(store.path, "token policy file")
 	if err != nil {

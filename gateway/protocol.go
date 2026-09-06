@@ -1316,6 +1316,11 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 	if route.Affinity.RequestPathParam != "" {
 		affinityKey = matched.Params[route.Affinity.RequestPathParam]
 	}
+	finishAllowance, allowanceOK := registry.policies.beginProtocolAllowance(c, definition, route.OperationID)
+	if !allowanceOK {
+		return
+	}
+	defer finishAllowance()
 	maxAttempts := 1
 	if definition.Pool != nil && definition.Pool.Mode == "local" {
 		maxAttempts = definition.Pool.MaxAttempts
@@ -1338,6 +1343,9 @@ func (registry *protocolRegistry) forward(c *gin.Context, definition protocolDef
 		}
 	}
 	excluded := make(map[string]bool)
+	if c.GetBool("localrouter_allowance_single_attempt") {
+		maxAttempts = 1
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		c.Set("localrouter_protocol_attempts", attempt+1)
 		acquired, acquireErr := registry.acquireCredential(definition, route, affinityKey, excluded)

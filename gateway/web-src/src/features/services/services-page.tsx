@@ -1,14 +1,15 @@
-import { Bot, RadioTower, ServerCog } from 'lucide-react'
+import { Bot, RadioTower, ServerCog, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { ServiceAllowances } from '@/features/services/service-allowances'
 import { ChannelsPage } from '@/features/channels/channels-page'
 import { ControlPlanePage } from '@/features/control/control-plane-page'
 import { ProtocolsPage } from '@/features/protocols/protocols-page'
 import type { Channel, ProtocolDraft, ProtocolRevision, ProtocolView, Provider } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-type WorkspaceTab = 'services' | 'models'
+type WorkspaceTab = 'services' | 'models' | 'allowances'
 
 export function ServicesPage(props: {
   adminToken: string
@@ -35,6 +36,7 @@ export function ServicesPage(props: {
           {([
             ['services', '服务号池', ServerCog],
             ['models', '模型渠道', RadioTower],
+            ['allowances', '自主额度', ShieldCheck],
           ] as const).map(([id, label, Icon]) => (
             <button key={id} type='button' role='tab' aria-selected={activeTab === id} className={cn('flex min-h-8 cursor-pointer items-center gap-1.5 rounded px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring', activeTab === id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')} onClick={() => setActiveTab(id)}>
               <Icon aria-hidden='true' className='size-3.5' />{label}
@@ -43,8 +45,8 @@ export function ServicesPage(props: {
         </div>
       </header>
 
-      <div className={cn('min-h-0 flex-1', activeTab === 'models' ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden')}>
-        {activeTab === 'services' ? (
+      <div className={cn('min-h-0 flex-1', activeTab !== 'services' ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden')}>
+        {activeTab === 'allowances' ? <ServiceAllowances adminToken={props.adminToken} /> : activeTab === 'services' ? (
           <ProtocolsPage embedded protocols={props.protocols} adminToken={props.adminToken} onChanged={props.onChanged} onOpenEditor={props.editorAvailable === false ? undefined : () => setEditorOpen(true)} />
         ) : (
           <ChannelsPage embedded adminToken={props.adminToken} channels={props.channels} providers={props.providers} onChanged={props.onChanged} />

@@ -462,6 +462,19 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		} else {
 			addCheck("authorization", "fail", policyReason, true)
 		}
+		var allowance *serviceAllowanceDecision
+		if runtime.policies != nil && runtime.policies.allowances != nil {
+			definition, _ := registry.get(descriptor.Pack)
+			decision, _, err := runtime.policies.allowances.evaluate(descriptor.Pack, descriptor.Operation, runtime.policies.allowanceIdentity(c.GetInt(tokenPolicyContextID)), fixedAllowanceQuote(definition, descriptor.Operation), false)
+			allowance = &decision
+			if err != nil {
+				addCheck("service_allowance", "fail", "cannot read shared service allowance", true)
+			} else if !decision.Allowed {
+				addCheck("service_allowance", "fail", decision.Code+": "+decision.Message, true)
+			} else {
+				addCheck("service_allowance", "pass", decision.Message, false)
+			}
+		}
 		if descriptor.Ready {
 			addCheck("readiness", "pass", "Pack and operation are ready", false)
 		} else {
@@ -554,6 +567,9 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 				nextAction = "ask the operator to adjust this service Token policy"
 			}
 		}
+		if allowance != nil && !allowance.Allowed && allowed {
+			nextAction = "ask the human to review the service allowance in /#protocols; do not retry automatically"
+		}
 		alternatives := []agentOperationRef{}
 		if !ok {
 			alternatives = registry.alternativeOperationRefs(c.GetInt(tokenPolicyContextID), descriptor.Pack, descriptor.Operation)
@@ -568,7 +584,7 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 			"object": "localrouter.preflight", "success": ok, "ok": ok, "code": code,
 			"reason": reason, "retryable": false, "owner": "agent", "upstream_called": false,
 			"contract_digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion, "operation": descriptor,
-			"checks": checks, "next_action": nextAction, "alternatives": alternatives,
+			"checks": checks, "next_action": nextAction, "alternatives": alternatives, "service_allowance": allowance,
 		})
 	}
 }

@@ -6,6 +6,20 @@ published.
 
 ## Unreleased
 
+### 0.2.0 maintenance branch
+
+- Added human-configured, opt-in shared service allowances with request-count
+  and confirmed fixed-price USD budgets. All existing services remain disabled
+  by default; Token and capability-bundle permissions still apply.
+- Added per-operation approval/prohibition, expiring one-call approvals,
+  persistent atomic reservations, and human reconciliation of unknown costs.
+- Added the service allowance console and non-consuming Agent preflight checks.
+  Pack calls, workflow/MCP projections, and compatibility channel dispatches
+  enforce the configured limits; Agents cannot edit them through service or
+  maintenance credentials.
+- Variable or unknown costs require approval. Published v0.2.0 artifacts retain
+  their original tag; these changes belong to the maintained 0.2.0 branch.
+
 ## 0.2.0 - 2026-09-06
 
 - Published the first non-prerelease 0.x milestone from the validated alpha.7

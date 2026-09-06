@@ -70,3 +70,13 @@ lr setup get <proposal-id>
 Service Token 不具有维护权限。由人在 `/#tokens`（Agent 工作台）签发独立的仅维护 Token，并开启 Agent 维护；`/manage/mcp` 是执行维护操作的入口，不负责签发 Token。Agent 获得这份独立凭据后设置 `LOCALROUTER_MAINTAINER_TOKEN_FILE`，并确认发现接口已启用 Agent 维护。没有这个条件就把准确方案交给人，不要读取管理员凭据，也不要使用管理员后备通道。
 
 已经授权的兼容修复使用 `LOCALROUTER_SETUP_LANE=maintenance lr setup prepare @repair.json` 准备，再用同一维护 lane 的 `lr setup get <id>` 检查。执行命令是 `lr setup apply <id> <digest>`；这里的 digest 是 `setup get` 返回的 `proposal.digest`，不是模板 digest，也不是 pack_digest。改变目标、认证、操作或工作流需要新批准。高级 Pack 作者使用 `/manage/mcp` 的独立 draft → review → plan → exact-digest apply；无论哪条路径都不能覆盖其他人的修改。
+
+
+## 服务共享自主额度
+
+人可在「服务与渠道 → 自主额度」为单个服务启用共享额度，默认关闭。
+启用后，额度内的调用属于人预先批准的范围，仍须满足当前 Token/能力包权限并执行预检。
+`service_approval_required` 表示额度不足、操作必须批准或费用无法安全预估；返回人批准一次或调整额度，不自动重试，不自行修改配置。
+`service_use_denied` 表示明确禁止，单次批准不能覆盖。关闭额度功能不授予新的调用权限。
+单次批准绑定 Agent Token 与精确操作，一小时内只可使用一次；参数和实际费用均在该操作批准范围内。
+`X-LocalRouter-Allowance-Receipt` 是占用记录编号。未知结果保留占用，先核对供应商记录，不能重新调用以试探结果。
