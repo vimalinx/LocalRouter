@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "11"
+const agentContractSchemaVersion = "12"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -140,7 +140,7 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"reuse_command": "lr identity bind <agent-code> <token-file>", "reuse_scope": "Agent session, workspace and service origin; locator only",
 		},
 		"flow":       []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
-		"daily_call": gin.H{"cli": "lr exec <pack> <operation> [json] [path-params-json] [query-params-json]", "automatic_checks": []string{"independent-identity", "current-contract", "exact-dynamic-model", "preflight"}, "dispatches": 1, "requires_operation_authorization": true, "receipts": "lr result [call-id]", "automatic_identity_claim": "approved pending enrollment only"},
+		"daily_call": gin.H{"cli": "lr exec <pack> <operation> [json] [path-params-json] [query-params-json]", "automatic_checks": []string{"service-token", "strict-mode-identity-if-enabled", "current-contract", "exact-dynamic-model", "preflight"}, "dispatches": 1, "requires_operation_authorization": true, "receipts": "lr result [call-id]", "automatic_identity_claim": "approved pending enrollment only"},
 		"service_workspace": gin.H{
 			"mode": "agent-led", "templates": "/agent/service-templates", "proposals": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 			"prepare_schema": serviceProposalSchema(),
@@ -240,6 +240,19 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 			"maintenance_access": false, "contract_digest": runtime.protocols.currentDigest(),
 			"contract_schema_version": agentContractSchemaVersion,
 		}
+		strictMode := false
+		if runtime.policies != nil && runtime.policies.allowances != nil {
+			if err := runtime.policies.allowances.transaction(false, func(doc *serviceAllowanceDocument) error {
+				strictMode = allowanceSettings(doc).Enabled
+				return nil
+			}); err != nil {
+				writeAgentError(c, http.StatusServiceUnavailable, "strict_mode_unavailable", "cannot read strict mode settings", "local settings unavailable", false, "localrouter", "restore readable service allowance settings, then retry the identity check", nil, nil, nil)
+				return
+			}
+		}
+		response["strict_mode"] = strictMode
+		response["identity_required"] = strictMode
+
 		if runtime.store != nil && tokenID > 0 {
 			if token, err := runtime.store.tokenByID(runtime.rootUser.ID, tokenID, false); err == nil {
 				response["token_name"] = token.Name

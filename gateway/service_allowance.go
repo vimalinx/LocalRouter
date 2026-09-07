@@ -68,17 +68,12 @@ type serviceAllowanceSettings struct {
 	Revision int64 `json:"revision"`
 }
 
-// Only legacy documents infer activation. Once stored, an explicit global off
-// stays off even when individual rules remain enabled for later reuse.
+// Strict mode requires an explicit global opt-in. Saved rules never activate it.
 func allowanceSettings(doc *serviceAllowanceDocument) serviceAllowanceSettings {
 	if doc.Settings != nil {
 		return *doc.Settings
 	}
-	settings := serviceAllowanceSettings{}
-	for _, rule := range doc.Rules {
-		settings.Enabled = settings.Enabled || rule.Enabled
-	}
-	return settings
+	return serviceAllowanceSettings{}
 }
 
 type serviceAllowanceStore struct{ path string }

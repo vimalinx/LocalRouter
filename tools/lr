@@ -1050,8 +1050,8 @@ command_init() {
     json_fail "agent_identity_mismatch" "the bound Token no longer matches this Agent session" "bind the correct issued identity with lr identity bind; no fallback identity was selected"
     return 1
   fi
-  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready // false),next_action:(if .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." else "This is a shared/bootstrap identity. Use lr identity request <agent-code> <policy-json> to request exact service scope; the human approves it once in Agent Workbench, then lr identity claim saves it privately. Existing issued files can use lr identity bind. Do not issue Tokens through /local/api." end)}' <<<"$identity"
-  [[ "$(jq -r '.identity_ready // false' <<<"$identity")" == true ]]
+  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready == true or .identity_required == false),next_action:(if .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." elif .identity_required == false then "Ordinary mode is ready. Use this service Token for authorized calls; independent Agent registration is optional. Token policies and provider pool limits still apply." else "Strict mode requires an independent Agent identity. This is a shared/bootstrap identity. Use lr identity request <agent-code> <policy-json> to request exact service scope; the human approves it once in Agent Workbench, then lr identity claim saves it privately. Existing issued files can use lr identity bind. Do not issue Tokens through /local/api." end)}' <<<"$identity"
+  jq -e '.identity_ready == true or .identity_required == false' >/dev/null <<<"$identity"
 }
 
 command_guide() {
@@ -1242,7 +1242,7 @@ command_exec() {
     load_agent_binding
   fi
   identity="$(command_init)" || { printf '%s\n' "$identity"; return 1; }
-  jq -e --arg workspace "$PWD" '.workspace == $workspace and .service_access == true and .maintenance_access == false' >/dev/null <<<"$identity" || {
+  jq -e --arg workspace "$PWD" '((.identity_ready == true and .workspace == $workspace) or (.identity_ready == false and .identity_required == false)) and .service_access == true and .maintenance_access == false' >/dev/null <<<"$identity" || {
     json_fail "agent_identity_mismatch" "the issued service identity does not belong to this workspace" "bind the correct identity once with lr identity bind <agent-code> <token-file>"
     return 1
   }

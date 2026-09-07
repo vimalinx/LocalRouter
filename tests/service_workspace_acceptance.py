@@ -137,6 +137,23 @@ try:
     absent_template = subprocess.run([str(project/'tools/lr'),'setup','template','missing','1'],env=env,capture_output=True,timeout=20)
     assert absent_template.returncode != 0
     if not args.demo:
+        # The existing bootstrap credential works by default, including streaming.
+        env['LOCALROUTER_API_TOKEN_FILE'] = str(root/'data/api-token')
+        ordinary = cli('init')
+        assert ordinary['ready'] and not ordinary['identity_ready'] and not ordinary['identity_required'] and not ordinary['strict_mode']
+        before_generations = Provider.generation_calls
+        response = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10,"stream":true}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert response.returncode == 0 and response.stdout.endswith('data: [DONE]\n\n'), (response.stdout, response.stderr)
+        assert Provider.generation_calls == before_generations+1
+        settings = api('/local/api/service-allowance-settings')['data']
+        settings = api('/local/api/service-allowance-settings','PUT',{'enabled':True,'revision':settings['revision']})['data']
+        strict = subprocess.run([str(project/'tools/lr'),'init'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert strict.returncode != 0 and json.loads(strict.stdout)['identity_required']
+        blocked = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[]}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+        assert blocked.returncode != 0 and Provider.generation_calls == before_generations+1
+        api('/local/api/service-allowance-settings','PUT',{'enabled':False,'revision':settings['revision']})
+        assert cli('init')['ready']
+        env['LOCALROUTER_API_TOKEN_FILE'] = str(token_path)
         env.update(XDG_DATA_HOME=str(root/'client-data'), LOCALROUTER_AGENT_SESSION='fixture-session')
         bound = cli('identity','bind','service-fixture',str(token_path))
         assert bound['ready'] and bound['token_value_copied'] is False

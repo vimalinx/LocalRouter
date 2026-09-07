@@ -54,12 +54,12 @@ export function ServiceAllowances({ adminToken }: { adminToken: string }) {
   }
   return <div className='flex h-full min-h-0 flex-col overflow-hidden'>
     <div className='flex shrink-0 items-center justify-between gap-4 px-4 py-3'>
-      <div><h2 className='text-sm font-medium'>启用自主额度</h2><p className='mt-1 text-xs text-muted-foreground'>{settings?.enabled ? '已开启，可按服务配置使用限制。' : '默认关闭，按需开启后配置服务额度。'}</p></div>
-      <ActivationToggle checked={settings?.enabled ?? false} label='启用自主额度' disabled={busy || !settings} onChange={() => void toggle()} />
+      <div><h2 className='text-sm font-medium'>严格模式</h2><p className='mt-1 text-xs text-muted-foreground'>{settings?.enabled ? '已开启，CLI 要求独立 Agent 身份，并按服务配置检查自主额度。' : '默认关闭，使用现有 API Token 即可调用。'}</p></div>
+      <ActivationToggle checked={settings?.enabled ?? false} label='严格模式' disabled={busy || !settings} onChange={() => void toggle()} />
     </div>
     {error && <p role='alert' className='px-4 pb-3 text-sm text-destructive'>{error} <Button size='sm' variant='ghost' onClick={() => window.location.reload()}>重新加载</Button></p>}
     {!settings && !error && <p role='status' className='px-4 py-3 text-sm text-muted-foreground'>正在读取设置…</p>}
-    {settings && !settings.enabled && <div className='shrink-0 border-t px-4 py-3 text-sm text-muted-foreground'><p>关闭时沿用现有调用权限，不检查自主额度。已保存的服务配置和用量会保留。</p>{settings.has_saved_rules && <Button size='sm' variant='ghost' className='mt-2' onClick={() => setEditingSaved(!editingSaved)}>{editingSaved ? '收起配置' : '编辑已保存的配置'}</Button>}{editingSaved && <p className='mt-1 text-xs'>当前总开关关闭，修改配置不会开启总开关。</p>}</div>}
+    {settings && !settings.enabled && <div className='shrink-0 border-t px-4 py-3 text-sm text-muted-foreground'><p>普通模式不要求额外登记 Agent，也不检查自主额度；现有 Token 权限仍然生效。已保存的服务配置和用量会保留。</p>{settings.has_saved_rules && <Button size='sm' variant='ghost' className='mt-2' onClick={() => setEditingSaved(!editingSaved)}>{editingSaved ? '收起配置' : '编辑已保存的配置'}</Button>}{editingSaved && <p className='mt-1 text-xs'>当前总开关关闭，修改配置不会开启总开关。</p>}</div>}
     {(settings?.enabled || editingSaved) && <div className='min-h-0 flex-1'><ServiceAllowanceConfiguration adminToken={adminToken} /></div>}
   </div>
 }

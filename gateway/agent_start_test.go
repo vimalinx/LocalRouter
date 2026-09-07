@@ -13,6 +13,16 @@ func TestAgentIdentityEntryAndCompactTemplateDiscovery(t *testing.T) {
 	status, raw := setupHTTP(t, server, owner, http.MethodGet, "/agent/whoami", nil)
 	require.Equal(t, 200, status)
 	require.Contains(t, string(raw), `"identity_ready":true`)
+	require.Contains(t, string(raw), `"strict_mode":false`)
+	require.Contains(t, string(raw), `"identity_required":false`)
+	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
+		doc.Settings.Enabled = true
+		return nil
+	}))
+	status, raw = setupHTTP(t, server, owner, http.MethodGet, "/agent/whoami", nil)
+	require.Equal(t, 200, status)
+	require.Contains(t, string(raw), `"strict_mode":true`)
+	require.Contains(t, string(raw), `"identity_required":true`)
 	owner.AgentCode = "localrouter-system"
 	_, err := rt.workspace.prepare(owner, serviceProposalInput{Kind: "bundle", Reason: "should require independent identity", Bundle: &serviceBundle{ID: "empty", Name: "Empty"}})
 	require.ErrorContains(t, err, "agent_identity_required")

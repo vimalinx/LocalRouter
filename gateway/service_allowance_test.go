@@ -564,7 +564,7 @@ func TestServiceAllowanceGlobalSettingsLifecycle(t *testing.T) {
 	require.EqualValues(t, 0, d.Remaining)
 }
 
-func TestServiceAllowanceLegacyActivationMigration(t *testing.T) {
+func TestServiceAllowanceSavedRulesDoNotActivateStrictMode(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			s := newServiceAllowanceStore(t.TempDir())
@@ -577,17 +577,19 @@ func TestServiceAllowanceLegacyActivationMigration(t *testing.T) {
 			require.NoError(t, os.WriteFile(s.path, data, 0600))
 			d, _, err := s.evaluate("test", "run", 2, -1, true)
 			require.NoError(t, err)
-			require.Equal(t, enabled, d.Enabled)
-			require.Equal(t, !enabled, d.Allowed)
+			require.False(t, d.Enabled)
+			require.True(t, d.Allowed)
 			require.NoError(t, s.transaction(true, func(doc *serviceAllowanceDocument) error {
-				require.Equal(t, enabled, doc.Settings.Enabled)
+				require.False(t, doc.Settings.Enabled)
+				require.Equal(t, enabled, doc.Rules["test"].Enabled)
 				return nil
 			}))
 			data, err = os.ReadFile(s.path)
 			require.NoError(t, err)
 			require.NoError(t, json.Unmarshal(data, &doc))
 			require.NotNil(t, doc.Settings)
-			require.Equal(t, enabled, doc.Settings.Enabled)
+			require.False(t, doc.Settings.Enabled)
+			require.Equal(t, enabled, doc.Rules["test"].Enabled)
 		})
 	}
 }

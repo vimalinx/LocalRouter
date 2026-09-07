@@ -6,8 +6,9 @@
 
 运行 `lr init`。这是只读检查，不创建账号、不修改权限、不调用供应商。
 
-- `ready: true` 表示当前 Token 对应一个已注册 Agent。核对 agent_code、workspace 是否确实属于你；共用别人的 Token 不会获得独立身份。
-- `ready: false` 或非零退出表示身份未准备好。`identity_kind: bootstrap` 是系统默认身份，不能当作你的独立身份。
+- 默认普通模式（`strict_mode: false`、`identity_required: false`）：有效的现有 Service API Token 即可调用，包括系统默认 Token，无需额外登记或审批。`ready: true` 表示可以继续准备调用；`identity_ready` 单独表示是否为已登记的独立 Agent。Token 策略、能力包及供应商池限制仍然生效。
+- 主动开启严格模式后，CLI 才要求独立 Agent 身份；核对 agent_code、workspace 是否属于你。已有独立身份的工作目录绑定在两种模式下都继续检查。以下申请流程仅用于需要独立身份或细分授权时。
+- `ready: false` 或非零退出表示身份未准备好。严格模式下，`identity_kind: bootstrap` 不能满足独立身份要求。
 - 新接入优先运行 `lr identity request <agent-code> <policy-json|@file>`，明确给出 `packs`、Pack 限定的 `operations`，以及需要的 `models`、`daily_request_limit`、`requests_per_minute`、`max_in_flight`、`expires_at`。操作必须来自当前公共契约；不要使用通配 Pack 或操作。CLI 自动携带当前工作目录，不读取系统默认 Token 或管理员凭据。此命令仅申请权限，不调用供应商、不自动批准。
 - 人在返回的 registration_url（本机 `/#tokens`）核对服务、操作、模型和额度，点击「批准以上范围」。随后 `lr identity claim` 自动将凭据保存到私有 0600 文件并绑定当前 Agent；下一次 `lr exec` 也会自动领取已批准申请。不要把 Token 发到聊天里。未批准的申请返回明确状态，不能继续调用。
 - 同一会话再次申请相同内容、领取中断后重试都复用原申请/原身份，不清零用量。申请及凭据领取窗口为申请后 24 小时。用 `lr identity cancel` 撤回未生效的申请后可提交修改版；已经批准的身份应通过工作台撤销。Token 默认长期有效，无需周期性重新签发；设置的授权截止时间不会自动延长。
@@ -43,7 +44,7 @@ lr docs <pack>
 lr exec <pack> <operation> <body-json> <path-params-json> <query-params-json>
 ```
 
-它自动领取已批准的待接入身份，核对身份并复用本次执行的契约，解析精确模型与兼容操作，通过 preflight 后向网关发送一次正式请求。响应（包括 SSE）直接输出，同时保存原始响应、退出状态及追踪 ID 到当前 Agent 的私有结果目录。`lr result` 列出记录，`lr result <call-id>` 查看原始响应文件定位器；`lr result <call-id> --refresh` 查询同一调用的网关证据，不重发供应商请求。`response_received` 只表示收到响应，不代表业务任务完成；中断或失败时结果保留为 unknown，先读已有结果和已公布的状态查询操作。
+它自动领取已批准的待接入身份，按当前模式核对调用凭据并复用本次执行的契约，解析精确模型与兼容操作，通过 preflight 后向网关发送一次正式请求。响应（包括 SSE）直接输出，同时保存原始响应、退出状态及追踪 ID 到当前 Agent 的私有结果目录。`lr result` 列出记录，`lr result <call-id>` 查看原始响应文件定位器；`lr result <call-id> --refresh` 查询同一调用的网关证据，不重发供应商请求。`response_received` 只表示收到响应，不代表业务任务完成；中断或失败时结果保留为 unknown，先读已有结果和已公布的状态查询操作。
 
 预检失败的 `blocked_at`、`reason`、`resolution.automatic_checks`、`resolution.next_actor` 和 `next_action` 说明拦截位置、已做检查以及谁需要做什么。`upstream_called=false` 表示预检未调用供应商。目录读取是单独的只读请求，不是生成。网关按照 Pack 既有重试上限处理安全重试；启用共享额度时仅能确认未发出的请求可自动恢复，已发送或结果未知的请求不会因额度预留而重复发出。确定未发出的终止请求自动释放预留额度。
 
@@ -93,7 +94,7 @@ Service Token 不具有维护权限。由人在 `/#tokens`（Agent 工作台）�
 
 ## 服务共享自主额度
 
-人可在「服务与渠道 → 自主额度」先开启默认关闭的总开关，再为单个服务启用共享额度，新配置基础额度为每月 3 美元，默认关闭，批量配置也不会自动启用。总开关关闭时沿用现有调用权限，暂停额度检查但保留配置和用量；重新开启不清零。升级时保留旧版本已启用的规则。
+人可在「服务与渠道 → 自主额度」先开启默认关闭的「严格模式」总开关，再为单个服务启用共享额度，新配置基础额度为每月 3 美元，默认关闭，批量配置也不会自动启用。总开关关闭时沿用现有调用权限，暂停额度检查但保留配置和用量；重新开启不清零。升级保留规则和用量，但旧规则不会隐式开启严格模式；显式保存的总开关状态继续生效。
 明确公布的 GET/HEAD 模型目录读取不扣自主额度，但仍遵守 Token、能力包、号池和显式禁止/批准规则。缺乏固定价格的操作不能启用美元自动额度，须选择次数或单次批准；界面会在保存前提示。
 操作可设置独立子额度；调用同时受服务总额度与操作子额度约束，共用周期和单位。
 启用后，额度内的调用属于人预先批准的范围，仍须满足当前 Token/能力包权限并执行预检。
