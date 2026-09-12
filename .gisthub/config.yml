@@ -1,0 +1,3 @@
+name: LocalRouter
+description: 本机网关，把模型 API、服务接口和 Agent 调用收口到 127.0.0.1:8317。
+accent: "#7c5ce7"
