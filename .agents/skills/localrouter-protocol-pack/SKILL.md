@@ -1,6 +1,6 @@
 ---
 name: localrouter-protocol-pack
-description: Use when authoring, changing, releasing, diagnosing, or rolling back a LocalRouter Protocol Pack, custom transport or adapter, workflow, authentication, credential pool, quota telemetry, or Agent guide. Also use when an Agent must discover or maintain LocalRouter capabilities through port 8317. Do not use for an ordinary call to an unchanged documented Pack.
+description: "Maintain LocalRouter Packs, adapters, authentication, pools, workflows, or published guides through the reviewed release lifecycle. Not for ordinary service discovery or calls."
 ---
 
 # Maintain LocalRouter Protocol Packs
@@ -35,7 +35,7 @@ Live discovery is authoritative. Readiness is not provider proof.
 | Operation changes, deprecation, v2-to-v3 migration, or pool schema evolution | [references/compatibility.md](references/compatibility.md) |
 | Validation, impact review, release, binary restart, live verification, or rollback | [references/release-lifecycle.md](references/release-lifecycle.md) |
 | A failed validation, 401/403/409/422/429/5xx, degraded pool, stale quota, or unknown outcome | [references/troubleshooting.md](references/troubleshooting.md) |
-| Any completion claim | [references/acceptance.md](references/acceptance.md) |
+| Verifying a changed or released operation | [references/acceptance.md](references/acceptance.md) |
 | Delivering a newly published model to OMP or another Agent runtime | [references/runtime-handoff.md](references/runtime-handoff.md) |
 
 Schemas live under `gateway/protocols/schema/`; see `docs/PROTOCOL-PACK-V3.md`.

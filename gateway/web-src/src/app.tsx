@@ -1,21 +1,23 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, RotateCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Toaster, toast } from 'sonner'
 
 import { AppShell, type SectionId } from '@/components/app-shell'
 import { LoadingState } from '@/components/loading-state'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { Button } from '@/components/ui/button'
 import { UnlockView } from '@/features/auth/unlock-view'
-import { LogsPage } from '@/features/logs/logs-page'
-import { JobsPage } from '@/features/jobs/jobs-page'
-import { OverviewPage } from '@/features/overview/overview-page'
-import { ServicesPage } from '@/features/services/services-page'
-import { TokensPage } from '@/features/tokens/tokens-page'
-import { SetupPage } from '@/features/setup/setup-page'
 import { adminRequest, publicRequest } from '@/lib/api'
 import type { PublicStatus, Summary, UpdateStatus } from '@/lib/types'
 import { useConsoleData } from '@/lib/console-data'
+
+const OverviewPage = lazy(() => import('@/features/overview/overview-page').then(module => ({ default: module.OverviewPage })))
+const ServicesPage = lazy(() => import('@/features/services/services-page').then(module => ({ default: module.ServicesPage })))
+const TokensPage = lazy(() => import('@/features/tokens/tokens-page').then(module => ({ default: module.TokensPage })))
+const LogsPage = lazy(() => import('@/features/logs/logs-page').then(module => ({ default: module.LogsPage })))
+const JobsPage = lazy(() => import('@/features/jobs/jobs-page').then(module => ({ default: module.JobsPage })))
+const SetupPage = lazy(() => import('@/features/setup/setup-page').then(module => ({ default: module.SetupPage })))
 
 const validSections = new Set<SectionId>([
   'overview',
@@ -35,30 +37,45 @@ function currentSection(): SectionId {
 export default function App() {
   const queryClient = useQueryClient()
   const [adminToken, setAdminToken] = useState<string | null>(null)
+  const [sessionExpired, setSessionExpired] = useState(false)
   const [activeSection, setActiveSection] = useState<SectionId>(currentSection)
+  const [activeHash, setActiveHash] = useState(() => window.location.hash)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [logPage, setLogPage] = useState(1)
   const [dark, setDark] = useState(() => {
-    const saved = window.localStorage.getItem('localrouter-theme')
-    if (saved) return saved === 'dark'
+    try {
+      const saved = window.localStorage.getItem('localrouter-theme')
+      if (saved) return saved === 'dark'
+    } catch { /* Storage may be unavailable in a private browser context. */ }
     return window.matchMedia('(prefers-color-scheme: dark)').matches
   })
 
   const publicStatus = useQuery({
     queryKey: ['public-status'],
-    queryFn: () => publicRequest<PublicStatus>('/local/status'),
-    retry: 1,
+    queryFn: ({ signal }) => publicRequest<PublicStatus>('/local/status', signal),
+    retry: false,
+    refetchInterval: 30_000,
   })
 
   const adminAuthEnabled = publicStatus.data?.admin_auth_enabled ?? true
-  const consoleAccessReady = Boolean(publicStatus.data) && (!adminAuthEnabled || adminToken !== null)
+  const consoleAccessReady = Boolean(publicStatus.data) && !sessionExpired && (!adminAuthEnabled || adminToken !== null)
   const requestAdminToken = adminToken || ''
 
   const consoleData = useConsoleData(requestAdminToken, consoleAccessReady, activeSection, logPage)
 
   useEffect(() => {
+    if (!consoleData.authError) return
+    setAdminToken(null)
+    setSessionExpired(true)
+    void queryClient.cancelQueries({ queryKey: ['console-data'] })
+    queryClient.removeQueries({ queryKey: ['console-data'] })
+    void publicStatus.refetch()
+  }, [consoleData.authError, queryClient, publicStatus.refetch])
+
+  useEffect(() => {
     function onHashChange() {
       setActiveSection(currentSection())
+      setActiveHash(window.location.hash)
       setMobileOpen(false)
     }
     window.addEventListener('hashchange', onHashChange)
@@ -67,31 +84,35 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
-    window.localStorage.setItem('localrouter-theme', dark ? 'dark' : 'light')
+    try { window.localStorage.setItem('localrouter-theme', dark ? 'dark' : 'light') } catch { /* Keep the preference in memory. */ }
   }, [dark])
 
   async function unlock(token: string) {
     await adminRequest<Summary>('/local/api/summary', token)
+    queryClient.removeQueries({ queryKey: ['console-data'] })
     setAdminToken(token)
+    setSessionExpired(false)
   }
 
   function lock() {
     setAdminToken(null)
     setMobileOpen(false)
+    void queryClient.cancelQueries({ queryKey: ['console-data'] })
     queryClient.removeQueries({ queryKey: ['console-data'] })
     toast.success('控制台已锁定，管理密钥已从页面内存清除')
   }
 
   function navigate(section: SectionId) {
     setActiveSection(section)
+    setActiveHash(`#${section}`)
     setMobileOpen(false)
     window.requestAnimationFrame(() => document.getElementById('main-content')?.focus())
   }
 
   async function refresh() {
-    const result = await consoleData.refetch()
-    if (result.error) {
-      toast.error(result.error.message)
+    const [status, result] = await Promise.all([publicStatus.refetch(), consoleData.refetch()])
+    if (status.error || result.error) {
+      toast.error(status.error?.message || result.error?.message)
       return
     }
     toast.success('运行数据已刷新')
@@ -141,12 +162,26 @@ export default function App() {
     )
   }
 
-  if (adminAuthEnabled && adminToken === null) {
+  if (!publicStatus.data) {
+    return (
+      <main className='grid min-h-svh place-items-center p-6'>
+        <section role='alert' className='max-w-lg space-y-4 text-center'>
+          <h1 className='text-xl font-semibold'>暂时无法连接 LocalRouter</h1>
+          <p className='text-sm text-muted-foreground'>{publicStatus.error?.message || '请确认本机网关已启动。'}</p>
+          <Button variant='outline' disabled={publicStatus.isFetching} onClick={() => void publicStatus.refetch()}>
+            <RotateCw aria-hidden='true' />{publicStatus.isFetching ? '正在重新连接…' : '重新连接'}
+          </Button>
+        </section>
+      </main>
+    )
+  }
+
+  if (sessionExpired || consoleData.authError || (adminAuthEnabled && adminToken === null)) {
     return (
       <>
         <UnlockView
           status={publicStatus.data}
-          statusError={publicStatus.error?.message}
+          statusError={sessionExpired || consoleData.authError ? '登录已失效，请使用当前管理密钥重新解锁。' : publicStatus.error?.message}
           onUnlock={unlock}
         />
         <Toaster theme={dark ? 'dark' : 'light'} position='top-right' richColors />
@@ -190,10 +225,8 @@ export default function App() {
             protocols={data.protocols}
             channels={data.channels}
             providers={data.providers}
-            editorAvailable={!consoleData.warnings.some(warning => warning.key === 'drafts' || warning.key === 'revisions')}
-            drafts={data.drafts}
-            revisions={data.revisions}
-            initialTab={window.location.hash === '#channels' ? 'models' : 'services'}
+            initialTab={activeHash === '#channels' ? 'models' : 'services'}
+            initialEditorOpen={activeHash === '#control'}
             onChanged={async () => {
               await consoleData.refetch()
             }}
@@ -212,6 +245,7 @@ export default function App() {
             policies={data.policies}
             maintenanceAccess={data.maintenanceAccess!}
             apiTokenFile={data.summary?.api_token_file || publicStatus.data?.api_token_file || ''}
+            lanListen={publicStatus.data?.lan_service?.enabled ? publicStatus.data.lan_service.listen : undefined}
             onChanged={async () => {
               const result = await consoleData.refetch()
               return result.data?.tokens || []
@@ -250,6 +284,7 @@ export default function App() {
         mobileOpen={mobileOpen}
         dark={dark}
         refreshing={consoleData.isFetching}
+        connection={publicStatus.error ? 'unavailable' : consoleData.error || consoleData.warnings.length ? 'degraded' : 'online'}
         listener={consoleData.data?.summary?.listen || publicStatus.data?.listen || ''}
         onNavigate={navigate}
         onMobileOpenChange={setMobileOpen}
@@ -257,8 +292,9 @@ export default function App() {
         onRefresh={refresh}
         onLock={adminAuthEnabled ? lock : undefined}
       >
-        {consoleData.warnings.length > 0 && !consoleData.error ? <div role='status' className='mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100'>{consoleData.warnings.map(warning => <p key={warning.key}>{warning.message}</p>)}</div> : null}
-        {content}
+        {publicStatus.error ? <div role='status' className='mb-4 shrink-0 border border-amber-300 p-3 text-sm'>网关连接暂时不可用，当前显示的是上次读取的数据。恢复后可点击刷新。</div> : null}
+        {consoleData.warnings.length > 0 && !consoleData.error ? <div role='status' className='mb-4 max-h-40 shrink-0 overflow-y-auto rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100'>{consoleData.warnings.map(warning => <p key={warning.key}>{warning.message}</p>)}</div> : null}
+        <ErrorBoundary key={activeSection}><Suspense fallback={<LoadingState label='正在打开页面…' />}>{content}</Suspense></ErrorBoundary>
       </AppShell>
       <Toaster theme={dark ? 'dark' : 'light'} position='top-right' richColors />
     </>

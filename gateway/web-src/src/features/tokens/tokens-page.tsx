@@ -1,4 +1,4 @@
-import { Bot, Copy, Eye, EyeOff, KeyRound, Plus, RefreshCw, Save, Settings2, ShieldCheck, Trash2 } from 'lucide-react'
+import { Bot, ChevronRight, Copy, Eye, EyeOff, KeyRound, Plus, RefreshCw, Save, Settings2, ShieldCheck, Trash2 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 
@@ -67,6 +67,7 @@ export function TokensPage(props: {
   policies?: TokenPolicy[]
   maintenanceAccess: MaintenanceAccess
   apiTokenFile: string
+  lanListen?: string
   onChanged: () => Promise<LocalToken[]>
 }) {
   const [visibleTokens, setVisibleTokens] = useState<Record<number, string>>({})
@@ -82,7 +83,8 @@ export function TokensPage(props: {
   const [maintenanceKeyVisible, setMaintenanceKeyVisible] = useState(false)
   const [savingMaintenanceKey, setSavingMaintenanceKey] = useState(false)
   const usageByToken = new Map(props.usage.map((item) => [item.token_id, item]))
-  const registeredTokens = props.tokens.filter((token) => token.name !== 'LocalRouter default' && token.agent_code && token.workspace)
+  const defaultToken = props.tokens.find(token => token.name === 'LocalRouter default')
+  const registeredTokens = props.tokens.filter((token) => token.name !== 'LocalRouter default')
   const maintenanceToken = registeredTokens.find((token) => props.policies?.find((policy) => policy.token_id === token.id)?.capabilities?.includes('localrouter.maintain'))
 
   async function toggleAgentMaintenance() {
@@ -177,7 +179,7 @@ export function TokensPage(props: {
     }
     setIssuing(true)
     try {
-      await adminRequest<unknown>('/local/api/tokens', props.adminToken, {
+      const issued = await adminRequest<{ id: number }>('/local/api/tokens', props.adminToken, {
         method: 'POST',
         body: JSON.stringify({
           name: draft.tokenName.trim(), agent_code: draft.agentCode.trim(), agent_name: draft.agentName.trim(),
@@ -185,7 +187,8 @@ export function TokensPage(props: {
         }),
       })
       const updated = await props.onChanged()
-      const created = updated.filter((token) => token.agent_code === draft.agentCode.trim()).sort((left, right) => right.id - left.id)[0]
+      const created = updated.find((token) => token.id === issued.id)
+      if (!created) throw new Error('Token 已签发，但列表未更新。请刷新核对，不要重复创建。')
       if (created) {
         await adminRequest(`/local/api/token-policies/${created.id}`, props.adminToken, {
           method: 'PUT',
@@ -231,10 +234,16 @@ export function TokensPage(props: {
   }
 
   async function copyToken(token: LocalToken) {
-    const visible = visibleTokens[token.id]
-    if (!visible) return
-    await navigator.clipboard.writeText(visible)
-    toast.success('API Token 已复制')
+    setLoadingId(token.id)
+    try {
+      const value = visibleTokens[token.id] || await readTokenKey(token)
+      await navigator.clipboard.writeText(value)
+      toast.success('API Token 已复制')
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : 'Token 复制失败')
+    } finally {
+      setLoadingId(null)
+    }
   }
 
   async function revokeToken() {
@@ -307,47 +316,41 @@ export function TokensPage(props: {
   return (
     <div className='space-y-5'>
       <SectionHeader
-        eyebrow='Identity · Usage · Quota'
-        title='Agent 工作台'
-        description='每个 Agent 使用唯一编码、工作区与 Token，调用、额度和成本在同一身份下归因。'
+        title='Token 管理'
+        description='查看和复制 API Token，为应用或 Agent 创建独立 Token，并管理调用额度和撤销访问。'
         actions={
           <Dialog open={issueOpen} onOpenChange={(open) => { setIssueOpen(open); if (!open) setDraft(emptyDraft) }}>
-            <DialogTrigger asChild><Button><Plus aria-hidden='true' />注册 Agent</Button></DialogTrigger>
+            <DialogTrigger asChild><Button><Plus aria-hidden='true' />创建 Token</Button></DialogTrigger>
             <DialogContent className='sm:max-w-2xl'>
-              <DialogHeader><DialogTitle>注册 Agent 并签发 Token</DialogTitle><DialogDescription>手动注册沿用现有全部服务权限，额度留空表示不限。要限定服务和操作，请让 Agent 提交接入申请。</DialogDescription></DialogHeader>
+              <DialogHeader><DialogTitle>创建 Token</DialogTitle><DialogDescription>手动注册沿用现有全部服务权限，额度留空表示不限。要限定服务和操作，请让 Agent 提交接入申请。</DialogDescription></DialogHeader>
               <AgentForm id='issue-agent-form' draft={draft} onChange={setDraft} onSubmit={issueAgent} />
-              <DialogFooter><Button variant='outline' type='button' onClick={() => setIssueOpen(false)}>取消</Button><Button form='issue-agent-form' type='submit' disabled={issuing}>{issuing ? '注册中…' : '注册并签发'}</Button></DialogFooter>
+              <DialogFooter><Button variant='outline' type='button' onClick={() => setIssueOpen(false)}>取消</Button><Button form='issue-agent-form' type='submit' disabled={issuing}>{issuing ? '创建中…' : '创建并签发'}</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         }
       />
 
-      <IdentityRequests adminToken={props.adminToken} onChanged={props.onChanged} />
-
-      <section className='border-y py-3' aria-labelledby='maintenance-title'>
-        <div className='flex flex-wrap items-center gap-2'>
-          <h2 id='maintenance-title' className='text-sm font-medium'>Agent 维护</h2>
-          <Badge variant={props.maintenanceAccess.agent_tokens_enabled ? 'success' : 'secondary'}>{props.maintenanceAccess.agent_tokens_enabled ? '已开启' : '默认关闭'}</Badge>
-          <Badge variant='outline'>维护专用</Badge>
-          <span className='min-w-0 flex-1 text-[11px] text-muted-foreground'>仅访问 /manage/mcp，与服务调用隔离</span>
-          <Button type='button' variant='outline' size='sm' role='switch' aria-checked={props.maintenanceAccess.agent_tokens_enabled} disabled={savingMaintenanceAccess} onClick={toggleAgentMaintenance}>{savingMaintenanceAccess ? '保存中…' : props.maintenanceAccess.agent_tokens_enabled ? '关闭' : '开启'}</Button>
-        </div>
-        {props.maintenanceAccess.agent_tokens_enabled ? (
-          <div className='mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3'>
-            <Label htmlFor='maintenance-key' className='shrink-0 text-xs'>维护 Key</Label>
-            <div className='flex min-w-[16rem] flex-1 items-center'>
-              <Input id='maintenance-key' className='h-8 rounded-r-none font-mono text-xs' type={maintenanceKeyVisible ? 'text' : 'password'} autoComplete='new-password' spellCheck={false} value={maintenanceKey} placeholder={maintenanceToken?.key || '输入自定义 Key，或生成随机 Key'} onChange={(event) => setMaintenanceKey(event.target.value)} />
-              <Button className='h-8 rounded-none border-l-0' type='button' variant='outline' size='icon' aria-label={maintenanceKeyVisible ? '隐藏维护 Key' : '显示维护 Key'} onClick={() => setMaintenanceKeyVisible((visible) => !visible)}>{maintenanceKeyVisible ? <EyeOff aria-hidden='true' /> : <Eye aria-hidden='true' />}</Button>
-              <Button className='h-8 rounded-l-none border-l-0' type='button' variant='outline' size='icon' aria-label='生成随机维护 Key' onClick={randomizeMaintenanceKey}><RefreshCw aria-hidden='true' /></Button>
-            </div>
-            <Button type='button' size='sm' disabled={!maintenanceToken || !maintenanceKey || savingMaintenanceKey} onClick={saveMaintenanceKey}><Save aria-hidden='true' />{savingMaintenanceKey ? '保存中' : '保存'}</Button>
+      {defaultToken ? (
+        <section className='space-y-2 border-y py-4' aria-label='默认调用 Token'>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <h2 className='text-sm font-semibold'>默认调用 Token</h2>
+            <Button size='sm' variant='outline' onClick={() => openPolicy(defaultToken)}><Settings2 aria-hidden='true' />调用限制</Button>
           </div>
-        ) : null}
-      </section>
+          <p className='text-xs text-muted-foreground'>已有应用可直接使用这个 Token，无需额外注册。复制到客户端的 API Key 设置即可。</p>
+          <div className='flex flex-wrap items-center gap-2'>
+            <code className='min-w-0 flex-1 break-all rounded-md bg-muted px-3 py-2 text-xs' aria-label='默认 Token 值'>{visibleTokens[defaultToken.id] || defaultToken.key || '••••••••••••••••'}</code>
+            <Button size='sm' variant='outline' disabled={loadingId === defaultToken.id} onClick={() => revealToken(defaultToken)}>{visibleTokens[defaultToken.id] ? <EyeOff aria-hidden='true' /> : <Eye aria-hidden='true' />}{visibleTokens[defaultToken.id] ? '隐藏 Token' : '显示 Token'}</Button>
+            <Button size='sm' disabled={loadingId === defaultToken.id} onClick={() => copyToken(defaultToken)}><Copy aria-hidden='true' />复制 Token</Button>
+          </div>
+          <p className='break-all text-xs text-muted-foreground'>本机 API 地址：<code>{window.location.origin}/v1</code></p>
+          {props.lanListen ? <p className='break-all text-xs text-muted-foreground'>局域网 API 地址：<code>http://{props.lanListen}/v1</code></p> : null}
+          {props.apiTokenFile ? <details className='text-xs text-muted-foreground'><summary className='cursor-pointer py-1'>本机凭据文件</summary><p className='break-all font-mono'>{props.apiTokenFile}</p></details> : null}
+        </section>
+      ) : null}
 
       <section aria-labelledby='agent-list-title'>
         <div className='flex items-end justify-between border-b pb-2'>
-          <h2 id='agent-list-title' className='text-sm font-semibold'>Agent 用量与额度</h2>
+          <h2 id='agent-list-title' className='text-sm font-semibold'>独立 Token</h2>
           <span className='text-xs tabular-nums text-muted-foreground'>{registeredTokens.length} 个</span>
         </div>
         {registeredTokens.length ? (
@@ -362,7 +365,7 @@ export function TokensPage(props: {
               return (
                 <article key={token.id} className='grid gap-3 py-3 xl:grid-cols-[minmax(13rem,1fr)_minmax(14rem,1.1fr)_minmax(17rem,1.15fr)_auto] xl:items-center'>
                   <div className='min-w-0'>
-                    <div className='flex flex-wrap items-center gap-2'><Bot aria-hidden='true' className='size-4 shrink-0 text-primary' /><p className='truncate text-sm font-medium'>{token.agent_name || token.name}</p>{system ? <Badge variant='secondary'>系统</Badge> : registered ? <Badge variant='success'>已注册</Badge> : <Badge variant='warning'>待补登记</Badge>}{maintainer ? <Badge variant='secondary'>维护专用</Badge> : null}</div>
+                    <div className='flex flex-wrap items-center gap-2'><Bot aria-hidden='true' className='size-4 shrink-0 text-primary' /><p className='truncate text-sm font-medium'>{token.name}</p>{system ? <Badge variant='secondary'>系统</Badge> : registered ? <Badge variant='success'>已注册</Badge> : <Badge variant='warning'>待补登记</Badge>}{maintainer ? <Badge variant='secondary'>维护专用</Badge> : null}<Badge variant={token.status === 1 ? 'success' : 'secondary'}>{token.status === 1 ? token.expired_time && token.expired_time > 0 && token.expired_time * 1000 <= Date.now() ? '已过期' : '启用' : '已停用'}</Badge></div>
                     <p className='mt-1 truncate font-mono text-[11px] text-muted-foreground'>{token.agent_code || `token-${token.id}`} · {token.runtime || 'runtime 未登记'}</p>
                     <p className='mt-1 truncate text-[11px] text-muted-foreground' title={token.workspace}>{token.workspace || '工作区未登记'}</p>
                   </div>
@@ -380,7 +383,7 @@ export function TokensPage(props: {
                   <div className='flex flex-wrap gap-1 xl:justify-end'>
                     {!system && registered && !maintainer ? <Button variant='outline' size='sm' disabled={loadingId === token.id} onClick={() => copyConnection(token)}><Copy aria-hidden='true' />{loadingId === token.id ? '读取中' : '快速接入'}</Button> : null}
                     <Button variant='ghost' size='icon' aria-label={`${visible ? '隐藏' : '显示'}令牌 ${token.name}`} disabled={loadingId === token.id} onClick={() => revealToken(token)}>{visible ? <EyeOff aria-hidden='true' /> : <Eye aria-hidden='true' />}</Button>
-                    <Button variant='ghost' size='icon' aria-label={`复制令牌 ${token.name}`} disabled={!visible} onClick={() => copyToken(token)}><KeyRound aria-hidden='true' /></Button>
+                    <Button variant='ghost' size='icon' aria-label={`复制令牌 ${token.name}`} disabled={loadingId === token.id} onClick={() => copyToken(token)}><KeyRound aria-hidden='true' /></Button>
                     <Button variant='ghost' size='icon' aria-label={`编辑 Agent ${token.agent_name || token.name}`} onClick={() => openPolicy(token)}><Settings2 aria-hidden='true' /></Button>
                     {!system ? <Button variant='ghost' size='icon' className='text-destructive hover:bg-destructive/10 hover:text-destructive' aria-label={`撤销令牌 ${token.name}`} onClick={() => setRevokeTarget(token)}><Trash2 aria-hidden='true' /></Button> : null}
                   </div>
@@ -388,8 +391,34 @@ export function TokensPage(props: {
               )
             })}
           </div>
-        ) : <EmptyState icon={Bot} title='还没有 Agent' description='注册 Agent 后会同时签发一枚绑定身份的本机调用 Token。' />}
+        ) : <EmptyState icon={Bot} title='暂无独立 Token' description='可以直接使用上方默认 Token，或点击「创建 Token」为不同应用分别管理访问。' />}
       </section>
+
+      <IdentityRequests adminToken={props.adminToken} onChanged={props.onChanged} />
+
+      <details className='group border-y py-3'>
+        <summary className='flex min-h-9 cursor-pointer list-none flex-wrap items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden'>
+          <ChevronRight aria-hidden='true' className='size-3.5 transition-transform group-open:rotate-90' />
+          <span className='text-sm font-medium'>Agent 维护</span>
+          <Badge variant={props.maintenanceAccess.agent_tokens_enabled ? 'success' : 'secondary'}>{props.maintenanceAccess.agent_tokens_enabled ? '已开启' : '默认关闭'}</Badge>
+          <span className='text-xs text-muted-foreground'>需要 Agent 修改服务配置时使用</span>
+        </summary>
+        <div className='mt-3 flex flex-wrap items-center gap-3 border-t pt-3'>
+          <p className='min-w-0 flex-1 text-xs text-muted-foreground'>维护需要独立维护 Token。开启此入口不会增加普通调用 Token 的权限。</p>
+          <Button type='button' variant='outline' size='sm' role='switch' aria-label='Agent 维护' aria-checked={props.maintenanceAccess.agent_tokens_enabled} disabled={savingMaintenanceAccess} onClick={toggleAgentMaintenance}>{savingMaintenanceAccess ? '保存中…' : props.maintenanceAccess.agent_tokens_enabled ? '关闭' : '开启'}</Button>
+        </div>
+        {props.maintenanceAccess.agent_tokens_enabled ? (
+          <div className='mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3'>
+            <Label htmlFor='maintenance-key' className='shrink-0 text-xs'>维护 Key</Label>
+            <div className='flex min-w-[16rem] flex-1 items-center'>
+              <Input id='maintenance-key' className='h-8 rounded-r-none font-mono text-xs' type={maintenanceKeyVisible ? 'text' : 'password'} autoComplete='new-password' spellCheck={false} value={maintenanceKey} placeholder={maintenanceToken?.key || '输入自定义 Key，或生成随机 Key'} onChange={(event) => setMaintenanceKey(event.target.value)} />
+              <Button className='h-8 rounded-none border-l-0' type='button' variant='outline' size='icon' aria-label={maintenanceKeyVisible ? '隐藏维护 Key' : '显示维护 Key'} onClick={() => setMaintenanceKeyVisible((visible) => !visible)}>{maintenanceKeyVisible ? <EyeOff aria-hidden='true' /> : <Eye aria-hidden='true' />}</Button>
+              <Button className='h-8 rounded-l-none border-l-0' type='button' variant='outline' size='icon' aria-label='生成随机维护 Key' onClick={randomizeMaintenanceKey}><RefreshCw aria-hidden='true' /></Button>
+            </div>
+            <Button type='button' size='sm' disabled={!maintenanceToken || !maintenanceKey || savingMaintenanceKey} onClick={saveMaintenanceKey}><Save aria-hidden='true' />{savingMaintenanceKey ? '保存中' : '保存'}</Button>
+          </div>
+        ) : null}
+      </details>
 
       <Dialog open={Boolean(policyTarget)} onOpenChange={(open) => { if (!open) { setPolicyTarget(null); setDraft(emptyDraft) } }}>
         <DialogContent className='sm:max-w-2xl'>

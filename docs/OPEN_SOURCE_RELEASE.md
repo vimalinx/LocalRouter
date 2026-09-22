@@ -69,6 +69,8 @@ separate explicit actions.
 Tags shaped as `v*` run `.github/workflows/release.yml`. GoReleaser produces
 Linux amd64 and arm64 archives plus `checksums.txt`; each archive includes the
 license, notices, installer, `lr`, systemd template, example configuration, and
-the complete installable `localrouter-protocol-pack` Agent Skill.
+the complete installable `localrouter-protocol-pack` Agent Skill. Operator and
+Agent guides, protocol references, and README images are included so the
+archive's documentation remains usable after extraction.
 The release installer accepts a prebuilt archive binary, so end users do not
 need Go or Bun.

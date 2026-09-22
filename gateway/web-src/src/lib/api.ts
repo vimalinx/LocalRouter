@@ -10,13 +10,40 @@ export class ApiError extends Error {
   }
 }
 
-export async function publicRequest<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: { Accept: 'application/json' } })
-  const payload = (await response.json().catch(() => null)) as T | null
-  if (!response.ok || payload === null) {
-    throw new ApiError(`HTTP ${response.status}`, response.status)
+async function requestJSON(path: string, init: RequestInit) {
+  const reading = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase())
+  const controller = new AbortController()
+  let timedOut = false
+  const cancel = () => controller.abort(init.signal?.reason)
+  if (init.signal?.aborted) cancel()
+  else init.signal?.addEventListener('abort', cancel, { once: true })
+  const timer = reading ? setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, 15_000) : undefined
+  try {
+    const response = await fetch(path, { ...init, signal: controller.signal })
+    const payload: unknown = await response.json().catch(error => {
+      if (controller.signal.aborted) throw error
+      return null
+    })
+    return { response, payload }
+  } catch (cause) {
+    if (init.signal?.aborted) throw cause
+    throw new ApiError(reading
+      ? timedOut ? '读取超时，请检查网关后重新读取。' : '无法连接网关，请检查服务是否运行。'
+      : '未收到操作结果，操作可能已经执行。请先刷新并核对状态，避免重复提交。', 0)
+  } finally {
+    clearTimeout(timer)
+    init.signal?.removeEventListener('abort', cancel)
   }
-  return payload
+}
+
+export async function publicRequest<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const { response, payload } = await requestJSON(path, { headers: { Accept: 'application/json' }, signal })
+  if (!response.ok) throw new ApiError(`HTTP ${response.status}`, response.status)
+  if (payload === null || typeof payload !== 'object') throw new ApiError('网关返回了无法识别的响应。', response.status)
+  return payload as T
 }
 
 export async function adminRequest<T>(
@@ -31,12 +58,15 @@ export async function adminRequest<T>(
     headers.set('Content-Type', 'application/json')
   }
 
-  const response = await fetch(path, { ...init, headers })
-  const payload = (await response.json().catch(() => null)) as
-    | ApiEnvelope<T>
-    | null
-  if (!response.ok || payload === null || payload.success === false) {
-    throw new ApiError(payload?.message || `HTTP ${response.status}`, response.status)
+  const result = await requestJSON(path, { ...init, headers })
+  const { response } = result
+  const payload = result.payload as ApiEnvelope<T> | null
+  if (!response.ok || payload?.success === false) {
+    throw new ApiError(typeof payload?.message === 'string' ? payload.message : `HTTP ${response.status}`, response.status)
+  }
+  const reading = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase())
+  if (!payload || payload.success !== true || (reading && !Object.hasOwn(payload, 'data'))) {
+    throw new ApiError(reading ? '网关返回了无法识别的响应。' : '操作响应无法识别，请先刷新并核对状态，避免重复提交。', response.status)
   }
   return payload.data
 }

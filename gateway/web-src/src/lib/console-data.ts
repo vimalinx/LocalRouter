@@ -1,5 +1,5 @@
-import { useQueries } from '@tanstack/react-query'
-import { adminRequest } from '@/lib/api'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
+import { adminRequest, ApiError } from '@/lib/api'
 import type { AgentUsage, Analytics, Channel, LocalToken, MaintenanceAccess, Paginated, ProtocolDraft, ProtocolEvent, ProtocolRevision, ProtocolView, Provider, RequestLog, Summary, TokenPolicy, WorkflowJob } from '@/lib/types'
 
 export type ConsoleData = {
@@ -22,14 +22,15 @@ export type ConsoleData = {
 
 // These are small operator-owned collections. Load every page instead of
 // silently hiding older channels/Agents; logs retain explicit pagination.
-export async function adminCollection<T extends { id: number }>(path: string, token: string): Promise<T[]> {
+export async function adminCollection<T extends { id: number }>(path: string, token: string, signal?: AbortSignal): Promise<T[]> {
   const items = new Map<number, T>()
   for (let page = 1; ; page++) {
-    const result = await adminRequest<Paginated<T>>(`${path}?page=${page}&page_size=100`, token)
+    const result = await adminRequest<Paginated<T>>(`${path}?page=${page}&page_size=100`, token, { signal })
     if (!result || !Array.isArray(result.items) || !Number.isFinite(result.total) || result.total < 0) throw new Error('列表响应格式错误')
+    const previousSize = items.size
     for (const item of result.items) items.set(item.id, item)
     if (page * 100 >= result.total) return [...items.values()]
-    if (result.items.length === 0) throw new Error('列表在加载时发生变化，请刷新重试')
+    if (items.size === previousSize) throw new Error('列表在加载时发生变化，请刷新重试')
   }
 }
 
@@ -54,9 +55,16 @@ const requirements: Record<string, ConsoleKey[]> = {
   setup: [],
   overview: ['summary', 'analytics'],
   protocols: ['protocols', 'providers', 'channels'],
+  editor: ['drafts', 'revisions'],
   tokens: ['tokens', 'policies', 'maintenanceAccess'],
   jobs: ['jobs'],
   logs: ['logs'],
+}
+const supplements: Record<string, ConsoleKey[]> = {
+  setup: ['tokens'],
+  overview: ['protocols', 'agentUsage'],
+  tokens: ['agentUsage'],
+  jobs: ['events'],
 }
 
 type QueryValue = { data?: unknown; error?: Error | null; isPending?: boolean }
@@ -77,27 +85,35 @@ export function collectConsole(values: QueryValue[]): ConsoleData {
 }
 
 export function useConsoleData(token: string, enabled: boolean, section: string, logPage: number) {
+  const queryClient = useQueryClient()
+  const needed = requirements[section] || requirements.overview
+  const selected = [...needed, ...(supplements[section] || [])]
   const queries = useQueries({ queries: consoleSources.map(([key, , path]) => ({
     queryKey: ['console-data', key, ...(key === 'logs' ? [logPage] : [])],
-    queryFn: () => key === 'channels' || key === 'tokens'
-      ? adminCollection(path, token)
-      : adminRequest<unknown>(key === 'logs' ? `${path}?page=${logPage}&page_size=50` : path, token),
-    enabled,
+    queryFn: ({ signal }) => key === 'channels' || key === 'tokens'
+      ? adminCollection(path, token, signal)
+      : adminRequest<unknown>(key === 'logs' ? `${path}?page=${logPage}&page_size=50` : path, token, { signal }),
+    enabled: enabled && selected.includes(key),
     staleTime: 10_000,
     retry: false,
   })) })
-  const needed = requirements[section] || requirements.overview
   const blocking = queries.filter((_, i) => needed.includes(consoleSources[i][0]))
+  const active = queries.filter((_, i) => enabled && selected.includes(consoleSources[i][0]))
   return {
     data: collectConsole(queries),
-    isPending: blocking.some(query => query.isPending),
+    isPending: enabled && blocking.some(query => query.isPending),
     error: blocking.find(query => query.error && query.data === undefined)?.error,
-    isFetching: blocking.some(query => query.isFetching),
-    warnings: queries.flatMap((query, i) => query.error ? [{ key: consoleSources[i][0], message: `${consoleSources[i][1]}暂时不可用：${query.error.message}` }] : []),
+    isFetching: active.some(query => query.isFetching),
+    authError: active.find(query => query.error instanceof ApiError && query.error.status === 401)?.error,
+    warnings: queries.flatMap((query, i) => enabled && selected.includes(consoleSources[i][0]) && query.error ? [{ key: consoleSources[i][0], message: `${consoleSources[i][1]}暂时不可用：${query.error.message}` }] : []),
     async refetch() {
+      // Other pages become stale, but only the visible page makes requests.
+      await queryClient.invalidateQueries({ queryKey: ['console-data'], refetchType: 'none' })
       const values: QueryValue[] = [...queries]
-      const pending = queries.map((query, i) => query.refetch().then(result => { values[i] = result; return result }))
-      const results = await Promise.all(pending.filter((_, i) => needed.includes(consoleSources[i][0])))
+      const pending = queries.map((query, i) => enabled && selected.includes(consoleSources[i][0])
+        ? query.refetch().then(result => { values[i] = result; return result })
+        : Promise.resolve(query))
+      const results = await Promise.all(pending)
       return { data: collectConsole(values), error: results.find(query => query.error)?.error }
     },
   }

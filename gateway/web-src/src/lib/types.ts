@@ -1,4 +1,5 @@
 export type PublicStatus = {
+  lan_service?: { enabled: boolean; listen?: string; management_exposed: boolean }
   success: boolean
   mode: string
   listen: string

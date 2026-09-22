@@ -35,7 +35,7 @@ export function IdentityRequests({ adminToken, onChanged }: { adminToken: string
   return <section className='border-y py-3' aria-labelledby='identity-requests-title'>
     <div className='flex flex-wrap items-center justify-between gap-2'>
       <div><h2 id='identity-requests-title' className='text-sm font-semibold'>接入申请 <span className='text-muted-foreground'>{pending.length}</span></h2>
-        <p className='mt-1 text-xs text-muted-foreground'>批准后自动交付凭据，范围内自主调用。不同 Agent 分别授权，可随时撤销。</p></div>
+        <p className='mt-1 text-xs text-muted-foreground'>{pending.length ? '核对范围后批准，凭据会自动交付给申请的 Agent。' : '暂无待处理申请。需要独立身份或扩大权限时，申请会显示在这里。'}</p></div>
       <Button variant='ghost' size='sm' disabled={busy} onClick={reload}><RefreshCw aria-hidden='true' />刷新申请</Button>
     </div>
     {error ? <p role='alert' className='mt-3 text-sm text-destructive'>{error}</p> : null}
@@ -52,7 +52,6 @@ export function IdentityRequests({ adminToken, onChanged }: { adminToken: string
       </dl>
       <div className='flex flex-wrap gap-2'><Button size='sm' disabled={busy} onClick={() => decide(request, true)}>批准以上范围</Button><Button size='sm' variant='outline' disabled={busy} onClick={() => decide(request, false)}>拒绝申请</Button></div>
     </article>)}
-    {!pending.length && !error ? <p className='mt-3 text-xs text-muted-foreground'>暂无待处理申请。Agent 发起接入后会显示在这里。</p> : null}
     {requests.some((request) => request.state === 'approved') ? <p className='mt-3 text-xs text-muted-foreground'>已批准的 Agent 可继续领取凭据；已签发身份在下方管理，撤销后不能重新领取恢复权限。</p> : null}
   </section>
 }

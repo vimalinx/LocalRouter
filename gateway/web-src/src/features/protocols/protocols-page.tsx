@@ -53,7 +53,7 @@ type ExternalPoolSnapshot = {
   sticky_resources?: number
 }
 type DetailTarget = { kind: 'protocol' } | { kind: 'account'; ref: string }
-type ServiceTab = 'accounts' | 'services'
+type ServiceTab = 'services' | 'accounts'
 
 const PAGE_SIZE = 50
 
@@ -405,7 +405,7 @@ export function ProtocolsPage(props: {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE)
-  const [activeServiceTab, setActiveServiceTab] = useState<ServiceTab>('accounts')
+  const [activeServiceTab, setActiveServiceTab] = useState<ServiceTab>('services')
   const [busyId, setBusyId] = useState('')
   const [externalPools, setExternalPools] = useState<Record<string, ExternalPoolSnapshot>>({})
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null)
@@ -446,7 +446,7 @@ export function ProtocolsPage(props: {
     setQuery('')
     setStatusFilter('all')
     setVisibleLimit(PAGE_SIZE)
-    setActiveServiceTab('accounts')
+    setActiveServiceTab('services')
     setDetailTarget(null)
     if (protocol.pool_runtime?.ownership === 'upstream' && props.adminToken !== undefined && !externalPools[protocol.id]) {
       void checkBackend(protocol, true)
@@ -518,7 +518,11 @@ export function ProtocolsPage(props: {
   if (!selectedProtocol) {
     return (
       <section className='border-y'>
-        <EmptyState icon={Boxes} title='还没有 Protocol Pack' description='发布 Pack 后会在这里出现。' />
+        <EmptyState icon={Boxes} title='还没有接入服务' description='让 Agent 准备服务接入申请，再在「接入与授权」中确认。已有模型 API 可以添加到「模型渠道」。' />
+        <div className='flex flex-wrap justify-center gap-2 pb-6'>
+          <Button asChild variant='outline'><a href='#setup'>查看接入申请</a></Button>
+          {props.onOpenEditor ? <Button variant='ghost' onClick={props.onOpenEditor}>协议编辑</Button> : null}
+        </div>
       </section>
     )
   }
@@ -680,27 +684,10 @@ export function ProtocolsPage(props: {
                 switchServiceTab(activeServiceTab === 'accounts' ? 'services' : 'accounts', true)
               } else if (event.key === 'Home' || event.key === 'End') {
                 event.preventDefault()
-                switchServiceTab(event.key === 'Home' ? 'accounts' : 'services', true)
+                switchServiceTab(event.key === 'Home' ? 'services' : 'accounts', true)
               }
             }}
           >
-            <button
-              id={serviceTabId('accounts')}
-              type='button'
-              role='tab'
-              aria-selected={activeServiceTab === 'accounts'}
-              aria-controls={servicePanelId('accounts')}
-              tabIndex={activeServiceTab === 'accounts' ? 0 : -1}
-              className={cn(
-                'relative flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                activeServiceTab === 'accounts' && 'text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary'
-              )}
-              onClick={() => switchServiceTab('accounts')}
-            >
-              <UsersRound aria-hidden='true' className='size-4' />
-              账号明细
-              <span className='tabular-nums text-[10px] text-muted-foreground'>{localPool ? accounts.length : 1}</span>
-            </button>
             <button
               id={serviceTabId('services')}
               type='button'
@@ -717,6 +704,23 @@ export function ProtocolsPage(props: {
               <Boxes aria-hidden='true' className='size-4' />
               服务
               <span className='tabular-nums text-[10px] text-muted-foreground'>{selectedProtocol.routes.length}</span>
+            </button>
+            <button
+              id={serviceTabId('accounts')}
+              type='button'
+              role='tab'
+              aria-selected={activeServiceTab === 'accounts'}
+              aria-controls={servicePanelId('accounts')}
+              tabIndex={activeServiceTab === 'accounts' ? 0 : -1}
+              className={cn(
+                'relative flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                activeServiceTab === 'accounts' && 'text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary'
+              )}
+              onClick={() => switchServiceTab('accounts')}
+            >
+              <UsersRound aria-hidden='true' className='size-4' />
+              账号明细
+              <span className='tabular-nums text-[10px] text-muted-foreground'>{localPool ? accounts.length : 1}</span>
             </button>
           </div>
 

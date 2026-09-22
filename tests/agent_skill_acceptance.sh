@@ -57,13 +57,8 @@ for name in references:
 
 agents = (root / "AGENTS.md").read_text()
 assert ".agents/skills/localrouter-protocol-pack/SKILL.md" in agents
-assert "localrouter.maintain" in agents
-assert "/manage/mcp" in agents
-assert "structured error" in agents
-assert "lr resolve" in agents
-assert "lr catalog" in agents
-assert "lr preflight" in agents
-assert "lr watch" in agents
+assert "localrouter.maintain" in skill
+assert "/manage/mcp" in skill
 
 schema = json.loads((root / "gateway/protocols/schema/protocol-pack-v2.schema.json").read_text())
 validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())

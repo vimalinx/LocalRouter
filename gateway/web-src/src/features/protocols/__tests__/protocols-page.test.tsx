@@ -95,23 +95,28 @@ describe('ProtocolsPage master-detail pool console', () => {
     const tablist = screen.getByRole('tablist', { name: 'Video Jobs 服务数据' })
     const accountsTab = within(tablist).getByRole('tab', { name: /账号明细/ })
     const servicesTab = within(tablist).getByRole('tab', { name: /^服务/ })
-    expect(accountsTab).toHaveAttribute('aria-selected', 'true')
-    expect(servicesTab).toHaveAttribute('aria-selected', 'false')
-    expect(screen.getByRole('tabpanel', { name: /账号明细/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: '账号 01 · abc123' })).toBeVisible()
-    expect(screen.queryByRole('switch', { name: '停用子服务 jobs.create' })).not.toBeInTheDocument()
-    expect(screen.getByText('7 credits · 0.07 USD')).toBeVisible()
-
-    accountsTab.focus()
-    await user.keyboard('{ArrowRight}')
+    expect(within(tablist).getAllByRole('tab')).toEqual([servicesTab, accountsTab])
     expect(servicesTab).toHaveAttribute('aria-selected', 'true')
-    expect(servicesTab).toHaveFocus()
+    expect(accountsTab).toHaveAttribute('aria-selected', 'false')
     const servicePanel = screen.getByRole('tabpanel', { name: /^服务/ })
     expect(servicePanel).toBeVisible()
     expect(screen.getByRole('switch', { name: '停用子服务 jobs.create' })).toHaveAttribute('aria-checked', 'true')
     expect(within(servicePanel).getByText('未接入价格')).toBeVisible()
 
-    await user.click(accountsTab)
+    servicesTab.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(accountsTab).toHaveAttribute('aria-selected', 'true')
+    expect(accountsTab).toHaveFocus()
+    expect(screen.getByRole('tabpanel', { name: /账号明细/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: '账号 01 · abc123' })).toBeVisible()
+    expect(screen.queryByRole('switch', { name: '停用子服务 jobs.create' })).not.toBeInTheDocument()
+    expect(screen.getByText('7 credits · 0.07 USD')).toBeVisible()
+    await user.keyboard('{Home}')
+    expect(servicesTab).toHaveFocus()
+    expect(servicesTab).toHaveAttribute('aria-selected', 'true')
+    await user.keyboard('{End}')
+    expect(accountsTab).toHaveFocus()
+    expect(accountsTab).toHaveAttribute('aria-selected', 'true')
 
     await user.click(screen.getByRole('button', { name: '查看 Video Jobs 详情' }))
     const drawer = screen.getByRole('dialog')
@@ -159,6 +164,7 @@ describe('ProtocolsPage master-detail pool console', () => {
     })
     render(<ProtocolsPage protocols={[protocol({}), searchFixture]} />)
 
+    await user.click(screen.getByRole('tab', { name: /账号明细/ }))
     const serviceNavigation = screen.getByRole('navigation', { name: 'Protocol Pack' })
     const searchButton = within(serviceNavigation).getByRole('button', { name: /Search Fixture/ })
     await user.click(searchButton)
@@ -172,6 +178,8 @@ describe('ProtocolsPage master-detail pool console', () => {
     const quotaFailures = screen.getAllByRole('status', { name: 'Search Fixture 上游未返回' })
     expect(quotaFailures).toHaveLength(2)
     expect(quotaFailures[0]).toHaveClass('bg-amber-200/70')
+    expect(screen.getByRole('tab', { name: /^服务/ })).toHaveAttribute('aria-selected', 'true')
+    await user.click(screen.getByRole('tab', { name: /账号明细/ }))
     expect(screen.getByRole('button', { name: 'Fixture 账号 01' })).toBeVisible()
     expect(screen.queryByRole('button', { name: '账号 01 · abc123' })).not.toBeInTheDocument()
   })
@@ -197,6 +205,7 @@ describe('ProtocolsPage master-detail pool console', () => {
     const user = userEvent.setup()
     render(<ProtocolsPage protocols={[protocol({})]} adminToken='test-admin' />)
 
+    await user.click(screen.getByRole('tab', { name: /账号明细/ }))
     await user.click(screen.getByRole('button', { name: '账号 02 · def456' }))
     const drawer = screen.getByRole('dialog')
     expect(within(drawer).getByRole('heading', { name: '账号 02 · def456' })).toBeVisible()
@@ -211,6 +220,7 @@ describe('ProtocolsPage master-detail pool console', () => {
     const user = userEvent.setup()
     render(<ProtocolsPage protocols={[protocol({})]} />)
 
+    await user.click(screen.getByRole('tab', { name: /账号明细/ }))
     await user.selectOptions(screen.getByRole('combobox', { name: '筛选账号状态' }), 'cooldown')
     expect(screen.getByRole('button', { name: '账号 02 · def456' })).toBeVisible()
     expect(screen.queryByRole('button', { name: '账号 01 · abc123' })).not.toBeInTheDocument()
@@ -219,7 +229,8 @@ describe('ProtocolsPage master-detail pool console', () => {
     expect(screen.getByText('没有匹配的账号')).toBeVisible()
   })
 
-  it('shows remaining-only quota without inventing a percentage', () => {
+  it('shows remaining-only quota without inventing a percentage', async () => {
+    const user = userEvent.setup()
     const remainingOnly = protocol({})
     remainingOnly.pool_runtime!.quota = {
       status: 'remaining-only', tracked_accounts: 2, confirmed_accounts: 2, unknown_accounts: 0, stale_accounts: 0, remaining: 12, unit: 'credits',
@@ -229,6 +240,7 @@ describe('ProtocolsPage master-detail pool console', () => {
       quota: { ...account.quota, total: undefined, used: undefined, used_percent: undefined },
     }))
     render(<ProtocolsPage protocols={[remainingOnly]} />)
+    await user.click(screen.getByRole('tab', { name: /账号明细/ }))
 
     expect(screen.queryByRole('progressbar', { name: 'Video Jobs 剩余额度' })).not.toBeInTheDocument()
     expect(screen.getAllByText('余量 12 credits')).toHaveLength(2)
@@ -265,13 +277,15 @@ describe('ProtocolsPage master-detail pool console', () => {
     expect(screen.getAllByText('余量 0%')).toHaveLength(2)
   })
 
-  it('surfaces stale and mixed-unit telemetry as text, not a false aggregate', () => {
+  it('surfaces stale and mixed-unit telemetry as text, not a false aggregate', async () => {
+    const user = userEvent.setup()
     const mixed = protocol({})
     mixed.pool_runtime!.quota = {
       status: 'mixed-unit', tracked_accounts: 2, confirmed_accounts: 1, unknown_accounts: 0, stale_accounts: 1,
       reference_value: { status: 'ambiguous' },
     }
     render(<ProtocolsPage protocols={[mixed]} />)
+    await user.click(screen.getByRole('tab', { name: /账号明细/ }))
 
     expect(screen.queryByRole('progressbar', { name: 'Video Jobs 剩余额度' })).not.toBeInTheDocument()
     expect(screen.getAllByText('单位不一致')).toHaveLength(2)
@@ -313,8 +327,7 @@ describe('ProtocolsPage master-detail pool console', () => {
     const serviceNavigation = screen.getByRole('navigation', { name: 'Protocol Pack' })
     expect(within(serviceNavigation).getByText('10 USD / 1000 credits')).toBeVisible()
 
-    expect(screen.queryByRole('table', { name: 'Video Jobs 定价' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: /^服务/ }))
+    expect(screen.getByRole('tab', { name: /^服务/ })).toHaveAttribute('aria-selected', 'true')
     const pricingTable = screen.getByRole('table', { name: 'Video Jobs 定价' })
     expect(within(pricingTable).getByText('视频生成')).toBeVisible()
     expect(within(pricingTable).getByText('10 USD / 1000 credits')).toBeVisible()

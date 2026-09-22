@@ -4,9 +4,20 @@ All notable LocalRouter changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once a stable `1.0.0` contract is
 published.
 
-## Unreleased
+## 0.3.0 - 2026-09-22
 
-### 0.2.0 maintenance branch
+- Updated the Vitest development dependency to 4.1.11 to address
+  GHSA-82fw-gwwq-j7x9 in the test mocker.
+- Simplified the console to four everyday destinations, with advanced tools
+  and the protocol editor loaded on demand. Service operations now precede
+  account details, including when switching services.
+- Added connection recovery, bounded and cancellable console reads, stale-data
+  indicators, expired-session cache cleanup, and page-load error recovery.
+  Interrupted mutations remain uncertain and are never automatically replayed.
+- Added accessible mobile navigation and keyboard service tabs, retained
+  legacy channel/editor links, and made empty service lists actionable.
+- Included operator guides, Agent instructions, and README images in binary
+  archives, with installation and archive-content regression checks.
 
 - Added human-reviewed exact-scope identity enrollment with private resumable CLI
   delivery, automatic claim on daily calls, and owned scope-change requests.
@@ -45,7 +56,7 @@ published.
   enforce the configured limits; Agents cannot edit them through service or
   maintenance credentials.
 - Variable or unknown costs require approval. Published v0.2.0 artifacts retain
-  their original tag; these changes belong to the maintained 0.2.0 branch.
+  their original tag; these changes are included in v0.3.0.
 
 ## 0.2.0 - 2026-09-06
 

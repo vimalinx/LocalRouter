@@ -32,6 +32,35 @@ usage() {
   cat <<'EOF'
 Usage: lr <command> [arguments]
 
+Daily use
+  lr init                           Check this Token and the current mode (read-only)
+  lr guide                          Read the Agent usage guide
+  lr status                         Check service readiness
+  lr tree [pack]                    Browse configured services
+  lr find operation <intent>        Find an operation
+  lr describe <pack> <operation>    Read its input and authorization contract
+  lr exec <pack> <operation> [json] [path-json] [query-json]
+                                    Check identity, exact model and preflight; call once
+  lr result [call-id [--refresh]]    Inspect the saved response; never replay it
+
+Ordinary mode accepts an existing Service Token; independent registration is
+optional. Token permissions and provider pool limits still apply. Use lr exec
+within the human-approved scope; unknown outcomes must be reconciled first.
+
+Only when needed
+  lr identity --help                Independent identity and scope changes
+  lr setup --help                   Prepare a new service for human approval
+  lr help all                       Full reference, workflows and maintenance
+
+JSON accepts @/path/to/body.json. LOCALROUTER_API_TOKEN_FILE names a private
+mode-600 file, never a Token value. Maintenance requires a separate credential.
+EOF
+}
+
+usage_all() {
+  cat <<'EOF'
+Usage: lr <command> [arguments]
+
 Start here
   lr init                           Check identity and return the next safe step (read-only)
   lr identity request <agent-code> <policy-json|@file>
@@ -860,7 +889,7 @@ command_find_pool() {
 command_find() {
   local domain="${1:-}"
   if [[ "$domain" == "-h" || "$domain" == "--help" || "${2:-}" == "-h" || "${2:-}" == "--help" ]]; then
-    usage
+    usage_all
     return 0
   fi
   case "$domain" in
@@ -1083,7 +1112,7 @@ command_setup() {
       [[ -n "${1:-}" && -n "${2:-}" ]] || fail "setup $action requires proposal id and exact digest"
       arguments="$(jq -cn --arg id "$1" --arg digest "$2" '{id:$id,digest:$digest}')"; tool_name="localrouter_setup_$action" ;;
     traces) arguments="$(jq -cn --arg trace_id "${1:-}" '{trace_id:$trace_id}')"; tool_name=localrouter_setup_traces ;;
-    help|-h|--help) usage; return ;;
+    help|-h|--help) usage_all; return ;;
     *) fail "unknown setup action: $action" ;;
   esac
   if [[ "$action" == apply ]]; then
@@ -1533,7 +1562,7 @@ case "$command_name" in
   *) load_agent_binding ;;
 esac
 if [[ "$command_name" != "help" && ("${1:-}" == "-h" || "${1:-}" == "--help") ]]; then
-  usage
+  usage_all
   exit 0
 fi
 case "$command_name" in
@@ -1568,6 +1597,11 @@ case "$command_name" in
   manage-list) command_manage_list "$@" ;;
   manage-call) command_manage_call "$@" ;;
   env) command_env "$@" ;;
-  help|-h|--help) usage ;;
+  help|-h|--help)
+    if [[ "${1:-}" == all && $# == 1 ]]; then usage_all
+    elif [[ $# == 0 ]]; then usage
+    else fail "use lr help or lr help all"
+    fi
+    ;;
   *) usage >&2; fail "unknown command: $command_name" ;;
 esac

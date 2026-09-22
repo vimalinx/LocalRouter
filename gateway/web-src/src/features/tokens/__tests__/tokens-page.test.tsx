@@ -28,6 +28,26 @@ const defaultToken: LocalToken = {
 describe('TokensPage issuance', () => {
   beforeEach(() => vi.mocked(adminRequest).mockReset())
 
+  it('makes default and legacy tokens manageable without revealing secrets on load', async () => {
+    const user = userEvent.setup()
+    const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+    const legacy = { ...defaultToken, id: 12, name: 'legacy-app', agent_code: '', agent_name: '', workspace: '', runtime: '' }
+    vi.mocked(adminRequest).mockResolvedValue({ key: 'sk-fixture-only-token' } as never)
+    render(<TokensPage adminToken='' tokens={[defaultToken, legacy]} usage={[]} maintenanceAccess={{ agent_tokens_enabled: false, default_auth: 'admin', admin_header: 'X-Local-Admin', agent_auth: 'bearer', agent_capability: 'localrouter.maintain', service_tokens: 'call-only', maintenance_tokens: 'maintenance-only' }} apiTokenFile='/fixture/token' lanListen='192.168.1.9:8318' onChanged={vi.fn()} />)
+    expect(screen.getByRole('heading', { name: 'Token 管理' })).toBeVisible()
+    expect(screen.getByText('legacy-app')).toBeVisible()
+    expect(screen.getByText('http://192.168.1.9:8318/v1')).toBeVisible()
+    expect(adminRequest).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '复制 Token' }))
+    expect(clipboard).toHaveBeenCalledWith('sk-fixture-only-token')
+    expect(screen.queryByText('sk-fixture-only-token')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '显示 Token' }))
+    expect(screen.getByText('sk-fixture-only-token')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '隐藏 Token' }))
+    expect(screen.queryByText('sk-fixture-only-token')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '撤销令牌 LocalRouter default' })).not.toBeInTheDocument()
+  })
+
   it('preserves service scope and expiry when editing limits, and revokes without dropping the policy first', async () => {
     const user = userEvent.setup()
     const token: LocalToken = { ...defaultToken, id: 9, name: 'scoped', agent_code: 'scoped-agent', agent_name: 'Scoped Agent', workspace: '/fixture', expired_time: 1900000000 }
@@ -57,7 +77,7 @@ describe('TokensPage issuance', () => {
     }
     const onChanged = vi.fn().mockResolvedValue([defaultToken, issued])
     vi.mocked(adminRequest)
-      .mockResolvedValueOnce(undefined as never)
+      .mockResolvedValueOnce({ id: 2 } as never)
       .mockResolvedValueOnce(undefined as never)
       .mockResolvedValueOnce({ key: 'issued-token-value' } as never)
 
@@ -80,13 +100,13 @@ describe('TokensPage issuance', () => {
       />
     )
 
-    await user.click(screen.getByRole('button', { name: '注册 Agent' }))
+    await user.click(screen.getByRole('button', { name: '创建 Token' }))
     await user.type(screen.getByLabelText('Agent 编码'), 'video-agent-007')
     await user.type(screen.getByLabelText('Agent 名称'), 'Video Agent')
     await user.type(screen.getByLabelText('工作区'), '/workspace/video')
     await user.type(screen.getByLabelText('Token 名称'), 'video-agent-token')
     await user.type(screen.getByLabelText('每日请求'), '500')
-    await user.click(screen.getByRole('button', { name: '注册并签发' }))
+    await user.click(screen.getByRole('button', { name: '创建并签发' }))
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
     expect(adminRequest).toHaveBeenCalledWith(
@@ -140,7 +160,7 @@ describe('TokensPage issuance', () => {
     expect(screen.getByText('未接入价格')).toBeVisible()
   })
 
-  it('expands password-style maintenance key controls only when maintenance is enabled', async () => {
+  it('opens the optional maintenance controls and preserves password-style key editing', async () => {
     const user = userEvent.setup()
     const maintainer = { ...defaultToken, id: 8, name: 'Agent maintenance', key: 'sk-abcd****wxyz', agent_code: 'localrouter-maintainer', agent_name: 'LocalRouter 维护 Agent', workspace: 'operator', runtime: 'maintenance' }
     vi.mocked(adminRequest).mockResolvedValue({ updated: true } as never)
@@ -156,6 +176,7 @@ describe('TokensPage issuance', () => {
       />
     )
 
+    await user.click(screen.getByText('Agent 维护', { exact: true }))
     const input = screen.getByLabelText('维护 Key')
     expect(input).toHaveAttribute('type', 'password')
     await user.click(screen.getByRole('button', { name: '生成随机维护 Key' }))

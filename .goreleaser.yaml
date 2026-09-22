@@ -44,6 +44,9 @@ archives:
       - CONTRIBUTING.md
       - THIRD-PARTY-LICENSES.md
       - VERSION
+      - docs/*.md
+      - docs/images/*.png
+      - gateway/README.md
       - .agents/skills/localrouter-protocol-pack/SKILL.md
       - .agents/skills/localrouter-protocol-pack/**/*
       - packaging/localrouter.env.example

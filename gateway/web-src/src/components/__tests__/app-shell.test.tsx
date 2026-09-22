@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -55,11 +56,30 @@ describe('AppShell mobile navigation', () => {
       'page'
     )
     expect(screen.getByRole('link', { name: /运行概览/ })).not.toHaveAttribute('aria-current')
-    expect(screen.getByText('AGPL-3.0')).toBeVisible()
+    expect(within(screen.getByRole('dialog')).getByText('AGPL-3.0')).toBeVisible()
     expect(screen.queryByRole('link', { name: /历史来源/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /协议发布/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /^模型渠道$/ })).not.toBeInTheDocument()
     expect(document.querySelector('#main-content')).toHaveClass('overflow-hidden')
+  })
+
+  it('contains mobile keyboard focus and restores the trigger after Escape', async () => {
+    const user = userEvent.setup()
+    function MobileShell() {
+      const [open, setOpen] = useState(false)
+      return <AppShell activeSection='overview' mobileOpen={open} dark={false} refreshing={false} listener='' onNavigate={vi.fn()} onMobileOpenChange={setOpen} onThemeToggle={vi.fn()} onRefresh={vi.fn()}><button>页面操作</button></AppShell>
+    }
+    render(<MobileShell />)
+    const menu = screen.getByRole('button', { name: '打开导航' })
+    await user.click(menu)
+    const dialog = screen.getByRole('dialog', { name: '控制台导航' })
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    expect(screen.queryByRole('button', { name: '页面操作' })).not.toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(menu).toHaveFocus()
   })
 
   it('keeps other sections inside the fixed shell with one main scroll region', () => {

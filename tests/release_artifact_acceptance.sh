@@ -37,6 +37,10 @@ trap cleanup EXIT
 required_files=(
   README.md CHANGELOG.md LICENSE NOTICE PROVENANCE.md SECURITY.md
   CONTRIBUTING.md THIRD-PARTY-LICENSES.md VERSION
+  docs/OPERATIONS.md docs/AGENT-USAGE.md docs/DOCKER.md
+  docs/PROTOCOL-PACK-V3.md docs/SERVICE-ALLOWANCES.md gateway/README.md
+  docs/images/localrouter-overview.png docs/images/localrouter-services.png
+  docs/images/localrouter-agent-workbench.png
   packaging/agent-contract/AGENTS.localrouter.md
   packaging/localrouter.env.example packaging/systemd/localrouter.service.in
   tools/lr tools/protocol-pack-lifecycle.sh tools/install-localrouter.sh
@@ -75,7 +79,7 @@ amd64_root="$(inspect_archive "$amd64_archive" 'x86-64')"
 inspect_archive "$arm64_archive" 'ARM aarch64' >/dev/null
 
 "$amd64_root/localrouter" version | grep -Fq 'localrouter '
-"$amd64_root/tools/lr" help | grep -Fq 'lr runtime-openai <pack> <model>'
+"$amd64_root/tools/lr" help all | grep -Fq 'lr runtime-openai <pack> <model>'
 
 test_home="$acceptance_root/home"
 install -d -m 0700 "$test_home"
