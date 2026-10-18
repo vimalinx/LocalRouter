@@ -33,5 +33,8 @@ Run the complete local suite before proposing a change:
 ./tests/verify.sh
 ```
 
+The embedded console under `gateway/web/` is generated and not tracked. Build it
+with `make -C gateway web` before running `go` commands directly in `gateway/`.
+
 Real provider and paid tests remain opt-in and require explicit authorization.
 They are not part of the default contribution gate.

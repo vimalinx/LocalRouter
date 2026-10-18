@@ -17,7 +17,7 @@ build: web
 run:
 	go run .
 
-test: web-test
+test: web web-test
 	go test ./...
 
 verify:
