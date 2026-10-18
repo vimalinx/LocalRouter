@@ -19,7 +19,7 @@ OAuth 和账号刷新属于操作者选择的外部维护器。公开发行版�
 
 ## 运行
 
-要求：Go 1.25.13+ 和 Bun。控制台源码位于 `web-src/`，使用 React、Tailwind CSS 和 shadcn 风格组件；`web/` 是编译后由 Go 嵌入的产物。
+要求：Go 1.26+ 和 Bun。控制台源码位于 `web-src/`，使用 React、Tailwind CSS 和 shadcn 风格组件；`web/` 是编译后由 Go 嵌入的产物。
 
 ```bash
 bun install --cwd gateway/web-src --frozen-lockfile

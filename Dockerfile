@@ -7,7 +7,7 @@ RUN bun install --frozen-lockfile
 COPY gateway/web-src/ ./
 RUN bun run build
 
-FROM golang:1.25.13-alpine@sha256:1e0126852075c9c60731c8ba49088448b91f63e2aed97ca9d1a9791622a05946 AS go-build
+FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS go-build
 ARG VCS_REF=none
 ARG BUILD_DATE=unknown
 WORKDIR /src

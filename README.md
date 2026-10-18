@@ -57,7 +57,7 @@ curl --fail http://127.0.0.1:8317/healthz
 <details>
 <summary>从源码安装</summary>
 
-准备 Linux、Go 1.25.13 或更新版本、Bun、Git 和 Make。
+准备 Linux、Go 1.26 或更新版本、Bun、Git 和 Make。
 
 ```bash
 git clone https://github.com/vimalinx/LocalRouter.git
@@ -200,7 +200,7 @@ lr tree
 
 ## 开发与验证
 
-准备 Go 1.25.13 或更新版本、Bun、Git 和 Make，在项目根目录执行。前端位于 `gateway/web-src`，构建到 `gateway/web` 后嵌入 Go 程序。
+准备 Go 1.26 或更新版本、Bun、Git 和 Make，在项目根目录执行。前端位于 `gateway/web-src`，构建到 `gateway/web` 后嵌入 Go 程序。
 
 ```bash
 make build

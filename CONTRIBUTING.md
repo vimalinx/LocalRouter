@@ -2,7 +2,7 @@
 
 ## Set up
 
-Use Go 1.25.13 or newer plus Bun:
+Use Go 1.26 or newer plus Bun:
 
 ```bash
 git clone https://github.com/vimalinx/LocalRouter.git
