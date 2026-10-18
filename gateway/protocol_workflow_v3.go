@@ -238,7 +238,8 @@ func (registry *protocolRegistry) handleGraphWorkflowCreate(c *gin.Context, runt
 		job, err = registry.runStoredWorkflow(c.Request.Context(), runtime, definition, workflow, job.ID, job.OwnerTokenID, "advance", nil, 0)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow job"})
+		job.State = "outcome_unknown"
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "code": "workflow_outcome_unknown", "retryable": false, "next_action": "reconcile this existing job; do not replay it", "data": publicWorkflowJob(job)})
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job)})
@@ -259,7 +260,7 @@ func workflowCallbackBaseURL(c *gin.Context, runtime localRuntime) (string, erro
 }
 
 func (registry *protocolRegistry) handleGraphWorkflowGet(c *gin.Context, runtime localRuntime, definition protocolDefinition, workflow protocolWorkflow) {
-	registry.serveStoredWorkflow(c, runtime, definition, workflow, "advance")
+	registry.serveStoredWorkflow(c, runtime, definition, workflow, "observe")
 }
 
 func (registry *protocolRegistry) handleGraphWorkflowCancel(c *gin.Context, runtime localRuntime, definition protocolDefinition, workflow protocolWorkflow) {
@@ -356,10 +357,17 @@ func (registry *protocolRegistry) advanceGraphWorkflow(runtime localRuntime, def
 	if responseBody == nil {
 		responseBody = []byte("null")
 	}
+	if !json.Valid(responseBody) {
+		responseBody, _ = json.Marshal(string(responseBody))
+	}
 	if job.Context == nil {
 		job.Context = make(map[string]json.RawMessage)
 	}
 	job.Context[step.ID] = append(json.RawMessage(nil), responseBody...)
+	if errors.Is(callErr, errWorkflowOutcomeUnknown) {
+		job.State, job.Error, job.WaitingCallback = "outcome_unknown", callErr.Error(), false
+		return job
+	}
 	env := graphWorkflowExpressionEnv(job, responseBody, status)
 	if callErr != nil {
 		env["error"] = callErr.Error()
@@ -446,6 +454,9 @@ func (registry *protocolRegistry) executeWorkflowCall(runtime localRuntime, defi
 	if method == "" {
 		method = route.Methods[0]
 	}
+	readOnly := method == http.MethodGet || method == http.MethodHead
+	upstreamReadOnly := route.UpstreamMethod == "" || route.UpstreamMethod == http.MethodGet || route.UpstreamMethod == http.MethodHead
+	runtime.callRecovery = job.Cancelling || (job.Attempts > 1 && readOnly && upstreamReadOnly)
 	status, responseBody, _, err := callLocalProtocol(runtime, definition.ID, method, path, query.Encode(), "application/json", body)
 	if err != nil {
 		return responseBody, status, err
@@ -484,9 +495,7 @@ func (registry *protocolRegistry) executeParallelWorkflowCalls(runtime localRunt
 		entry := map[string]any{"status": item.status, "body": body}
 		if item.err != nil {
 			entry["error"] = item.err.Error()
-			if firstErr == nil {
-				firstErr = item.err
-			}
+			firstErr = errors.Join(firstErr, item.err)
 		}
 		if item.status < 200 || item.status >= 300 {
 			overallStatus = item.status

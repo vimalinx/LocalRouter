@@ -106,6 +106,7 @@ func firstUsageFloat(body []byte, paths ...string) (float64, bool) {
 // Parse lines incrementally so usage at the start of a long stream is retained.
 // Oversized individual lines are skipped without retaining unbounded payloads.
 type streamUsageCollector struct {
+	terminal bool
 	pending  []byte
 	dropping bool
 	usage    usageMetrics
@@ -143,6 +144,16 @@ func (collector *streamUsageCollector) Write(data []byte) (int, error) {
 func (collector *streamUsageCollector) observe(line []byte) {
 	candidate := bytes.TrimSpace(line)
 	candidate = bytes.TrimSpace(bytes.TrimPrefix(candidate, []byte("data:")))
+	if bytes.Equal(candidate, []byte("[DONE]")) {
+		collector.terminal = true
+	}
+	switch gjson.GetBytes(candidate, "type").String() {
+	case "message_stop", "response.completed":
+		collector.terminal = true
+	}
+	if gjson.GetBytes(candidate, "candidates.0.finishReason").String() != "" {
+		collector.terminal = true
+	}
 	parsed := parseUsageMetrics(candidate)
 	best := &collector.usage
 	best.InputTokens = max(best.InputTokens, parsed.InputTokens)

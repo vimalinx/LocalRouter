@@ -65,3 +65,32 @@ and refuses to recreate grants after an intervening authority change. A scoped
 maintenance-only Token uses `LOCALROUTER_SETUP_LANE=maintenance` for preparation
 and `lr setup apply <id> <digest>` for compatible repairs. New authority still
 requires human approval. Read `lr guide` and the published `/docs/agent.json` for the current port-only contract; repository access is not required.
+
+## First service, input schemas, and replacement reviews
+
+For an unpublished service with no independent identity, use `lr identity prepare
+<agent-code>` (policy `{"setup_only":true}`), human approval, then `lr identity
+claim`. This identity cannot call services. Never request an unrelated published
+Pack merely to unlock proposal preparation. A rejected enrollment can be cancelled
+with `lr identity cancel` before resubmitting; never delete shared binding folders.
+
+`lr identity schema` publishes enrollment field types. `lr setup schema` returns
+the complete proposal schema, and `lr setup schema pack` the Pack v3 schema.
+Public endpoint fallbacks are `/docs/identity-request.schema.json`,
+`/docs/setup-proposal.schema.json`, and `/docs/protocol-pack-v3.schema.json` on the
+verified LocalRouter origin. No checkout path is required.
+
+Start from the selected template's `example` and retain top-level `enabled:true`.
+Runtime route fields `enabled`, `operation_key` and `call_url` are projections,
+not authoring input. For human-provided credentials specify only
+`"auth":{"type":"bearer"}` or `"auth":{"type":"header","header":"X-API-Key"}`.
+Omit credential values and `secret_file`; LocalRouter assigns the binding and the
+human supplies the key during approval. No-auth services use `{"type":"none"}`.
+
+If a pending proposal lacks a reviewed effective policy or its review is stale,
+its owner may run `lr setup reprepare <id> <digest> [--enable]`. `--enable` explicitly
+requests an enabled replacement for a disabled connection. The human console can
+also prepare the replacement. This preserves history and creates a fresh approval
+digest; repeated requests return the same replacement, never apply or call the
+provider. Inspect the replacement before approval. An interrupted apply must be
+reconciled first; repreparation cannot discard an unknown outcome.

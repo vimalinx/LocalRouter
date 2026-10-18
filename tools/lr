@@ -63,6 +63,8 @@ Usage: lr <command> [arguments]
 
 Start here
   lr init                           Check identity and return the next safe step (read-only)
+  lr identity schema                Read the live enrollment and policy schema
+  lr identity prepare <agent-code> Request a setup-only identity with no call rights
   lr identity request <agent-code> <policy-json|@file>
                                     Request exact scope; human approves once in Agent Workbench
   lr identity claim                 Privately receive and bind the approved identity
@@ -118,7 +120,9 @@ Call
 Agent-led service setup
   lr setup templates [--all]       List compact template metadata; --all returns full recipes
   lr setup template <id> <version>  Read one exact recipe and its maintenance guide
-  lr setup schema                  Read the proposal input schema
+  lr setup schema [proposal|pack]  Read the live authoring schema
+  lr setup reprepare <id> <digest> [--enable]
+                                    Replace an unapplied proposal for a fresh human review
   lr setup prepare <json|@file>     Prepare a connection, bundle or template for exact approval
   lr setup list                    List this Agent's proposals
   lr setup get <id>                 Inspect progress, impact, digest and next action
@@ -271,6 +275,9 @@ load_agent_binding() {
 
 command_identity() {
   local action="${1:-}" binding_path
+  if [[ "$action" == schema ]]; then
+    curl --noproxy '*' --fail-with-body --silent "$base_url/docs/identity-request.schema.json" | jq .; return
+  fi
   binding_path="$(agent_binding_path)" || fail "set LOCALROUTER_AGENT_SESSION to this Agent's stable session ID; Codex sessions use CODEX_THREAD_ID automatically"
   case "$action" in
     access)
@@ -289,6 +296,10 @@ command_identity() {
       [[ $# == 2 && "$2" =~ ^access-[a-f0-9]{24}$ ]] || fail "use lr identity access-status <access-id>"
       authenticated_request GET "$base_url/agent/access-requests/$2" | jq '.data'
       ;;
+    prepare)
+      [[ $# == 2 ]] || fail "use lr identity prepare <agent-code>"
+      command_identity_enroll request "$2" '{"setup_only":true}'
+      ;;
     request|claim|cancel)
       command_identity_enroll "$@"
       ;;
@@ -296,7 +307,7 @@ command_identity() {
       [[ $# = 3 && -n "$2" && "$3" = /* ]] || fail "use lr identity bind <agent-code> </absolute/mode-600/token-file>"
       local identity
       identity="$(bearer_request "$3" GET "$base_url/agent/whoami")" || { printf '%s\n' "$identity"; return 1; }
-      jq -e --arg agent "$2" --arg workspace "$PWD" '.identity_ready == true and .agent_code == $agent and .workspace == $workspace and .service_access == true and .maintenance_access == false' >/dev/null <<<"$identity" || {
+      jq -e --arg agent "$2" --arg workspace "$PWD" '.identity_ready == true and .agent_code == $agent and .workspace == $workspace and (.service_access == true or .setup_only == true) and .maintenance_access == false' >/dev/null <<<"$identity" || {
         json_fail "agent_identity_mismatch" "issued identity must match the Agent code and current workspace, and be service-only" "check lr init with the explicit locator; do not borrow another Agent identity or register through /local/api"
         return 1
       }
@@ -308,7 +319,7 @@ command_identity() {
       chmod 600 "$temporary"
       jq -n --arg origin "$base_url" --arg workspace "$PWD" --arg agent "$2" --arg token_file "$3" '{origin:$origin,workspace:$workspace,agent_code:$agent,token_file:$token_file}' >"$temporary"
       mv -f -- "$temporary" "$binding_path"
-      jq -n --arg agent "$2" --arg workspace "$PWD" '{ready:true,agent_code:$agent,workspace:$workspace,scope:"current-agent-session",token_value_copied:false,next_action:"Use lr exec for an authorized operation; this session now reuses the issued identity automatically."}'
+      jq -n --argjson setup_only "$(jq -r ' .setup_only // false' <<<"$identity")" --arg agent "$2" --arg workspace "$PWD" '{setup_only:$setup_only,ready:true,agent_code:$agent,workspace:$workspace,scope:"current-agent-session",token_value_copied:false,next_action:(if $setup_only then "Use lr setup prepare for a new service proposal; this identity cannot call services until scope approval." else "Use lr exec for an authorized operation; this session now reuses the issued identity automatically." end)}'
       ;;
     forget)
       [[ $# = 1 ]] || fail "identity forget takes no arguments"
@@ -1071,7 +1082,7 @@ command_init() {
   local contract identity
   contract="$(discovery)"
   if [[ ! -f "$api_token_file" ]]; then
-    jq -n --arg file "$api_token_file" --arg console "$base_url/#tokens" '{ready:false,code:"agent_identity_required",token_file:$file,registration_url:$console,next_action:"Use lr identity request <agent-code> <policy-json> to request exact service scope, then have the human approve it in Agent Workbench. lr identity claim saves and binds the approved credential privately. Existing issued mode-600 Token files can still be bound; never read an administrator credential.",can_continue:["lr guide","lr tree","lr docs <pack>"]}'
+    jq -n --arg file "$api_token_file" --arg console "$base_url/#tokens" '{ready:false,code:"agent_identity_required",token_file:$file,registration_url:$console,next_action:"For a new unpublished service use lr identity prepare <agent-code>; for existing services use lr identity request <agent-code> <policy-json> to request exact service scope, then have the human approve it in Agent Workbench. lr identity claim saves and binds the approved credential privately. Existing issued mode-600 Token files can still be bound; never read an administrator credential.",can_continue:["lr guide","lr tree","lr docs <pack>"]}'
     return 1
   fi
   identity="$(authenticated_request GET "$base_url/agent/whoami")" || { printf '%s\n' "$identity"; return 1; }
@@ -1079,7 +1090,7 @@ command_init() {
     json_fail "agent_identity_mismatch" "the bound Token no longer matches this Agent session" "bind the correct issued identity with lr identity bind; no fallback identity was selected"
     return 1
   fi
-  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready == true or .identity_required == false),next_action:(if .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." elif .identity_required == false then "Ordinary mode is ready. Use this service Token for authorized calls; independent Agent registration is optional. Token policies and provider pool limits still apply." else "Strict mode requires an independent Agent identity. This is a shared/bootstrap identity. Use lr identity request <agent-code> <policy-json> to request exact service scope; the human approves it once in Agent Workbench, then lr identity claim saves it privately. Existing issued files can use lr identity bind. Do not issue Tokens through /local/api." end)}' <<<"$identity"
+  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready == true or .identity_required == false),next_action:(if .setup_only then "Setup identity is ready for lr setup prepare; service calls remain denied until the reviewed scope is approved." elif .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." elif .identity_required == false then "Ordinary mode is ready. Use this service Token for authorized calls; independent Agent registration is optional. Token policies and provider pool limits still apply." else "Strict mode requires an independent Agent identity. This is a shared/bootstrap identity. For a new unpublished service use lr identity prepare <agent-code>; for existing services use lr identity request <agent-code> <policy-json> to request exact service scope; the human approves it once in Agent Workbench, then lr identity claim saves it privately. Existing issued files can use lr identity bind. Do not issue Tokens through /local/api." end)}' <<<"$identity"
   jq -e '.identity_ready == true or .identity_required == false' >/dev/null <<<"$identity"
 }
 
@@ -1096,7 +1107,12 @@ command_setup() {
   shift || true
   local arguments='{}' tool_name
   case "$action" in
-    schema) curl --noproxy '*' --fail-with-body --silent "$base_url/docs/agent.json" | jq '.service_workspace.prepare_schema' ; return ;;
+    schema)
+      case "${1:-proposal}" in
+        proposal) curl --noproxy '*' --fail-with-body --silent "$base_url/docs/setup-proposal.schema.json" | jq . ;;
+        pack) curl --noproxy '*' --fail-with-body --silent "$base_url/docs/protocol-pack-v3.schema.json" | jq . ;;
+        *) fail "use lr setup schema [proposal|pack]" ;;
+      esac; return ;;
     templates)
       case "${1:-}" in "") ;; --all) arguments='{"full":true}' ;; *) fail "use lr setup templates [--all] or lr setup template <id> <version>" ;; esac
       tool_name=localrouter_setup_templates ;;
@@ -1108,6 +1124,9 @@ command_setup() {
     get|verify|reconcile)
       [[ -n "${1:-}" ]] || fail "setup $action requires a proposal id"
       arguments="$(jq -cn --arg id "$1" '{id:$id}')"; tool_name="localrouter_setup_$action" ;;
+    reprepare)
+      [[ $# -ge 2 && $# -le 3 && ( $# == 2 || "$3" == --enable ) ]] || fail "use lr setup reprepare <id> <digest> [--enable]"
+      arguments="$(jq -cn --arg id "$1" --arg digest "$2" --argjson enable "$([[ "${3:-}" == --enable ]] && echo true || echo false)" '{id:$id,digest:$digest,enable:$enable}')"; tool_name=localrouter_setup_reprepare ;;
     withdraw|apply)
       [[ -n "${1:-}" && -n "${2:-}" ]] || fail "setup $action requires proposal id and exact digest"
       arguments="$(jq -cn --arg id "$1" --arg digest "$2" '{id:$id,digest:$digest}')"; tool_name="localrouter_setup_$action" ;;
@@ -1312,6 +1331,7 @@ execution_directory() {
 # safe retries; the CLI dispatches once and keeps unknown outcomes inspectable.
 recorded_call() {
   local result_root result_dir temporary call_status output_status outcome
+  local dispatch_function="${LR_RECORDED_DISPATCH:-command_call}"
   result_root="$(execution_directory)"
   mkdir -p -m 700 "$result_root"
   [[ ! -L "$result_root" && "$(stat -c '%u:%a' "$result_root")" = "$EUID:700" ]] || fail "execution directory must be private and owned by the current user"
@@ -1325,7 +1345,7 @@ recorded_call() {
   (umask 077; : >"$result_dir/response"; : >"$result_dir/stderr")
   local -a pipeline_status
   set +e
-  (set -e; command_call "$@") 2>"$result_dir/stderr" | tee -p "$result_dir/response"
+  (set -e; "$dispatch_function" "$@") 2>"$result_dir/stderr" | tee -p "$result_dir/response"
   pipeline_status=("${PIPESTATUS[@]}")
   set -e
   call_status="${pipeline_status[0]}"; output_status="${pipeline_status[1]}"
@@ -1364,6 +1384,10 @@ command_result() {
   jq . "$receipt"
 }
 
+workflow_create_request() {
+  authenticated_request POST "$base_url/w/$1/$2" "$3"
+}
+
 command_run() {
   local pack_id="${1:-}"
   local target_id="${2:-}"
@@ -1376,7 +1400,8 @@ command_run() {
   is_workflow="$(discovery | jq -r --arg pack "$pack_id" --arg workflow "$target_id" 'any(.protocols[] | select(.id == $pack) | .workflows[]?; .id == $workflow)')"
   if [[ "$is_workflow" = "true" ]]; then
     body="$(json_argument "$body_input")"
-    authenticated_request POST "$base_url/w/$pack_id/$target_id" "$body"
+    local LR_RECORDED_DISPATCH=workflow_create_request
+    recorded_call "$pack_id" "$target_id" "$body"
     return
   fi
   target_id="$(normalize_operation_selector "$pack_id" "$target_id")"
@@ -1409,6 +1434,10 @@ command_watch() {
         jq . <<<"$response"
         return 0
         ;;
+      outcome_unknown)
+        jq '. + {success:false,code:"workflow_outcome_unknown",retryable:false,next_actor:"human",next_action:"reconcile this existing job with the provider; do not recreate or replay it"}' <<<"$response"
+        return 1
+        ;;
       failed|cancelled|timed_out)
         jq . <<<"$response"
         return 1
@@ -1419,6 +1448,7 @@ command_watch() {
       return 1
     fi
     sleep "$poll_interval"
+    authenticated_request POST "$base_url/w/$pack_id/$workflow_id/$job_id/advance" >/dev/null || return $?
   done
 }
 

@@ -212,6 +212,8 @@ make build
 | 文档 | 内容 |
 |---|---|
 | [Agent 使用](docs/AGENT-USAGE.md) | 发现、预检、调用、长任务与恢复 |
+| [Agent 接入与恢复决策树](docs/AGENT-DECISION-FLOW.md) | 身份、审批生效、请求额度与未知任务恢复 |
+| [Agent 预算与账单](docs/AGENT-BILLING.md) | 独立金额预算、消费明细、未知费用核对与撤销历史 |
 | [配置与维护](docs/OPERATIONS.md) | 权限、安装副作用、更新、LAN、目录与迁移 |
 | [网关参考](gateway/README.md) | 接口与用量计量 |
 | [Protocol Pack v3](docs/PROTOCOL-PACK-V3.md) · [架构](docs/PROTOCOL-ARCHITECTURE.md) | 协议、传输、账号池和扩展方式 |

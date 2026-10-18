@@ -31,6 +31,7 @@ type localUser struct {
 }
 
 type localToken struct {
+	Revoked        bool   `json:"revoked,omitempty"`
 	ID             int    `json:"id"`
 	UserID         int    `json:"user_id"`
 	Key            string `json:"key,omitempty"`
@@ -67,6 +68,9 @@ type localChannel struct {
 }
 
 type localRequestLog struct {
+	AgentCode             string  `json:"agent_code,omitempty"`
+	AgentName             string  `json:"agent_name,omitempty"`
+	Revoked               bool    `json:"revoked,omitempty"`
 	ID                    int     `json:"id"`
 	UserID                int     `json:"user_id"`
 	CreatedAt             int64   `json:"created_at"`
@@ -561,6 +565,24 @@ func (store *localStore) allTokens(userID int) ([]localToken, error) {
 	}
 }
 
+// Billing retains identity metadata after revocation, but never selects keys.
+func (store *localStore) billingTokens(userID int) ([]localToken, error) {
+	rows, err := store.db.Query(`SELECT id, COALESCE(name, ''), COALESCE(agent_code, ''), COALESCE(agent_name, ''), COALESCE(workspace, ''), COALESCE(runtime, ''), COALESCE(status, 1), COALESCE(accessed_time, 0), deleted_at IS NOT NULL FROM tokens WHERE user_id = ? ORDER BY id DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []localToken{}
+	for rows.Next() {
+		var item localToken
+		if err := rows.Scan(&item.ID, &item.Name, &item.AgentCode, &item.AgentName, &item.Workspace, &item.Runtime, &item.Status, &item.AccessedTime, &item.Revoked); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 func maskToken(key string) string {
 	if len(key) <= 8 {
 		return "sk-********"
@@ -650,11 +672,27 @@ func (store *localStore) logRequest(ctx context.Context, entry localRequestLog) 
 }
 
 func (store *localStore) listLogs(userID, page, pageSize int) ([]localRequestLog, int64, error) {
-	total, err := store.count("logs", "user_id = ?", userID)
+	return store.filteredLogs(userID, page, pageSize, 0, "")
+}
+
+func (store *localStore) filteredLogs(userID, page, pageSize, tokenID int, query string) ([]localRequestLog, int64, error) {
+	source := `(SELECT l.*, COALESCE(t.agent_code, '') AS agent_code, COALESCE(t.agent_name, '') AS agent_name, t.deleted_at IS NOT NULL AS revoked FROM logs l LEFT JOIN tokens t ON t.id = l.token_id AND t.user_id = l.user_id)`
+	where := "user_id = ?"
+	args := []any{userID}
+	if tokenID > 0 {
+		where += " AND token_id = ?"
+		args = append(args, tokenID)
+	}
+	if query != "" {
+		where += " AND instr(lower(COALESCE(token_name,'') || ' ' || agent_code || ' ' || agent_name || ' ' || COALESCE(model_name,'') || ' ' || COALESCE(channel_name,'') || ' ' || COALESCE(content,'')), lower(?)) > 0"
+		args = append(args, query)
+	}
+	var total int64
+	err := store.db.QueryRow("SELECT COUNT(*) FROM "+source+" WHERE "+where, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, err := store.db.Query(`SELECT id, COALESCE(user_id, 0), COALESCE(created_at, 0), COALESCE(type, 0), COALESCE(content, ''), COALESCE(username, ''), COALESCE(token_name, ''), COALESCE(model_name, ''), COALESCE(quota, 0), COALESCE(prompt_tokens, 0), COALESCE(completion_tokens, 0), COALESCE(cached_input_tokens, 0), COALESCE(cache_write_input_tokens, 0), COALESCE(reasoning_tokens, 0), COALESCE(total_tokens, 0), COALESCE(cost_usd, 0), COALESCE(cost_status, ''), COALESCE(use_time, 0), COALESCE(is_stream, 0), COALESCE(channel_id, 0), COALESCE(channel_name, ''), COALESCE(token_id, 0), COALESCE("group", 'default'), COALESCE(request_id, '') FROM logs WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`, userID, pageSize, (page-1)*pageSize)
+	rows, err := store.db.Query(`SELECT id, COALESCE(user_id, 0), COALESCE(created_at, 0), COALESCE(type, 0), COALESCE(content, ''), COALESCE(username, ''), COALESCE(token_name, ''), COALESCE(model_name, ''), COALESCE(quota, 0), COALESCE(prompt_tokens, 0), COALESCE(completion_tokens, 0), COALESCE(cached_input_tokens, 0), COALESCE(cache_write_input_tokens, 0), COALESCE(reasoning_tokens, 0), COALESCE(total_tokens, 0), COALESCE(cost_usd, 0), COALESCE(cost_status, ''), COALESCE(use_time, 0), COALESCE(is_stream, 0), COALESCE(channel_id, 0), COALESCE(channel_name, ''), COALESCE(token_id, 0), COALESCE("group", 'default'), COALESCE(request_id, ''), agent_code, agent_name, revoked FROM `+source+` WHERE `+where+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, pageSize, (page-1)*pageSize)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -662,7 +700,7 @@ func (store *localStore) listLogs(userID, page, pageSize int) ([]localRequestLog
 	logs := make([]localRequestLog, 0)
 	for rows.Next() {
 		var entry localRequestLog
-		if err := rows.Scan(&entry.ID, &entry.UserID, &entry.CreatedAt, &entry.Type, &entry.Content, &entry.Username, &entry.TokenName, &entry.ModelName, &entry.Quota, &entry.PromptTokens, &entry.CompletionTokens, &entry.CachedInputTokens, &entry.CacheWriteInputTokens, &entry.ReasoningTokens, &entry.TotalTokens, &entry.CostUSD, &entry.CostStatus, &entry.UseTime, &entry.IsStream, &entry.ChannelID, &entry.ChannelName, &entry.TokenID, &entry.Group, &entry.RequestID); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.UserID, &entry.CreatedAt, &entry.Type, &entry.Content, &entry.Username, &entry.TokenName, &entry.ModelName, &entry.Quota, &entry.PromptTokens, &entry.CompletionTokens, &entry.CachedInputTokens, &entry.CacheWriteInputTokens, &entry.ReasoningTokens, &entry.TotalTokens, &entry.CostUSD, &entry.CostStatus, &entry.UseTime, &entry.IsStream, &entry.ChannelID, &entry.ChannelName, &entry.TokenID, &entry.Group, &entry.RequestID, &entry.AgentCode, &entry.AgentName, &entry.Revoked); err != nil {
 			return nil, 0, err
 		}
 		logs = append(logs, entry)

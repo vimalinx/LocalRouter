@@ -31,3 +31,6 @@ dist/
 .DS_Store
 *.swp
 *.swo
+
+# Local decision audits contain machine-specific paths and private acceptance evidence.
+/artifacts/agent-decision-*/

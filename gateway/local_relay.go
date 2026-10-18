@@ -129,7 +129,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 	models := engine.Group("/v1/models")
 	models.Use(auth)
 	if runtime.policies != nil {
-		models.Use(runtime.policies.middleware("v1"))
+		models.Use(runtime.policies.middleware("v1", runtime.channelProfiles))
 	}
 	models.GET("", handleRelayModels(runtime))
 	models.GET("/:model", handleRelayModel(runtime))
@@ -137,7 +137,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 	geminiModels := engine.Group("/v1beta/models")
 	geminiModels.Use(auth)
 	if runtime.policies != nil {
-		geminiModels.Use(runtime.policies.middleware("v1beta"))
+		geminiModels.Use(runtime.policies.middleware("v1beta", runtime.channelProfiles))
 	}
 	geminiModels.GET("", handleRelayModels(runtime))
 	geminiModels.GET("/:model", handleRelayModel(runtime))
@@ -146,7 +146,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 	relayV1.Use(auth)
 	relayV1.Use(serviceTraceMiddleware(runtime, "v1"))
 	if runtime.policies != nil {
-		relayV1.Use(runtime.policies.middleware("v1"))
+		relayV1.Use(runtime.policies.middleware("v1", runtime.channelProfiles))
 	}
 	relayV1.GET("/realtime", unsupportedRealtime)
 	for _, path := range localRelayV1PostPaths {
@@ -157,7 +157,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 	geminiRelay.Use(auth)
 	geminiRelay.Use(serviceTraceMiddleware(runtime, "v1beta"))
 	if runtime.policies != nil {
-		geminiRelay.Use(runtime.policies.middleware("v1beta"))
+		geminiRelay.Use(runtime.policies.middleware("v1beta", runtime.channelProfiles))
 	}
 	geminiRelay.POST("/models/*path", handleRelayRequest(runtime))
 }
@@ -282,6 +282,16 @@ func compatibilityBody(c *gin.Context) ([]byte, error) {
 
 func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localChannel, model string, body []byte) {
 	started := time.Now()
+	sent := false
+	defer func() {
+		metrics, _ := c.Get("localrouter_usage_metrics")
+		usage, _ := metrics.(usageMetrics)
+		var cost *usageCost
+		if usage.ReportedCostUSD != nil && !c.GetBool("localrouter_budget_incomplete") {
+			cost = &usageCost{AmountUSD: *usage.ReportedCostUSD, Status: "reported", Source: "provider"}
+		}
+		runtime.policies.finishAgentBudget(c, cost, usage, !sent)
+	}()
 	requestID := newRelayRequestID()
 	var lastStatus int
 	var lastBody []byte
@@ -301,6 +311,7 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 		if !allowanceOK {
 			return
 		}
+		sent = true
 		response, err := runtime.relayClient.Do(upstreamRequest)
 		if err != nil {
 			lastErr = err
@@ -311,7 +322,7 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 			}
 			continue
 		}
-		if retryableRelayStatus(response.StatusCode) && safeCompatibilityRetry(c.Request.Method, response.StatusCode) && index+1 < len(channels) {
+		if !c.GetBool("localrouter_allowance_single_attempt") && retryableRelayStatus(response.StatusCode) && safeCompatibilityRetry(c.Request.Method, response.StatusCode) && index+1 < len(channels) {
 			lastStatus = response.StatusCode
 			lastBody, _ = io.ReadAll(io.LimitReader(response.Body, 1<<20))
 			_ = response.Body.Close()
@@ -322,6 +333,7 @@ func relayAcrossChannels(c *gin.Context, runtime localRuntime, channels []localC
 		c.Header("X-Request-Id", requestID)
 		c.Status(response.StatusCode)
 		usage, streamed, copyErr := copyRelayResponse(c, response)
+		c.Set("localrouter_budget_incomplete", copyErr != nil || (streamed && !c.GetBool("localrouter_stream_terminal")))
 		if copyErr != nil && !c.Writer.Written() {
 			c.Writer.Header().Del("Content-Length")
 			writeCompatibilityRelayError(c, runtime, http.StatusBadGateway, "upstream_response_incomplete", "upstream response could not be read completely; reconcile provider state before retrying", false)
@@ -614,6 +626,7 @@ func copyRelayResponse(c *gin.Context, response *http.Response) (usageMetrics, b
 			c.Writer.Flush()
 		}
 		if errors.Is(readErr, io.EOF) {
+			c.Set("localrouter_stream_terminal", capture.terminal)
 			return capture.result(), true, nil
 		}
 		if readErr != nil {
@@ -665,7 +678,9 @@ func copyRelayError(c *gin.Context, status int, body []byte) {
 }
 
 func logRelay(runtime localRuntime, c *gin.Context, channel localChannel, model, requestID string, started time.Time, usage usageMetrics, streamed bool, entryType int, content string) {
+	c.Set("localrouter_budget_service", channel.Name)
 	c.Set("localrouter_usage_model", model)
+	c.Set("localrouter_usage_metrics", usage)
 	if trace := serviceTraceContext(c); trace != nil {
 		trace.Usage = &usage
 		trace.UpstreamCalled = true

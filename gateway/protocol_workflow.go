@@ -115,7 +115,15 @@ func (registry *protocolRegistry) saveWorkflowState(protocolID string, state pro
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, registry.workflowStatePath(protocolID))
+	if err := os.Rename(temporaryPath, registry.workflowStatePath(protocolID)); err != nil {
+		return err
+	}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func (registry *protocolRegistry) workflowDefinition(protocolID, workflowID string) (protocolDefinition, protocolWorkflow, bool) {
@@ -176,20 +184,6 @@ func (registry *protocolRegistry) handleWorkflowCreate(runtime localRuntime) gin
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "message": "workflow request body is too large"})
 			return
 		}
-		responseCode, responseBody, contentType, err := callLocalProtocol(serviceCallRuntime(runtime, c), definition.ID, http.MethodPost, createRoute.Path, c.Request.URL.RawQuery, c.GetHeader("Content-Type"), body)
-		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "workflow create operation failed"})
-			return
-		}
-		if responseCode < 200 || responseCode >= 300 {
-			c.Data(responseCode, contentType, responseBody)
-			return
-		}
-		resourceID := gjson.GetBytes(responseBody, workflow.ResourceIDPath).String()
-		if resourceID == "" {
-			c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": "workflow create response did not contain a resource id"})
-			return
-		}
 		jobID, err := newWorkflowJobID()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot allocate workflow job"})
@@ -197,34 +191,70 @@ func (registry *protocolRegistry) handleWorkflowCreate(runtime localRuntime) gin
 		}
 		now := time.Now().UTC()
 		job := protocolWorkflowJob{
-			ID: jobID, ProtocolID: definition.ID, WorkflowID: workflow.ID, ResourceID: resourceID,
-			State: "pending", Attempts: 0, MaxAttempts: workflow.MaxPollAttempts,
-			CreatedAt: now, UpdatedAt: now, NextPollAt: now.Add(time.Duration(workflow.PollIntervalMS) * time.Millisecond),
-			LastHTTPCode: responseCode,
-			OwnerTokenID: c.GetInt(tokenPolicyContextID),
+			ID: jobID, ProtocolID: definition.ID, WorkflowID: workflow.ID,
+			State: "creating", ExecutionID: jobID, MaxAttempts: workflow.MaxPollAttempts,
+			CreatedAt: now, UpdatedAt: now, OwnerTokenID: c.GetInt(tokenPolicyContextID),
 		}
 		attachWorkflowTrace(c, &job)
-		registry.workflowMu.Lock()
-		stateLock, lockErr := registry.lockProtocolState("workflow", definition.ID)
-		state, stateErr := registry.loadWorkflowState(definition.ID)
-		if lockErr != nil {
-			stateErr = lockErr
-		} else if stateErr == nil {
+		// Persist intent before dispatch. Interrupted claims must be reconciled,
+		// never treated as permission to create a replacement resource.
+		if err := registry.editWorkflowState(definition.ID, func(state *protocolWorkflowState) (bool, error) {
 			state.Jobs[job.ID] = job
-			stateErr = registry.saveWorkflowState(definition.ID, state)
-		}
-		unlockProtocolState(stateLock)
-		registry.workflowMu.Unlock()
-		if stateErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "cannot persist workflow job"})
+			return true, nil
+		}); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "workflow_intent_unavailable", "retryable": true, "message": "cannot persist workflow intent; no upstream call was made"})
 			return
 		}
 		c.Set("localrouter_workflow_job", job.ID)
+		responseCode, responseBody, contentType, callErr := callLocalProtocol(serviceCallRuntime(runtime, c), definition.ID, http.MethodPost, createRoute.Path, c.Request.URL.RawQuery, c.GetHeader("Content-Type"), body)
+		job.ExecutionID, job.LastHTTPCode = "", responseCode
+		job.UpdatedAt = time.Now().UTC()
+		job.ResourceID = gjson.GetBytes(responseBody, workflow.ResourceIDPath).String()
+		switch {
+		case errors.Is(callErr, errWorkflowOutcomeUnknown):
+			job.State, job.Error = "outcome_unknown", errWorkflowOutcomeUnknown.Error()
+		case callErr != nil || responseCode < 200 || responseCode >= 300:
+			job.State, job.Error = "failed", "workflow create operation failed"
+		case job.ResourceID == "":
+			job.State, job.Error = "outcome_unknown", "create was accepted without a resource id; reconcile upstream state"
+		default:
+			job.State = "pending"
+			job.NextPollAt = job.UpdatedAt.Add(time.Duration(workflow.PollIntervalMS) * time.Millisecond)
+		}
+		stateErr := registry.editWorkflowState(definition.ID, func(state *protocolWorkflowState) (bool, error) {
+			current, ok := state.Jobs[job.ID]
+			if !ok || current.ExecutionID != jobID {
+				return false, errors.New("workflow intent changed before commit")
+			}
+			state.Jobs[job.ID] = job
+			return true, nil
+		})
+		if stateErr != nil || job.State == "outcome_unknown" {
+			job.State = "outcome_unknown"
+			c.JSON(http.StatusBadGateway, gin.H{"success": false, "code": "workflow_outcome_unknown", "retryable": false, "next_actor": "human", "next_action": "reconcile this existing job with the provider; do not recreate it", "data": publicWorkflowJob(job)})
+			return
+		}
+		if job.State == "failed" {
+			if responseCode >= 400 && len(responseBody) > 0 {
+				c.Data(responseCode, contentType, responseBody)
+			} else {
+				c.JSON(http.StatusBadGateway, gin.H{"success": false, "message": job.Error, "data": publicWorkflowJob(job)})
+			}
+			return
+		}
 		c.JSON(http.StatusAccepted, gin.H{"object": "workflow.job", "data": publicWorkflowJob(job), "create_response": json.RawMessage(responseBody)})
 	}
 }
 
 func (registry *protocolRegistry) handleWorkflowGet(runtime localRuntime) gin.HandlerFunc {
+	return registry.handleWorkflowReadOrAdvance(runtime, false)
+}
+
+func (registry *protocolRegistry) handleWorkflowAdvance(runtime localRuntime) gin.HandlerFunc {
+	return registry.handleWorkflowReadOrAdvance(runtime, true)
+}
+
+func (registry *protocolRegistry) handleWorkflowReadOrAdvance(runtime localRuntime, advance bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		definition, workflow, ok := registry.workflowDefinition(c.Param("protocol"), c.Param("workflow"))
 		if !ok {
@@ -232,6 +262,9 @@ func (registry *protocolRegistry) handleWorkflowGet(runtime localRuntime) gin.Ha
 			return
 		}
 		operation := "workflow." + workflow.ID + ".get"
+		if advance {
+			operation = "workflow." + workflow.ID + ".advance"
+		}
 		if registry.policies != nil {
 			release, allowed := registry.policies.authorizeProjection(c, "w", definition.ID, operation, "")
 			if !allowed {
@@ -244,11 +277,11 @@ func (registry *protocolRegistry) handleWorkflowGet(runtime localRuntime) gin.Ha
 			defer registry.events.recordRequest(c, "w", definition.ID, operation, started)
 		}
 		c.Set("localrouter_workflow_job", c.Param("job"))
-		if len(workflow.Steps) > 0 {
-			registry.handleGraphWorkflowGet(c, runtime, definition, workflow)
-			return
+		mode := "observe"
+		if advance {
+			mode = "advance"
 		}
-		registry.serveStoredWorkflow(c, runtime, definition, workflow, "advance")
+		registry.serveStoredWorkflow(c, runtime, definition, workflow, mode)
 	}
 }
 
@@ -379,12 +412,15 @@ func callLocalProtocol(runtime localRuntime, protocolID, method, path, rawQuery,
 	client := &http.Client{Timeout: 10 * time.Minute, CheckRedirect: rejectUpstreamRedirect}
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, nil, "", err
+		return 0, nil, "", errors.Join(errWorkflowOutcomeUnknown, err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxProtocolBodyBytes+1))
 	if err != nil || len(responseBody) > maxProtocolBodyBytes {
-		return response.StatusCode, nil, response.Header.Get("Content-Type"), errors.New("local protocol response is too large")
+		return response.StatusCode, nil, response.Header.Get("Content-Type"), errWorkflowOutcomeUnknown
+	}
+	if response.StatusCode >= 400 && gjson.GetBytes(responseBody, "code").String() == "upstream_outcome_unknown" {
+		return response.StatusCode, responseBody, response.Header.Get("Content-Type"), errWorkflowOutcomeUnknown
 	}
 	return response.StatusCode, responseBody, response.Header.Get("Content-Type"), nil
 }

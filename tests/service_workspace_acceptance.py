@@ -4,6 +4,7 @@ import argparse
 import copy
 import http.server
 import json
+import jsonschema
 import os
 from pathlib import Path
 import socket
@@ -93,6 +94,18 @@ try:
     assert 'example' not in metadata
     template = payload(cli('setup','template',metadata['id'],metadata['version']))['template']
     assert cli('init')['ready'] is True
+    # Validate exactly the public wire examples against the public schemas.
+    proposal_schema = cli('setup','schema')
+    pack_schema = cli('setup','schema','pack')
+    identity_schema = cli('identity','schema')
+    for schema in (proposal_schema,pack_schema,identity_schema):
+        jsonschema.Draft202012Validator.check_schema(schema)
+    for recipe in payload(cli('setup','templates','--all'))['templates']:
+        jsonschema.validate(recipe['example'],pack_schema)
+        for auth in ({'type':'none'},{'type':'bearer'},{'type':'header','header':'X-API-Key'}):
+            example = copy.deepcopy(recipe['example']); example['auth'] = auth
+            jsonschema.validate({'kind':'connection','reason':'Fixture schema check','connection':{'template_id':recipe['id'],'template_version':recipe['version'],'definition':example}},proposal_schema)
+    jsonschema.validate({'agent_code':'fixture','agent_name':'Wilson','workspace':str(root),'policy':{'setup_only':True}},identity_schema)
     definition = copy.deepcopy(template['example'])
     definition.update(id='demo-search', name='文档检索服务', description='本机隔离服务，用于验证 Agent 接入、授权与调用追踪。', base_url=f'http://127.0.0.1:{provider.server_port}')
     definition['routes'].append({'operation_id':'status','methods':['GET'],'path':'/jobs/{jobId}','summary':'Fixture path lookup'})
@@ -247,6 +260,7 @@ try:
         assert cli('identity','forget')['token_deleted'] is False and token_path.exists()
     print('Service workspace CLI / session identity / automatic preparation / single-call streaming / structured failures passed', flush=True)
     if args.demo:
+        proposal_input['bundle']['id'] = 'reference-kit'
         proposal_input['connection']['definition'].update(id='demo-reference', name='参考资料服务')
         proposal_input['bundle']['members'] = [{'pack':'demo-search','operations':['search','status','models','generate']},{'pack':'demo-reference','operations':['search','status','models','generate']}]
         proposal_input['reason'] = '研究 Agent 已验证文档检索，现在申请把参考资料服务加入同一工具包。一次授权包含服务接入与明确的调用权限。'
@@ -255,6 +269,21 @@ try:
         env.update(XDG_DATA_HOME=str(root/'client-data'),LOCALROUTER_AGENT_SESSION='browser-enrollment')
         env.pop('LOCALROUTER_API_TOKEN_FILE',None)
         identity_request=cli('identity','request','browser-agent',json.dumps({'packs':['demo-search'],'operations':['demo-search.models','demo-search.generate'],'models':['fixture-model'],'daily_request_limit':50,'max_in_flight':2}))
+        env['LOCALROUTER_AGENT_SESSION']='browser-setup-only'
+        setup_request=cli('identity','prepare','setup-agent')
+        # Fixture-only persisted legacy state; restart to exercise the upgrade path.
+        process.terminate(); process.wait(timeout=5)
+        workspace_path = root/'data'/'service-workspace.json'
+        workspace_doc = json.loads(workspace_path.read_text())
+        legacy = workspace_doc['proposals'][pending['id']]
+        legacy.pop('grant_policy',None); legacy['connection']['definition']['enabled'] = False
+        workspace_path.write_text(json.dumps(workspace_doc)); workspace_path.chmod(0o600)
+        process = subprocess.Popen([str(project/'gateway/localrouter'),'--log-dir',str(root/'logs')],env=env,stdout=log,stderr=subprocess.STDOUT)
+        for _ in range(120):
+            try:
+                if api('/healthz')['ok']: break
+            except OSError: time.sleep(.1)
+        else: raise RuntimeError('legacy demo did not restart')
         (root/'demo.json').write_text(json.dumps({'url':base+'/#tokens','pending_id':pending['id'],'identity_request':identity_request['id'],'gateway_pid':process.pid,'token_id':token_id}))
         print(json.dumps({'url':base+'/#setup','directory':str(root),'gateway_pid':process.pid}),flush=True)
         while process.poll() is None: time.sleep(1)

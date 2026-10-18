@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -63,16 +62,27 @@ func handleIdentityWithdraw(runtime localRuntime) gin.HandlerFunc {
 		runtime.store.identityMu.Lock()
 		defer runtime.store.identityMu.Unlock()
 		request, expected, err := loadIdentityRequest(runtime.store, c.Param("id"))
+		if err == sql.ErrNoRows && c.Param("id") == "identity-"+hash[:24] {
+			// Tombstone the proof so an earlier delayed POST cannot re-enroll it.
+			empty := identityRequest{ID: c.Param("id"), State: "withdrawn"}
+			data, _ := json.Marshal(empty)
+			if _, err := runtime.store.db.Exec(`INSERT INTO identity_requests (id,claim_hash,document,state,created_at,expires_at) VALUES (?,?,?,'withdrawn',?,?)`, empty.ID, hash, string(data), time.Now().Unix(), time.Now().Unix()); err != nil {
+				identityFailure(c, 500, "cannot withdraw request")
+				return
+			}
+			localSuccess(c, gin.H{"withdrawn": true, "authority_changed": false})
+			return
+		}
 		if err != nil || subtle.ConstantTimeCompare([]byte(hash), []byte(expected)) != 1 {
-			localFailure(c, 404, "identity request not found")
+			identityFailure(c, 404, "identity request not found")
 			return
 		}
 		if request.State == "approved" {
-			localFailure(c, 409, "identity already approved; revoke the issued identity instead")
+			identityFailure(c, 409, "identity already approved; revoke the issued identity instead")
 			return
 		}
 		if _, err = runtime.store.db.Exec(`UPDATE identity_requests SET state='withdrawn' WHERE id=?`, request.ID); err != nil {
-			localFailure(c, 500, "cannot withdraw request")
+			identityFailure(c, 500, "cannot withdraw request")
 			return
 		}
 		localSuccess(c, gin.H{"withdrawn": true, "authority_changed": false})
@@ -102,13 +112,13 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 		value, _ := c.Get("local_token")
 		token, ok := value.(*localToken)
 		if !ok || token.AgentCode == "localrouter-system" || token.Name == localTokenName {
-			localFailure(c, 403, "independent service identity required")
+			identityFailure(c, 403, "independent service identity required")
 			return
 		}
 		if c.Request.Method == "GET" {
 			request, _, err := loadIdentityRequest(runtime.store, c.Param("id"))
 			if err != nil || request.OwnerTokenID != token.ID {
-				localFailure(c, 404, "owned access request not found")
+				identityFailure(c, 404, "owned access request not found")
 				return
 			}
 			localSuccess(c, request)
@@ -118,12 +128,12 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 			Policy localTokenPolicy `json:"policy"`
 		}
 		if err := decodeAgentRequest(c, &input); err != nil {
-			localFailure(c, 400, "invalid access request")
+			identityValidationError(c, err)
 			return
 		}
 		request := identityRequest{AgentCode: token.AgentCode, AgentName: token.AgentName, Workspace: token.Workspace, Runtime: token.Runtime, Policy: input.Policy, OwnerTokenID: token.ID, BasePolicyDigest: identityPolicyDigest(runtime.policies, token.ID)}
 		if err := validateIdentityRequest(runtime, &request); err != nil {
-			localFailure(c, 400, err.Error())
+			identityValidationError(c, err)
 			return
 		}
 		data, _ := json.Marshal(request)
@@ -135,23 +145,23 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 			localSuccess(c, previous)
 			return
 		} else if err != sql.ErrNoRows {
-			localFailure(c, 500, "cannot inspect access request")
+			identityFailure(c, 500, "cannot inspect access request")
 			return
 		}
 		var count int
 		if err := runtime.store.db.QueryRow(`SELECT count(*) FROM identity_requests WHERE created_at>?`, time.Now().Add(-time.Hour).Unix()).Scan(&count); err != nil {
-			localFailure(c, 500, "cannot inspect request capacity")
+			identityFailure(c, 500, "cannot inspect request capacity")
 			return
 		}
 		if count >= 100 {
-			localFailure(c, 429, "too many requests; resume an existing request or wait")
+			identityFailure(c, 429, "too many requests; resume an existing request or wait")
 			return
 		}
 		request.State, request.CreatedAt = "pending", time.Now().Unix()
 		request.ExpiresAt = request.CreatedAt + 24*60*60
 		data, _ = json.Marshal(request)
 		if _, err := runtime.store.db.Exec(`INSERT INTO identity_requests (id,claim_hash,document,state,created_at,expires_at) VALUES (?,'',?,'pending',?,?)`, request.ID, string(data), request.CreatedAt, request.ExpiresAt); err != nil {
-			localFailure(c, 500, "cannot save access request")
+			identityFailure(c, 500, "cannot save access request")
 			return
 		}
 		localSuccess(c, request)
@@ -171,30 +181,21 @@ func validateIdentityRequest(runtime localRuntime, request *identityRequest) err
 	if err := validateLocalTokenPolicy(policy); err != nil {
 		return err
 	}
-	if len(policy.Packs) == 0 || len(policy.Packs) > 50 || len(policy.Operations) == 0 || len(policy.Operations) > 200 || len(policy.Models) > 200 {
-		return errors.New("select explicit Packs and Pack-qualified operations")
-	}
-	// Freeze explicit operation membership. New Pack operations require a new decision.
-	for _, pack := range policy.Packs {
-		if pack == "*" || !protocolIDPattern.MatchString(pack) {
-			return errors.New("select exact Pack IDs")
+	if policy.SetupOnly {
+		if len(policy.Packs)+len(policy.Operations)+len(policy.Models)+len(policy.Surfaces) != 0 {
+			return errors.New("setup-only identity cannot request service selectors")
 		}
-	}
-	for _, key := range policy.Operations {
-		pack, op, found := strings.Cut(key, ".")
-		if !found || !containsString(policy.Packs, pack) {
-			return errors.New("each operation must belong to a selected Pack")
+	} else {
+		if len(policy.Packs) == 0 || len(policy.Packs) > 50 || len(policy.Operations) == 0 || len(policy.Operations) > 200 || len(policy.Models) > 200 {
+			return errors.New("select explicit Packs and Pack-qualified operations, or request setup_only")
 		}
-		if _, ok := runtime.protocols.describeOperation(pack, op); !ok {
-			return errors.New("select a published exact operation_key")
+		for _, pack := range policy.Packs {
+			if pack == "*" || !protocolIDPattern.MatchString(pack) {
+				return errors.New("select exact Pack IDs")
+			}
 		}
-	}
-	if len(policy.Surfaces) == 0 {
-		policy.Surfaces = []string{"p", "mcp"}
-	}
-	for _, surface := range policy.Surfaces {
-		if surface != "p" && surface != "mcp" {
-			return errors.New("enrollment supports Protocol Pack calls through p and mcp")
+		if err := runtime.expandIdentityScope(policy); err != nil {
+			return err
 		}
 	}
 	if policy.ExpiresAt < 0 {
@@ -236,12 +237,12 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 			Policy    localTokenPolicy `json:"policy"`
 		}
 		if err := decodeAgentRequest(c, &input); err != nil {
-			localFailure(c, 400, "invalid identity request")
+			identityValidationError(c, err)
 			return
 		}
 		request := identityRequest{AgentCode: input.AgentCode, AgentName: input.AgentName, Workspace: input.Workspace, Runtime: input.Runtime, Policy: input.Policy}
 		if err := validateIdentityRequest(runtime, &request); err != nil {
-			localFailure(c, 400, err.Error())
+			identityValidationError(c, err)
 			return
 		}
 		canonical, _ := json.Marshal(request)
@@ -251,22 +252,22 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 		defer runtime.store.identityMu.Unlock()
 		if previous, _, err := loadIdentityRequest(runtime.store, request.ID); err == nil {
 			if previous.Digest != request.Digest {
-				localFailure(c, 409, "this claim is already bound to a different request")
+				identityFailure(c, 409, "this claim is already bound to a different request")
 				return
 			}
 			localSuccess(c, previous)
 			return
 		} else if err != sql.ErrNoRows {
-			localFailure(c, 500, "cannot read identity request")
+			identityFailure(c, 500, "cannot read identity request")
 			return
 		}
 		var pending int
 		if err := runtime.store.db.QueryRow(`SELECT count(*) FROM identity_requests WHERE created_at > ?`, time.Now().Add(-time.Hour).Unix()).Scan(&pending); err != nil {
-			localFailure(c, 500, "cannot inspect enrollment capacity")
+			identityFailure(c, 500, "cannot inspect enrollment capacity")
 			return
 		}
 		if pending >= 100 {
-			localFailure(c, 429, "too many enrollment requests; resume an existing request or wait")
+			identityFailure(c, 429, "too many enrollment requests; resume an existing request or wait")
 			return
 		}
 		request.State, request.CreatedAt = "pending", time.Now().Unix()
@@ -274,7 +275,7 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 		document, _ := json.Marshal(request)
 		_, err := runtime.store.db.Exec(`INSERT INTO identity_requests (id,claim_hash,document,state,created_at,expires_at) VALUES (?,?,?,'pending',?,?)`, request.ID, hash, string(document), request.CreatedAt, request.ExpiresAt)
 		if err != nil {
-			localFailure(c, 500, "cannot save identity request")
+			identityFailure(c, 500, "cannot save identity request")
 			return
 		}
 		localSuccess(c, request)
@@ -291,28 +292,28 @@ func handleIdentityClaim(runtime localRuntime) gin.HandlerFunc {
 		defer runtime.store.identityMu.Unlock()
 		request, expected, err := loadIdentityRequest(runtime.store, c.Param("id"))
 		if err != nil || subtle.ConstantTimeCompare([]byte(hash), []byte(expected)) != 1 {
-			localFailure(c, 404, "identity request not found")
+			identityFailure(c, 404, "identity request not found")
 			return
 		}
 		result := gin.H{"request": request, "ready": false, "registration_url": "/#tokens", "next_action": "review this exact request in Agent Workbench, then resume lr identity claim"}
 		if request.State == "approved" {
 			if request.ExpiresAt <= time.Now().Unix() {
-				localFailure(c, 410, "credential delivery window expired; ask the operator to revoke the unclaimed identity")
+				identityFailure(c, 410, "credential delivery window expired; ask the operator to revoke the unclaimed identity")
 				return
 			}
 			token, err := runtime.store.tokenByID(runtime.rootUser.ID, request.TokenID, true)
 			if err != nil || token.Status != localStatusEnabled || (token.ExpiredTime >= 0 && token.ExpiredTime <= time.Now().Unix()) {
-				localFailure(c, 410, "identity was revoked or expired")
+				identityFailure(c, 410, "identity was revoked or expired")
 				return
 			}
 			var issuedHash string
 			if err := runtime.store.db.QueryRow(`SELECT issued_key_hash FROM identity_requests WHERE id=?`, request.ID).Scan(&issuedHash); err != nil || issuedHash != identityHash(token.Key) || token.AgentCode != request.AgentCode || token.Workspace != request.Workspace {
-				localFailure(c, 410, "identity or credential changed; an old claim cannot retrieve a replacement")
+				identityFailure(c, 410, "identity or credential changed; an old claim cannot retrieve a replacement")
 				return
 			}
 			policy, exists := runtime.policies.policyFor(token.ID)
 			if !exists || (policy.ExpiresAt > 0 && policy.ExpiresAt <= time.Now().Unix()) || policyHasCapability(policy, localRouterMaintainCapability) {
-				localFailure(c, 409, "approved service policy is no longer available")
+				identityFailure(c, 409, "approved service policy is no longer available")
 				return
 			}
 			// Re-delivery within the window returns the SAME credential. A lost
@@ -328,7 +329,7 @@ func handleIdentityList(runtime localRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := runtime.store.db.Query(`SELECT id FROM identity_requests ORDER BY created_at DESC LIMIT 100`)
 		if err != nil {
-			localFailure(c, 500, "cannot list identity requests")
+			identityFailure(c, 500, "cannot list identity requests")
 			return
 		}
 		ids := []string{}
@@ -344,14 +345,14 @@ func handleIdentityList(runtime localRuntime) gin.HandlerFunc {
 		}
 		rows.Close()
 		if err != nil {
-			localFailure(c, 500, "cannot read identity requests")
+			identityFailure(c, 500, "cannot read identity requests")
 			return
 		}
 		requests := []identityRequest{}
 		for _, id := range ids {
 			request, _, err := loadIdentityRequest(runtime.store, id)
 			if err != nil {
-				localFailure(c, 500, "cannot read identity request")
+				identityFailure(c, 500, "cannot read identity request")
 				return
 			}
 			requests = append(requests, request)
@@ -367,36 +368,41 @@ func handleIdentityDecision(runtime localRuntime) gin.HandlerFunc {
 			Approve *bool  `json:"approve"`
 		}
 		if err := decodeAgentRequest(c, &input); err != nil || input.Approve == nil {
-			localFailure(c, 400, "digest and explicit approve are required")
+			identityFailure(c, 400, "digest and explicit approve are required")
 			return
 		}
 		runtime.store.identityMu.Lock()
 		defer runtime.store.identityMu.Unlock()
 		request, _, err := loadIdentityRequest(runtime.store, c.Param("id"))
 		if err != nil {
-			localFailure(c, 404, "identity request not found")
+			identityFailure(c, 404, "identity request not found")
 			return
 		}
 		if input.Digest != request.Digest {
-			localFailure(c, 409, "request changed; review the current digest")
+			identityFailure(c, 409, "request changed; review the current digest")
 			return
 		}
 		if request.State != "pending" {
-			localFailure(c, 409, "request is no longer pending")
+			identityFailure(c, 409, "request is no longer pending")
 			return
 		}
 		if !*input.Approve {
 			_, err = runtime.store.db.Exec(`UPDATE identity_requests SET state='denied' WHERE id=? AND state='pending'`, request.ID)
 			if err != nil {
-				localFailure(c, 500, "cannot reject request")
+				identityFailure(c, 500, "cannot reject request")
 				return
 			}
 			request.State = "denied"
 			localSuccess(c, request)
 			return
 		}
+		reviewedPolicy := serviceDigest(request.Policy)
 		if err := validateIdentityRequest(runtime, &request); err != nil {
-			localFailure(c, 409, err.Error())
+			identityFailure(c, 409, err.Error())
+			return
+		}
+		if reviewedPolicy != serviceDigest(request.Policy) {
+			identityFailure(c, 409, "scope dependencies changed; prepare and review a new request")
 			return
 		}
 		if request.OwnerTokenID > 0 {
@@ -405,7 +411,7 @@ func handleIdentityDecision(runtime localRuntime) gin.HandlerFunc {
 		}
 		secret, err := randomSecret(32, "")
 		if err != nil {
-			localFailure(c, 500, "cannot prepare identity")
+			identityFailure(c, 500, "cannot prepare identity")
 			return
 		}
 		// Hold policy readers until both durable policy and token activation have
@@ -414,18 +420,18 @@ func handleIdentityDecision(runtime localRuntime) gin.HandlerFunc {
 		defer runtime.policies.mu.Unlock()
 		tx, err := runtime.store.db.Begin()
 		if err != nil {
-			localFailure(c, 500, "cannot begin approval")
+			identityFailure(c, 500, "cannot begin approval")
 			return
 		}
 		defer tx.Rollback()
 		result, err := tx.Exec(`INSERT INTO tokens (user_id,key,status,name,agent_code,agent_name,workspace,runtime,created_time,accessed_time,expired_time,unlimited_quota,"group") VALUES (?,?,1,?,?,?,?,?,?,0,-1,1,'default')`, runtime.rootUser.ID, secret, request.AgentName, request.AgentCode, request.AgentName, request.Workspace, request.Runtime, time.Now().Unix())
 		if err != nil {
-			localFailure(c, 409, "Agent code already exists or identity cannot be issued; no authority was changed")
+			identityFailure(c, 409, "Agent code already exists or identity cannot be issued; no authority was changed")
 			return
 		}
 		id, err := result.LastInsertId()
 		if err != nil {
-			localFailure(c, 500, "cannot read issued identity")
+			identityFailure(c, 500, "cannot read issued identity")
 			return
 		}
 		request.Policy.TokenID = int(id)
@@ -444,7 +450,7 @@ func handleIdentityDecision(runtime localRuntime) gin.HandlerFunc {
 				delete(runtime.policies.policies, int(id))
 			}
 			_ = runtime.policies.saveLocked()
-			localFailure(c, 500, "approval did not complete; inspect this request before retrying")
+			identityFailure(c, 500, "approval did not complete; inspect this request before retrying")
 			return
 		}
 		request.State, request.TokenID = "approved", int(id)
@@ -455,7 +461,7 @@ func handleIdentityDecision(runtime localRuntime) gin.HandlerFunc {
 func handleIdentityAccessDecision(c *gin.Context, runtime localRuntime, request identityRequest) {
 	token, err := runtime.store.tokenByID(runtime.rootUser.ID, request.OwnerTokenID, false)
 	if err != nil || (token.ExpiredTime >= 0 && token.ExpiredTime <= time.Now().Unix()) || token.Status != localStatusEnabled || token.AgentCode != request.AgentCode || token.Workspace != request.Workspace {
-		localFailure(c, 409, "identity changed or was revoked; approval cannot restore it")
+		identityFailure(c, 409, "identity changed or was revoked; approval cannot restore it")
 		return
 	}
 	// CAS is checked while holding the same policy lock used by all updates.
@@ -467,7 +473,7 @@ func handleIdentityAccessDecision(c *gin.Context, runtime localRuntime, request 
 		Policy localTokenPolicy
 	}{exists, previous})
 	if identityHash(string(data)) != request.BasePolicyDigest {
-		localFailure(c, 409, "current policy changed; prepare and review a new access request")
+		identityFailure(c, 409, "current policy changed; prepare and review a new access request")
 		return
 	}
 	request.Policy.TokenID = token.ID
@@ -483,7 +489,7 @@ func handleIdentityAccessDecision(c *gin.Context, runtime localRuntime, request 
 			delete(runtime.policies.policies, token.ID)
 		}
 		_ = runtime.policies.saveLocked()
-		localFailure(c, 500, "access approval did not complete; inspect current policy and request before retrying")
+		identityFailure(c, 500, "access approval did not complete; inspect current policy and request before retrying")
 		return
 	}
 	request.State, request.TokenID = "approved", token.ID

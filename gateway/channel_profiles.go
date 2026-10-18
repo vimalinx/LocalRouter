@@ -85,11 +85,13 @@ type localCompatibilityPoolView struct {
 }
 
 type localCompatibilityRouteView struct {
-	Methods   []string `json:"methods"`
-	Path      string   `json:"path"`
-	CallURL   string   `json:"call_url"`
-	Status    string   `json:"status"`
-	Transport string   `json:"transport"`
+	OperationID  string   `json:"operation_id"`
+	OperationKey string   `json:"operation_key"`
+	Methods      []string `json:"methods"`
+	Path         string   `json:"path"`
+	CallURL      string   `json:"call_url"`
+	Status       string   `json:"status"`
+	Transport    string   `json:"transport"`
 }
 
 type localRelayRouteDefinition struct {
@@ -139,6 +141,7 @@ func (registry *localChannelProfileRegistry) compatibilityViews(store *localStor
 			continue
 		}
 		routesByProfile[profile.ID] = append(routesByProfile[profile.ID], localCompatibilityRouteView{
+			OperationID: compatibilityOperation(route.Methods[0], route.Path), OperationKey: profile.Key + "." + compatibilityOperation(route.Methods[0], route.Path),
 			Methods: append([]string(nil), route.Methods...), Path: route.Path,
 			CallURL: route.Path, Status: route.Status, Transport: "http",
 		})

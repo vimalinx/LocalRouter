@@ -106,6 +106,8 @@ describe('TokensPage issuance', () => {
     await user.type(screen.getByLabelText('工作区'), '/workspace/video')
     await user.type(screen.getByLabelText('Token 名称'), 'video-agent-token')
     await user.type(screen.getByLabelText('每日请求'), '500')
+    await user.type(screen.getByLabelText('每月预算（USD）'), '20')
+    await user.type(screen.getByLabelText('单次预留（USD）'), '0.25')
     await user.click(screen.getByRole('button', { name: '创建并签发' }))
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
@@ -123,7 +125,7 @@ describe('TokensPage issuance', () => {
     await waitFor(() => expect(adminRequest).toHaveBeenCalledWith(
       '/local/api/token-policies/2',
       'admin-test',
-      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ capabilities: [], requests_per_minute: 0, daily_request_limit: 500, max_in_flight: 0 }) })
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ capabilities: [], requests_per_minute: 0, daily_request_limit: 500, max_in_flight: 0, daily_budget_usd_micros: 0, monthly_budget_usd_micros: 20000000, request_reserve_usd_micros: 250000 }) })
     ))
     await waitFor(() => expect(adminRequest).toHaveBeenCalledWith(
       '/local/api/tokens/2/reveal',

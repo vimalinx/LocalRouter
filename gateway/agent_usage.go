@@ -9,30 +9,32 @@ import (
 )
 
 type localAgentUsage struct {
-	TokenID               int     `json:"token_id"`
-	TokenName             string  `json:"token_name"`
-	AgentCode             string  `json:"agent_code"`
-	AgentName             string  `json:"agent_name"`
-	Workspace             string  `json:"workspace"`
-	Runtime               string  `json:"runtime"`
-	Status                int     `json:"status"`
-	Registered            bool    `json:"registered"`
-	System                bool    `json:"system"`
-	Requests              int64   `json:"requests"`
-	Successful            int64   `json:"successful"`
-	Failed                int64   `json:"failed"`
-	TodayRequests         int64   `json:"today_requests"`
-	PromptTokens          int64   `json:"prompt_tokens"`
-	CompletionTokens      int64   `json:"completion_tokens"`
-	CachedInputTokens     int64   `json:"cached_input_tokens"`
-	CacheWriteInputTokens int64   `json:"cache_write_input_tokens"`
-	ReasoningTokens       int64   `json:"reasoning_tokens"`
-	CostUSD               float64 `json:"cost_usd"`
-	CostStatus            string  `json:"cost_status"`
-	LastUsedAt            int64   `json:"last_used_at"`
-	RequestsPerMinute     int     `json:"requests_per_minute"`
-	DailyRequestLimit     int     `json:"daily_request_limit"`
-	MaxInFlight           int     `json:"max_in_flight"`
+	Revoked               bool             `json:"revoked"`
+	Budget                *agentBudgetView `json:"budget,omitempty"`
+	TokenID               int              `json:"token_id"`
+	TokenName             string           `json:"token_name"`
+	AgentCode             string           `json:"agent_code"`
+	AgentName             string           `json:"agent_name"`
+	Workspace             string           `json:"workspace"`
+	Runtime               string           `json:"runtime"`
+	Status                int              `json:"status"`
+	Registered            bool             `json:"registered"`
+	System                bool             `json:"system"`
+	Requests              int64            `json:"requests"`
+	Successful            int64            `json:"successful"`
+	Failed                int64            `json:"failed"`
+	TodayRequests         int64            `json:"today_requests"`
+	PromptTokens          int64            `json:"prompt_tokens"`
+	CompletionTokens      int64            `json:"completion_tokens"`
+	CachedInputTokens     int64            `json:"cached_input_tokens"`
+	CacheWriteInputTokens int64            `json:"cache_write_input_tokens"`
+	ReasoningTokens       int64            `json:"reasoning_tokens"`
+	CostUSD               float64          `json:"cost_usd"`
+	CostStatus            string           `json:"cost_status"`
+	LastUsedAt            int64            `json:"last_used_at"`
+	RequestsPerMinute     int              `json:"requests_per_minute"`
+	DailyRequestLimit     int              `json:"daily_request_limit"`
+	MaxInFlight           int              `json:"max_in_flight"`
 	pricedSuccessful      int64
 	estimatedCost         bool
 	reportedCost          bool
@@ -73,7 +75,7 @@ func buildLocalAgentUsage(runtime localRuntime, now time.Time) ([]localAgentUsag
 	if runtime.store == nil || runtime.store.db == nil {
 		return []localAgentUsage{}, nil
 	}
-	tokens, err := runtime.store.allTokens(runtime.rootUser.ID)
+	tokens, err := runtime.store.billingTokens(runtime.rootUser.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +83,7 @@ func buildLocalAgentUsage(runtime localRuntime, now time.Time) ([]localAgentUsag
 	index := make(map[int]int, len(tokens))
 	for _, token := range tokens {
 		item := localAgentUsage{
-			TokenID: token.ID, TokenName: token.Name, AgentCode: token.AgentCode, AgentName: token.AgentName,
+			Revoked: token.Revoked, TokenID: token.ID, TokenName: token.Name, AgentCode: token.AgentCode, AgentName: token.AgentName,
 			Workspace: token.Workspace, Runtime: token.Runtime, Status: token.Status,
 			Registered: token.AgentCode != "" && token.Workspace != "", System: token.Name == localTokenName,
 			CostStatus: "unavailable", LastUsedAt: token.AccessedTime,
@@ -93,8 +95,24 @@ func buildLocalAgentUsage(runtime localRuntime, now time.Time) ([]localAgentUsag
 				item.MaxInFlight = policy.MaxInFlight
 			}
 		}
+		if runtime.policies != nil && runtime.policies.budgets != nil {
+			policy, _ := runtime.policies.policyFor(token.ID)
+			view, err := runtime.policies.budgets.view(token.ID, policy, now)
+			if err != nil {
+				return nil, err
+			}
+			item.Budget = &view
+		}
 		index[token.ID] = len(usage)
 		usage = append(usage, item)
+	}
+
+	if runtime.policies != nil && runtime.policies.budgets != nil {
+		if err := runtime.policies.budgets.populateUsage(usage, index, now); err != nil {
+			return nil, err
+		}
+		sortAgentUsage(usage)
+		return usage, nil
 	}
 
 	dayStart := now.UTC().Truncate(24 * time.Hour).Unix()
@@ -215,6 +233,11 @@ func buildLocalAgentUsage(runtime localRuntime, now time.Time) ([]localAgentUsag
 			item.CostStatus = "unavailable"
 		}
 	}
+	sortAgentUsage(usage)
+	return usage, nil
+}
+
+func sortAgentUsage(usage []localAgentUsage) {
 	sort.Slice(usage, func(left, right int) bool {
 		if usage[left].System != usage[right].System {
 			return !usage[left].System
@@ -224,5 +247,4 @@ func buildLocalAgentUsage(runtime localRuntime, now time.Time) ([]localAgentUsag
 		}
 		return usage[left].AgentCode < usage[right].AgentCode
 	})
-	return usage, nil
 }

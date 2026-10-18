@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "12"
+const agentContractSchemaVersion = "15"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -136,7 +136,7 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"binding": "service-token", "registration": "operator-issued", "console": console,
 			"required_fields": []string{"agent_code", "agent_name", "workspace"},
 			"whoami":          "/agent/whoami", "secret_values_returned": false, "start_command": "lr init", "getting_started": "/docs/agent-start.md",
-			"enrollment":    gin.H{"available": requestServerScope(c) != lanServiceScope, "request": "/agent/identity-requests", "cli": "lr identity request <agent-code> <policy-json>", "claim_cli": "lr identity claim", "approval": "human-reviewed exact scope", "delivery": "private claim; CLI saves mode-600 credential without displaying it", "scope_changes": "/agent/access-requests", "scope_change_cli": "lr identity access <complete-policy-json>"},
+			"enrollment":    gin.H{"available": requestServerScope(c) != lanServiceScope, "request": "/agent/identity-requests", "cli": "lr identity request <agent-code> <policy-json>", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "setup_rule": setupIdentityAction, "schema": "/docs/identity-request.schema.json", "claim_cli": "lr identity claim", "approval": "human-reviewed exact scope", "delivery": "private claim; CLI saves mode-600 credential without displaying it", "scope_changes": "/agent/access-requests", "scope_change_cli": "lr identity access <complete-policy-json>"},
 			"reuse_command": "lr identity bind <agent-code> <token-file>", "reuse_scope": "Agent session, workspace and service origin; locator only",
 		},
 		"flow":       []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
@@ -144,10 +144,13 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 		"service_workspace": gin.H{
 			"mode": "agent-led", "templates": "/agent/service-templates", "proposals": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 			"prepare_schema": serviceProposalSchema(),
-			"flow":           []string{"choose exact template", "adapt observed contract", "prepare proposal", "human approves exact authority digest", "inspect installation", "request explicit capability bundle", "preflight and authorized call", "verify recorded trace"},
-			"preparation":    "Service Tokens may prepare owned proposals without maintenance authority; preparation never calls the provider or grants permissions.",
-			"maintenance":    "A separate maintenance-only Token uses setup tools on /manage/mcp. Compatible repairs within human-approved Pack delegations need no repeated approval; target/auth/path/method/operation/workflow changes do.",
-			"trace_headers":  gin.H{"task": "X-LocalRouter-Task-Id", "trace": "traceparent or X-LocalRouter-Trace-Id", "privacy": "metadata and declared numeric resource units only; correlation labels do not grant access"},
+			"pack_schema":    "/docs/protocol-pack-v3.schema.json", "proposal_schema": "/docs/setup-proposal.schema.json",
+			"authentication_examples": gin.H{"bearer": gin.H{"type": "bearer"}, "header": gin.H{"type": "header", "header": "X-API-Key"}, "credential_owner": "human supplies the credential only at approval; omit secret_file"},
+			"identity_preparation":    setupIdentityAction,
+			"flow":                    []string{"choose exact template", "adapt observed contract", "prepare proposal", "human approves exact authority digest", "inspect installation", "request explicit capability bundle", "preflight and authorized call", "verify recorded trace"},
+			"preparation":             "Service Tokens may prepare owned proposals without maintenance authority; preparation never calls the provider or grants permissions.",
+			"maintenance":             "A separate maintenance-only Token uses setup tools on /manage/mcp. Compatible repairs within human-approved Pack delegations need no repeated approval; target/auth/path/method/operation/workflow changes do.",
+			"trace_headers":           gin.H{"task": "X-LocalRouter-Task-Id", "trace": "traceparent or X-LocalRouter-Trace-Id", "privacy": "metadata and declared numeric resource units only; correlation labels do not grant access"},
 		},
 		"selection": gin.H{
 			"mode": "agent", "merged": false,
@@ -272,6 +275,9 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 		if policy, exists := runtime.policies.policyFor(tokenID); exists {
 			response["unrestricted"] = false
 			response["policy"] = policy
+			response["setup_only"] = policy.SetupOnly
+			response["service_access"] = !policy.SetupOnly && !policyHasCapability(policy, localRouterMaintainCapability)
+			response["maintenance_access"] = policyHasCapability(policy, localRouterMaintainCapability)
 		} else {
 			response["unrestricted"] = true
 			response["policy"] = gin.H{"surfaces": []string{"*"}, "packs": []string{"*"}, "operations": []string{"*"}}
@@ -377,7 +383,7 @@ func (registry *protocolRegistry) handleAgentCompare(runtime localRuntime) gin.H
 				writeAgentError(c, http.StatusNotFound, "operation_not_found", "compare operation was not found", operationKey, false, "agent", "refresh the catalog and use a published operation key", nil, nil, nil)
 				return
 			}
-			if allowed, _, reason := runtime.policies.preview(c.GetInt(tokenPolicyContextID), "p", descriptor.Pack, descriptor.Operation, ""); !allowed {
+			if allowed, _, reason := runtime.policies.previewScope(c.GetInt(tokenPolicyContextID), "p", descriptor.Pack, descriptor.Operation, ""); !allowed {
 				writeAgentError(c, http.StatusForbidden, "token_policy_denied", "token policy does not allow a compared operation", reason, false, "localrouter", "remove the operation or ask the operator to adjust this service Token policy", nil, nil, nil)
 				return
 			}
@@ -412,7 +418,7 @@ func (registry *protocolRegistry) handleAgentCatalog(runtime localRuntime) gin.H
 				continue
 			}
 			for _, route := range view.Routes {
-				if allowed, _, _ := runtime.policies.preview(c.GetInt(tokenPolicyContextID), "p", view.ID, route.OperationID, ""); !allowed {
+				if allowed, _, _ := runtime.policies.previewScope(c.GetInt(tokenPolicyContextID), "p", view.ID, route.OperationID, ""); !allowed {
 					continue
 				}
 				operations = append(operations, registry.describeOperationFromView(view, route))
@@ -433,7 +439,7 @@ func (registry *protocolRegistry) handleAgentDescribe(runtime localRuntime) gin.
 			writeAgentError(c, http.StatusNotFound, "operation_not_found", "operation was not found", c.Param("protocol")+"."+c.Param("operation"), false, "agent", "refresh with lr catalog <pack> or search with lr find operation <intent>", nil, nil, nil)
 			return
 		}
-		if allowed, _, reason := runtime.policies.preview(c.GetInt(tokenPolicyContextID), "p", descriptor.Pack, descriptor.Operation, ""); !allowed {
+		if allowed, _, reason := runtime.policies.previewScope(c.GetInt(tokenPolicyContextID), "p", descriptor.Pack, descriptor.Operation, ""); !allowed {
 			writeAgentError(c, http.StatusForbidden, "token_policy_denied", "token policy does not allow this operation", reason, false, "localrouter", "ask the operator to adjust this service Token policy", nil, nil, nil)
 			return
 		}
@@ -468,7 +474,8 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		addCheck := func(name, status, message string, blocking bool) {
 			checks = append(checks, agentPreflightCheck{Name: name, Status: status, Message: message, Blocking: blocking})
 		}
-		allowed, policyStatus, policyReason := runtime.policies.preview(c.GetInt(tokenPolicyContextID), "p", descriptor.Pack, descriptor.Operation, modelName)
+		policyDefinition, _ := registry.get(descriptor.Pack)
+		allowed, policyStatus, policyReason := runtime.policies.previewPolicy(c.GetInt(tokenPolicyContextID), "p", descriptor.Pack, descriptor.Operation, modelName, true, protocolAllowanceExempt(policyDefinition, descriptor.Operation))
 		if allowed {
 			message := "service Token allows this operation"
 			if modelName != "" {
@@ -490,6 +497,15 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 			} else {
 				addCheck("service_allowance", "pass", decision.Message, false)
 			}
+		}
+		budgetDefinition, _ := registry.get(descriptor.Pack)
+		budgetCode, budgetErr := runtime.policies.previewAgentBudget(c.GetInt(tokenPolicyContextID), fixedAllowanceQuote(budgetDefinition, descriptor.Operation), protocolAllowanceExempt(budgetDefinition, descriptor.Operation))
+		if budgetErr != nil {
+			addCheck("agent_budget", "fail", "cannot read Agent monetary budget", true)
+		} else if budgetCode != "" {
+			addCheck("agent_budget", "fail", budgetCode, true)
+		} else {
+			addCheck("agent_budget", "pass", "Agent monetary budget permits admission; no money was reserved by preflight", false)
 		}
 		if descriptor.Ready {
 			addCheck("readiness", "pass", "Pack and operation are ready", false)
@@ -577,14 +593,26 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 			}
 		}
 		nextAction := "call the operation using the returned LocalRouter path"
-		if !ok {
-			nextAction = descriptor.NextAction
-			if !allowed && policyStatus != 0 {
-				nextAction = "ask the operator to adjust this service Token policy"
+		for _, check := range checks {
+			if !check.Blocking || check.Status != "fail" {
+				continue
 			}
-		}
-		if allowance != nil && !allowance.Allowed && allowed {
-			nextAction = "ask the human to review the service allowance in /#protocols; do not retry automatically"
+			switch check.Name {
+			case "authorization":
+				nextAction = "ask the operator to adjust this service Token policy"
+				if policyStatus == http.StatusTooManyRequests {
+					nextAction = "wait for the local request or concurrency limit to reset, then preflight again"
+				}
+			case "service_allowance":
+				nextAction = "ask the human to review the service allowance; do not retry automatically"
+			case "agent_budget":
+				nextAction = "ask the human to review the Agent budget, reservation or unsettled charges; preflight again after reconciliation"
+			case "readiness":
+				nextAction = descriptor.NextAction
+			default:
+				nextAction = "correct the " + check.Name + " input using the published operation contract, then preflight again"
+			}
+			break
 		}
 		alternatives := []agentOperationRef{}
 		if !ok {
@@ -600,7 +628,7 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 				if check.Blocking && check.Status == "fail" {
 					blockedAt = check.Name
 					reason = check.Message
-					if check.Name == "authorization" || check.Name == "service_allowance" || check.Name == "readiness" {
+					if check.Name == "authorization" || check.Name == "service_allowance" || check.Name == "agent_budget" || check.Name == "readiness" {
 						owner = "localrouter"
 					}
 					break
@@ -720,7 +748,7 @@ func (registry *protocolRegistry) resolveCandidates(tokenID int, query string) [
 	hasExactMatch := false
 	for _, view := range registry.views() {
 		for _, route := range view.Routes {
-			if allowed, _, _ := registry.policies.preview(tokenID, "p", view.ID, route.OperationID, ""); !allowed {
+			if allowed, _, _ := registry.policies.previewScope(tokenID, "p", view.ID, route.OperationID, ""); !allowed {
 				continue
 			}
 			descriptor := registry.describeOperationFromView(view, route)
@@ -1157,7 +1185,7 @@ func preflightResolution(checks []agentPreflightCheck, policyStatus int, nextAct
 	for _, check := range checks {
 		actions = append(actions, check.Name)
 		if check.Blocking && check.Status == "fail" {
-			if check.Name == "service_allowance" || (check.Name == "authorization" && policyStatus != http.StatusTooManyRequests) {
+			if check.Name == "service_allowance" || check.Name == "agent_budget" || (check.Name == "authorization" && policyStatus != http.StatusTooManyRequests) {
 				actor = "human"
 			}
 			break

@@ -398,6 +398,13 @@ func (p *tokenPolicyStore) reserveAllowance(c *gin.Context, service, operation s
 		c.Abort()
 		return "", false
 	}
+	exempt := len(budgetExempt) > 0 && budgetExempt[0]
+	if !p.reserveAgentBudget(c, service, operation, quote, exempt) {
+		if id != "" {
+			_ = p.allowances.releaseNotSent(id)
+		}
+		return "", false
+	}
 	if id != "" {
 		c.Header("X-LocalRouter-Allowance-Receipt", id)
 		c.Set("localrouter_allowance_single_attempt", true)
@@ -664,8 +671,18 @@ func humanAllowanceAccess(c *gin.Context) {
 }
 
 func (p *tokenPolicyStore) beginProtocolAllowance(c *gin.Context, def protocolDefinition, operation string) (func(), bool) {
+	c.Set("localrouter_allowance_dispatch", "not_sent")
 	receipt, ok := p.reserveAllowance(c, def.ID, operation, fixedAllowanceQuote(def, operation), protocolAllowanceExempt(def, operation))
-	return func() { p.finishAllowance(c, receipt, def, operation) }, ok
+	return func() {
+		p.finishAllowance(c, receipt, def, operation)
+		metrics, _ := c.Get("localrouter_usage_metrics")
+		usage, _ := metrics.(usageMetrics)
+		cost := protocolUsageCost(def, operation, c.GetString("localrouter_usage_model"), usage, c.Writer.Status() >= 200 && c.Writer.Status() < 300)
+		if c.GetString("localrouter_protocol_outcome") == "unknown" || c.GetBool("localrouter_budget_incomplete") || (strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") && !c.GetBool("localrouter_stream_terminal")) {
+			cost = nil
+		}
+		p.finishAgentBudget(c, cost, usage, c.GetString("localrouter_allowance_dispatch") == "not_sent")
+	}, ok
 }
 
 func protocolAllowanceExempt(def protocolDefinition, operation string) bool {

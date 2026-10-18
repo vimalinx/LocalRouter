@@ -175,6 +175,8 @@ export type LocalToken = {
 }
 
 export type AgentUsage = {
+  revoked?: boolean
+  budget?: AgentBudget
   token_id: number
   token_name: string
   agent_code: string
@@ -202,6 +204,10 @@ export type AgentUsage = {
 }
 
 export type TokenPolicy = {
+  setup_only?: boolean
+  daily_budget_usd_micros?: number
+  monthly_budget_usd_micros?: number
+  request_reserve_usd_micros?: number
   token_id: number
   surfaces?: string[]
   packs?: string[]
@@ -322,6 +328,11 @@ export type ProtocolEvent = {
 }
 
 export type RequestLog = {
+  token_id?: number
+  token_name?: string
+  agent_code?: string
+  agent_name?: string
+  revoked?: boolean
   id?: number
   created_at?: string
   created_time?: number | string
@@ -509,3 +520,24 @@ export type ApiEnvelope<T> = {
   data: T
   message?: string
 }
+
+export type AgentBudget = {
+  daily_limit_usd_micros: number
+  monthly_limit_usd_micros: number
+  request_reserve_usd_micros: number
+  daily_spent_usd_micros: number
+  monthly_spent_usd_micros: number
+  held_usd_micros: number
+  pending_requests: number
+  unpriced_requests: number
+  unreconciled_overruns: number
+  daily_remaining_usd_micros?: number
+  monthly_remaining_usd_micros?: number
+  period_timezone: string
+}
+export type AgentBillingEntry = {
+  id: string; token_id: number; created_at: number; service: string; operation: string; model: string
+  state: string; reserved_usd_micros: number; charged_usd_micros: number; source: string; reason?: string; http_status: number
+  usage: { input_tokens?: number; output_tokens?: number; total_tokens?: number }
+}
+export type AgentBillingPage = { items: AgentBillingEntry[]; total: number; budget: AgentBudget }

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -45,19 +46,22 @@ func callOwnedProtocol(runtime localRuntime, pack, method, path, query, contentT
 	if runtime.callTaskID != "" {
 		request.Header.Set("X-LocalRouter-Task-Id", runtime.callTaskID)
 	}
+	unknown := false
 	engine := gin.New()
 	engine.Use(func(c *gin.Context) {
 		c.Set(tokenPolicyContextID, token.ID)
 		c.Set("token_id", token.ID)
 		c.Set("local_token", &token)
 		c.Set("localrouter_projection_surface", runtime.callSurface)
+		c.Set("localrouter_control_call", runtime.callRecovery)
 		c.Next()
+		unknown = c.GetString("localrouter_protocol_outcome") == "unknown" || c.GetBool("localrouter_budget_incomplete") || (strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") && !c.GetBool("localrouter_stream_terminal"))
 	}, serviceTraceMiddleware(runtime, "p"))
 	engine.Any("/p/:protocol/*path", runtime.protocols.handleProxy)
 	writer := &serviceResponseBuffer{header: make(http.Header), status: http.StatusOK, context: ctx}
 	engine.ServeHTTP(writer, request)
-	if writer.err != nil {
-		return writer.status, nil, writer.header.Get("Content-Type"), writer.err
+	if unknown || writer.err != nil {
+		return writer.status, writer.body.Bytes(), writer.header.Get("Content-Type"), errors.Join(errWorkflowOutcomeUnknown, writer.err)
 	}
 	return writer.status, writer.body.Bytes(), writer.header.Get("Content-Type"), nil
 }
@@ -92,9 +96,13 @@ func (writer *serviceResponseBuffer) Hijack() (net.Conn, *bufio.ReadWriter, erro
 // A projection's outer policy check does not reserve a second concurrency slot.
 // Each actual internal operation acquires and releases its own caller lease.
 func (store *tokenPolicyStore) authorizeProjection(c *gin.Context, surface, pack, operation, model string) (func(), bool) {
-	if allowed, status, message := store.preview(c.GetInt(tokenPolicyContextID), surface, pack, operation, model); !allowed {
+	if allowed, status, message := store.previewScope(c.GetInt(tokenPolicyContextID), surface, pack, operation, model); !allowed {
 		abortTokenPolicy(c, status, message)
 		return nil, false
+	}
+	if c.Request.Method == http.MethodGet {
+		c.Set("localrouter_control_call", true)
+		return store.authorizeRequest(c, surface, pack, operation, model)
 	}
 	return func() {}, true
 }

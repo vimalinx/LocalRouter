@@ -67,6 +67,10 @@ type serviceDelegation struct {
 }
 
 type serviceProposal struct {
+	Supersedes      string               `json:"supersedes,omitempty"`
+	SupersededBy    string               `json:"superseded_by,omitempty"`
+	GrantPolicy     *serviceGrantPolicy  `json:"grant_policy,omitempty"`
+	RetainedBundle  *serviceBundle       `json:"retained_bundle,omitempty"`
 	ID              string               `json:"id"`
 	OwnerTokenID    int                  `json:"owner_token_id"`
 	AgentCode       string               `json:"agent_code"`
@@ -143,6 +147,10 @@ func serviceDigest(value any) string {
 func (hub *serviceWorkspace) update(change func(*serviceWorkspaceDocument) error) error {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	return hub.updateLocked(change)
+}
+
+func (hub *serviceWorkspace) updateLocked(change func(*serviceWorkspaceDocument) error) error {
 	data, err := json.Marshal(hub.doc)
 	if err != nil {
 		return err
@@ -196,11 +204,19 @@ func (hub *serviceWorkspace) proposals(owner int) []serviceProposal {
 }
 
 func (hub *serviceWorkspace) bundleAllows(tokenID int, surface, pack, operation string) bool {
-	if hub == nil || tokenID <= 0 || (surface != "p" && surface != "mcp" && surface != "w") {
+	if hub == nil || tokenID <= 0 {
 		return true
 	}
 	hub.mu.RLock()
 	defer hub.mu.RUnlock()
+	for _, proposal := range hub.doc.Proposals {
+		if proposal.State == "applying" && proposal.GrantTokenID == tokenID && proposal.GrantPolicy != nil {
+			return false
+		}
+	}
+	if surface != "p" && surface != "mcp" && surface != "w" {
+		return true
+	}
 	grants, restricted := hub.doc.Grants[tokenID]
 	if !restricted {
 		return true
@@ -223,7 +239,7 @@ func (hub *serviceWorkspace) bundleAllows(tokenID int, surface, pack, operation 
 			}
 			if surface == "w" && strings.HasPrefix(operation, "workflow.") {
 				for _, workflow := range member.Workflows {
-					for _, action := range []string{"create", "get", "list", "cancel"} {
+					for _, action := range workflowScopeActions {
 						if operation == "workflow."+workflow+"."+action {
 							return true
 						}
@@ -324,6 +340,26 @@ func (hub *serviceWorkspace) resolveBundleWithPack(input serviceBundle, prepared
 	}
 	input.Members = []serviceBundleMember{}
 	for _, member := range members {
+		definition, _ := hub.registry.get(member.Pack)
+		if prepared != nil && prepared.ID == member.Pack {
+			definition = *prepared
+		}
+		queue := append([]string(nil), member.Operations...)
+		seen := map[string]bool{}
+		for len(queue) > 0 {
+			op := queue[0]
+			queue = queue[1:]
+			if seen[op] {
+				continue
+			}
+			seen[op] = true
+			deps, _ := protocolScopeDependencies(definition, op)
+			queue = append(queue, deps...)
+		}
+		member.Operations = nil
+		for op := range seen {
+			member.Operations = append(member.Operations, op)
+		}
 		member.Operations = normalizePolicyValues(member.Operations)
 		member.Workflows = normalizePolicyValues(member.Workflows)
 		input.Members = append(input.Members, *member)

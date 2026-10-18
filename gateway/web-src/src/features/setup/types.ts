@@ -1,12 +1,15 @@
+import type { TokenPolicy } from '@/lib/types'
+
 export type BundleMember = { pack: string; operations: string[]; workflows?: string[] }
 export type ServiceBundle = { id: string; name: string; description?: string; guide?: string; revision: string; includes?: string[]; members: BundleMember[] }
 export type ServiceTemplate = { id: string; version: string; name: string; summary: string; maintenance_guide: string; checks: string[]; example: Record<string, unknown>; digest: string }
 export type ServiceProposal = {
-  id: string; owner_token_id: number; agent_code: string; kind: 'connection' | 'bundle' | 'template'; reason: string
+  id: string; supersedes?: string; superseded_by?: string; owner_token_id: number; agent_code: string; kind: 'connection' | 'bundle' | 'template'; reason: string
   created_at: string; updated_at: string; state: string; digest: string; verification: string
+  grant_policy?: { base_digest: string; before: TokenPolicy; after: TokenPolicy }; retained_bundle?: ServiceBundle
   bundle?: ServiceBundle; template?: ServiceTemplate
   connection?: { template_id: string; template_version: string; source_url?: string; guide?: string; definition: {
-    id: string; name: string; description: string; base_url: string; auth: { type: string; header?: string }
+    id: string; name: string; description: string; enabled: boolean; base_url: string; auth: { type: string; header?: string }
     routes: { operation_id: string; methods: string[]; path: string; summary: string }[]
     workflows?: { id: string; name: string }[]
   } }

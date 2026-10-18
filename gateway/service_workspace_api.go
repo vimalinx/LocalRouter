@@ -14,6 +14,10 @@ import (
 func serviceWorkspaceError(c *gin.Context, err error) {
 	code, status := "service_proposal_invalid", http.StatusBadRequest
 	message := err.Error()
+	next := "inspect the proposal and its next_action; preparation never authorizes a provider call"
+	if strings.Contains(message, "agent_identity_required") {
+		code, status, next = "agent_identity_required", http.StatusForbidden, setupIdentityAction
+	}
 	if strings.Contains(message, "needs_approval") {
 		code, status = "needs_approval", http.StatusForbidden
 	}
@@ -23,7 +27,10 @@ func serviceWorkspaceError(c *gin.Context, err error) {
 	if strings.Contains(message, "stale") || strings.Contains(message, "changed") {
 		code, status = "proposal_changed", http.StatusConflict
 	}
-	writeAgentError(c, status, code, message, message, false, "localrouter", "inspect the proposal and its next_action; preparation never authorizes a provider call", nil, nil, nil)
+	if strings.Contains(message, "unknown field") || strings.Contains(message, "definition.enabled") {
+		next = "Read lr setup schema and lr setup schema pack. Use template.example with enabled:true; runtime route fields enabled, operation_key and call_url are not authoring fields."
+	}
+	writeAgentError(c, status, code, message, message, false, "localrouter", next, nil, nil, gin.H{"schema_url": "/docs/setup-proposal.schema.json"})
 }
 
 func serviceOwner(c *gin.Context, runtime localRuntime) (localToken, error) {
@@ -46,7 +53,12 @@ func serviceOwner(c *gin.Context, runtime localRuntime) (localToken, error) {
 
 func proposalNextAction(proposal serviceProposal) string {
 	switch proposal.State {
+	case "superseded":
+		return "Inspect replacement " + proposal.SupersededBy + "; the original review grants no authority."
 	case "awaiting_approval":
+		if reason := proposalReviewBlocker(proposal); reason != "" {
+			return reason
+		}
 		return "The exact proposal is ready for the human console. A delegated maintainer may apply a compatible repair through /manage/mcp; otherwise wait for approval."
 	case "applied":
 		if proposal.Kind == "connection" {
@@ -160,6 +172,24 @@ func registerServiceAgentRoutes(agent *gin.RouterGroup, runtime localRuntime) {
 		}
 		c.JSON(http.StatusOK, result)
 	})
+	agent.POST("/onboarding/:id/reprepare", func(c *gin.Context) {
+		owner, err := serviceOwner(c, runtime)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		var input serviceReprepareInput
+		if err := decodeAgentRequest(c, &input); err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		proposal, err := hub.reprepare(c.Param("id"), input.Digest, owner.ID, input.Enable)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, serviceProposalView(proposal))
+	})
 	agent.POST("/onboarding/:id/reconcile", func(c *gin.Context) {
 		owner, err := serviceOwner(c, runtime)
 		if err != nil {
@@ -257,6 +287,19 @@ func registerServiceAdminRoutes(admin *gin.RouterGroup, runtime localRuntime) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+	})
+	admin.POST("/service-proposals/:id/reprepare", func(c *gin.Context) {
+		var input serviceReprepareInput
+		if err := decodeAgentRequest(c, &input); err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		proposal, err := hub.reprepare(c.Param("id"), input.Digest, 0, input.Enable)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
 	})
 	admin.POST("/service-proposals/:id/reconcile", func(c *gin.Context) {
 		proposal, err := hub.reconcile(c.Param("id"), 0)

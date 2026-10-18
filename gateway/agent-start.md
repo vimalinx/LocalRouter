@@ -43,30 +43,43 @@ lr result <call-id> --refresh
 
 批量调用也须逐项立即保存开始记录、原始响应和退出码，不能等整批结束才留证据。超时保留已有输出并标记未知。只有明确未发出的请求可按结构化提示恢复；共享额度对未知结果保留占用。
 
-持久工作流用 `lr run` 启动，保存 Pack、workflow 和 LocalRouter Job ID，再用 `lr watch` 观察或恢复；`watch` 默认无超时。供应商 resourceId/taskId 不是 LocalRouter Job ID，没有工作流时用该服务的状态操作。只对声明可取消的工作流执行 `lr cancel`，并核对实际终态。
+持久工作流用 `lr run` 启动；CLI 在发送前记录意图，并私下保存一次响应与退出状态，可用 `lr result` 找回。保存 Pack、workflow 和 LocalRouter Job ID，再用 `lr watch` 推进同一个任务；`watch` 默认无超时，但 `outcome_unknown` 会立即非零退出，要求核对上游，不能重新创建任务。契约 14 起，GET `/w/<pack>/<workflow>/<job>` 只读取已保存状态；POST 同一路径的 `/advance` 才允许推进一次，可能调用上游。供应商 resourceId/taskId 不是 LocalRouter Job ID，没有工作流时用该服务的状态操作。只对声明可取消的工作流执行 `lr cancel`，并核对实际终态。
 
 ## 需要新增身份或权限时
 
 | 需要 | 路径 |
 |---|---|
 | 严格模式要求独立身份，或希望分别授权 | `lr identity request <agent-code> @policy.json` → 人在返回的 registration_url（`/#tokens`，访问权限）批准 → `lr identity claim` |
+| 新服务尚未发布，只需要准备接入方案 | `lr identity prepare <agent-code>` → 人批准“仅准备身份” → `lr identity claim`；该身份不能调用任何服务 |
 | 已有人签发独立 Token | `lr identity bind <agent-code> <token-file>`，核对编码、工作区与仅调用权限 |
 | 扩大现有服务范围或限额 | `lr identity access @complete-policy.json` → 人批准；`lr identity access-status <id>` 看进度 |
 | 接入新服务或能力包 | 独立身份运行 `lr setup templates` → `lr setup template <id> <version>` → `lr setup schema` → `lr setup prepare @proposal.json` → 人审阅精确方案并批准 |
 
-身份申请须明确 Pack 和 Pack 限定的操作，来自当前公开契约，不使用通配范围；按需限制模型、每日请求、频率、并发和截止时间。请求不读取默认/管理员 Token，领取用私有证明，凭据只保存到 0600 文件。相同会话的相同申请复用原身份；申请及领取窗口为 24 小时。修改待接入范围先 `lr identity cancel`，已批准身份在控制台撤销。批准不能恢复已撤销身份，也不清零用量。
+调用权限申请须明确 Pack 和 Pack 限定的操作，来自当前公开契约，不使用通配范围；仅准备身份使用 `{"setup_only":true}`，不填写这些选择器。`lr identity schema` 公布完整字段和类型；按需限制模型、每日请求、频率、并发和截止时间。请求不读取默认/管理员 Token，领取用私有证明，凭据只保存到 0600 文件。相同会话的相同申请复用原身份；申请及领取窗口为 24 小时。修改待接入范围先 `lr identity cancel`，已批准身份在控制台撤销。批准不能恢复已撤销身份，也不清零用量。
 
 身份绑定按 Agent 会话、工作区和服务地址隔离。Codex 使用会话 ID，其他宿主设置稳定独立的 `LOCALROUTER_AGENT_SESSION`。显式 `LOCALROUTER_API_TOKEN_FILE` 优先；需要自动绑定时先去掉该覆盖。`lr identity forget` 只忘记定位器。身份未准备好时仍可阅读 `lr guide/tree/docs`。
 
+身份申请会展开并展示模型目录、工作流内部操作和恢复入口等必要依赖。标准兼容接口使用发现文档的精确 `operation_key`（例如 `openai-compatible.post.v1.chat.completions`）；实际请求仍使用公布的原始 URL。
+
 扩权提交的是完整替换策略，批准前保持原权限，批准后保留 Token 和累计用量；策略已被他人修改时须重新准备。能力包固定在批准版本，新增操作不自动获得授权，显式空授权禁止调用。模型限制不等于任意业务资源的访问控制。
 
-新服务提案即使普通模式也要求独立身份；准备不安装、不调用上游、不授予权限。`connection` 可附带明确的 `bundle`，由人一次批准目标和操作范围；密钥由人单独填写，Agent 不指定 secret_file。用 `lr setup get/bundles/verify` 核对状态和已有证据；中断在 `applying` 时用 `lr setup reconcile`，不重放 apply。`LOCALROUTER_TASK_ID` 仅用于关联追踪，不改变权限。
+新服务提案即使普通模式也要求独立身份；准备不安装、不调用上游、不授予权限。`connection` 可附带明确的 `bundle`，由人一次批准目标和完整生效策略，保留原金额、模型、次数和有效期限制；新增连接时还会展示并保留此前可用的服务能力。审批后发生策略漂移会拒绝覆盖；密钥由人单独填写，Agent 不指定 secret_file。用 `lr setup get/bundles/verify` 核对状态和已有证据；中断在 `applying` 时用 `lr setup reconcile`，不重放 apply。`LOCALROUTER_TASK_ID` 仅用于关联追踪，不改变权限。
+
+## 新服务的可提交形状与旧提案恢复
+
+`lr setup schema` 是完整提案结构，`lr setup schema pack` 是 Pack v3 源文件结构；均从当前端口提供，不需要仓库路径。模板的 `example` 可作为 `connection.definition` 的起点；保留顶层 `enabled:true`。发现文档中的 route `enabled`、`operation_key`、`call_url` 是运行时投影，不要复制进定义。
+
+无认证使用 `"auth":{"type":"none"}`；Bearer 使用 `"auth":{"type":"bearer"}`；自定义请求头使用 `"auth":{"type":"header","header":"X-API-Key"}`。后两种都不填写密钥或 `secret_file`；LocalRouter 在准备阶段分配凭据位置，由人在审批时填写密钥。准备不探测上游。
+
+遇到 `identity_scope_unpublished`，按错误的 `next_action` 先取消残留申请，再走 `lr identity prepare`；不要借无关服务充当载体。已有独立身份可直接准备新服务。
+
+旧提案缺少完整权限快照、权限发生变化时，提案所有者用 `lr setup reprepare <id> <digest>` 生成替代方案；旧连接为禁用状态且本次意图是接入启用服务时，明确加 `--enable`。控制台提供同样的重新准备入口。旧记录保留并指向新提案；重试会返回同一替代方案，不继承旧批准、不安装、不调用。人必须审阅新的摘要、完整权限和启用状态，再批准。正在 `applying` 的提案须先 reconcile，不能以重新准备绕过未知结果。
 
 ## 自主额度与维护
 
 严格模式总开关默认关闭。只有总开关和服务规则都启用时，才检查该服务共享额度；关闭时保留规则与用量，重新开启不清零。额度按服务共享，操作子额度和总额度同时约束。额度内调用仍须满足 Token/能力包权限并通过预检。
 
-明确公布的 GET/HEAD 模型目录读取不扣自主额度，但 Token、能力包、账号池和显式禁止/批准规则仍有效。美元自动额度只适用于已确认的固定调用价格；费用不能确定时改用次数或单次批准。`service_approval_required` 交人批准一次或调整额度，`service_use_denied` 表示禁止，单次批准不能覆盖。批准绑定 Token、服务和操作，一小时内一次有效；`X-LocalRouter-Allowance-Receipt` 是占用记录，未知结果先核对，不能重试探测。
+明确公布的 GET/HEAD 模型目录读取不扣业务请求次数；读取已保存任务、推进既有任务的只读状态或取消步骤使用独立的每 Token 每分钟 120 次控制额度。模型目录不扣自主额度；任务推进和取消仍受金额预算、共享额度、账号池和操作权限约束，不能借此创建新任务。Token、能力包、有效期和显式禁止/批准规则始终有效。美元自动额度只适用于已确认的固定调用价格；费用不能确定时改用次数或单次批准。`service_approval_required` 交人批准一次或调整额度，`service_use_denied` 表示禁止，单次批准不能覆盖。批准绑定 Token、服务和操作，一小时内一次有效；`X-LocalRouter-Allowance-Receipt` 是占用记录，未知结果先核对，不能重试探测。
 
 维护独立授权：人开启 Agent 维护并签发仅维护 Token 后，通过 `LOCALROUTER_MAINTAINER_TOKEN_FILE` 和 `/manage/mcp` 维护。Service Token 无维护权限，免密控制台也不构成 Agent 授权；不读管理员凭据，不通过 `/local/api` 自行批准。已委托的兼容修复用维护 lane 准备提案，审阅后 `lr setup apply <id> <proposal.digest>`；扩大目标、认证或操作需新批准。高级 Pack 编辑仍走 draft → review → plan → exact-digest apply，保留他人的草稿修改。
 

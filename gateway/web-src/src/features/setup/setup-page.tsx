@@ -16,8 +16,8 @@ import { ServiceTraces } from './service-traces'
 import type { ServiceBundle, ServiceProposal, ServiceTemplate, WorkspaceData } from './types'
 
 const stateLabels: Record<string, string> = {
-  preparing: 'Agent 正在准备', awaiting_approval: '等待授权', applying: '正在接入', applied: '已完成',
-  preparation_failed: '准备遇到问题', apply_failed: '接入遇到问题', rejected: '未授权', withdrawn: '已撤回',
+  superseded: '已有替代方案', preparing: 'Agent 正在准备', awaiting_approval: '等待授权', applying: '正在接入', applied: '已完成',
+  preparation_failed: '准备遇到问题', apply_failed: '接入遇到问题', rejected: '未授权', withdrawn: '已撤回', abandoned: '未完成授权已撤销',
 }
 const tabs = [ ['progress', '接入进展'], ['bundles', '能力包'], ['templates', '服务模板'], ['traces', '调用追踪'] ] as const
 
@@ -46,11 +46,12 @@ export function SetupPage({ adminToken, tokens }: { adminToken: string; tokens: 
   const dataQuery = useQuery({ queryKey: ['service-workspace', page], queryFn: () => adminRequest<WorkspaceData>(`/local/api/service-workspace?page=${page}&page_size=20`, adminToken), refetchInterval: 5000, retry: false })
   const data = dataQuery.data
   const selected = data?.proposals.items.find(item => item.id === selection?.id) || selection
+  const reviewBlocked = Boolean(selected && ((selected.bundle && selected.grant_token_id && !selected.grant_policy) || selected.connection?.definition.enabled === false))
   const agentName = (id: number) => { const token = tokens.find(item => item.id === id); return token?.agent_name || token?.name || `身份 ${id}` }
 
   async function refresh() { await queryClient.invalidateQueries({ queryKey: ['service-workspace'] }) }
   function inspect(item: ServiceProposal) { setSelection(item); setCredential(''); setError(''); setEvidence(null) }
-  async function decide(decision: 'approve' | 'reject') {
+  async function decide(decision: 'approve' | 'reject' | 'abandon') {
     if (!selected) return
     setBusy(true); setError('')
     try {
@@ -59,6 +60,17 @@ export function SetupPage({ adminToken, tokens }: { adminToken: string; tokens: 
       setSelection(null)
     } catch (cause) { setError(cause instanceof Error ? cause.message : '处理失败，请刷新查看实际状态') }
     finally { setCredential(''); setBusy(false); await refresh() }
+  }
+  async function reprepare() {
+    if (!selected) return
+    setBusy(true); setError(''); setCredential('')
+    try {
+      const result = await adminRequest<{ proposal: ServiceProposal }>(`/local/api/service-proposals/${encodeURIComponent(selected.id)}/reprepare`, adminToken, { method: 'POST', body: JSON.stringify({ digest: selected.digest, ...(selected.connection?.definition.enabled === false ? { enable: true } : {}) }) })
+      inspect(result.proposal)
+      await refresh()
+      toast.success('已生成新方案，请重新核对服务与完整权限后授权')
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '重新准备失败，请查看现有方案') }
+    finally { setBusy(false) }
   }
   async function verify() {
     if (!selected) return
@@ -93,7 +105,7 @@ export function SetupPage({ adminToken, tokens }: { adminToken: string; tokens: 
     {data && tab === 'progress' && <>
       <div className='rounded-lg border bg-muted/20 p-5 sm:flex sm:items-center sm:justify-between sm:gap-6'>
         <div><p className='flex items-center gap-2 text-sm font-medium'><Waypoints aria-hidden='true' className='size-4' />从 Agent 的一个需求开始</p><p className='mt-2 max-w-2xl text-sm leading-6 text-muted-foreground'>让 Agent 选择模板并提交接入方案。目标服务、开放操作和维护范围会一起展示；授权后，Agent 接着完成调用验证。</p></div>
-        <Button className='mt-4 shrink-0 sm:mt-0' variant='outline' onClick={() => copy('先运行 lr init 检查独立 Agent 身份，再读 lr guide。用 lr setup templates 查看目录，lr setup template <id> <version> 读取选中模板，lr setup schema 查看提案结构。按供应商文档准备 connection 及明确的 bundle，通过 lr setup prepare @proposal.json 提交。等待授权后检查状态，按契约预检并执行已获授权的调用，再用 lr setup verify <id> 核对证据。')}><Copy aria-hidden='true' />复制给 Agent 的说明</Button>
+        <Button className='mt-4 shrink-0 sm:mt-0' variant='outline' onClick={() => copy('先运行 lr init 检查独立 Agent 身份，再读 lr guide。新服务没有独立身份时，用 lr identity prepare <agent-code> 申请仅准备身份，人批准后 lr identity claim；不要借无关服务权限。用 lr setup templates 查看目录，lr setup template <id> <version> 读取选中模板，lr setup schema 查看提案结构。按供应商文档准备 connection 及明确的 bundle，通过 lr setup prepare @proposal.json 提交。等待授权后检查状态，按契约预检并执行已获授权的调用，再用 lr setup verify <id> 核对证据。')}><Copy aria-hidden='true' />复制给 Agent 的说明</Button>
       </div>
       {data.proposals.items.length === 0 ? <EmptyState icon={Waypoints} title='等待 Agent 的第一份接入方案' description='Agent 提交申请后，准备进展、需要的权限和后续验证会出现在这里。' />
         : <section aria-label='接入申请' className='divide-y border-y'>{data.proposals.items.map(item => <article key={item.id} className='grid gap-4 py-5 sm:grid-cols-[minmax(0,1fr)_auto]'>
@@ -121,19 +133,24 @@ export function SetupPage({ adminToken, tokens }: { adminToken: string; tokens: 
         <DialogHeader><DialogTitle>{selected ? proposalTitle(selected) : '接入方案'}</DialogTitle><DialogDescription>{selected && `${agentName(selected.owner_token_id)} · ${stateLabels[selected.state] || selected.state}`}</DialogDescription></DialogHeader>
         {selected && <div className='space-y-5'>
           <p className='text-sm leading-6'>{selected.reason}</p>
+          {selected.supersedes && <p className='break-all text-sm text-muted-foreground'>替代方案来源：{selected.supersedes}。此次须重新审阅授权。</p>}
+          {selected.superseded_by && <p className='break-all text-sm'>请查看替代方案：{selected.superseded_by}</p>}
+          {selected.state === 'awaiting_approval' && reviewBlocked && <p role='status' className='rounded-md border p-4 text-sm leading-6'>这份方案需要重新准备：旧权限快照不完整或连接未启用。重新准备会保留旧记录，展示新的完整权限；确认后再填写密钥并授权。</p>}
           <ol aria-label='接入步骤' className='grid gap-2 rounded-md bg-muted/30 p-4 text-sm sm:grid-cols-3'><li className='flex items-center gap-2'><Check className='size-4' aria-hidden='true' />Agent 准备方案</li><li className='flex items-center gap-2'><ShieldCheck className='size-4' aria-hidden='true' />{selected.state === 'applied' ? '已授权并应用' : '确认服务与权限'}</li><li className='flex items-center gap-2'><Clock3 className='size-4' aria-hidden='true' />查看真实调用证据</li></ol>
-          {selected.connection && <section className='space-y-3'><h3 className='text-sm font-medium'>接入服务</h3><dl className='grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[6rem_minmax(0,1fr)]'><dt className='text-muted-foreground'>目标地址</dt><dd className='break-all'>{selected.connection.definition.base_url}</dd><dt className='text-muted-foreground'>认证方式</dt><dd>{selected.connection.definition.auth.type}</dd><dt className='text-muted-foreground'>模板</dt><dd>{selected.connection.template_id} · v{selected.connection.template_version}</dd></dl><div className='divide-y rounded-md border'>{selected.connection.definition.routes.map(route => <div key={route.operation_id} className='px-4 py-3 text-sm'><p className='font-medium'>{route.summary || route.operation_id}</p><p className='mt-1 break-all font-mono text-xs text-muted-foreground'>{route.methods.join(', ')} {route.path} · {route.operation_id}</p></div>)}</div></section>}
-          {selected.bundle && <section className='space-y-3'><h3 className='text-sm font-medium'>授予 {selected.grant_token_id ? agentName(selected.grant_token_id) : '能力包目录'} 的服务能力</h3><BundleMembers bundle={selected.bundle} /><p className='text-sm text-muted-foreground'>仅允许已分配能力包中的服务操作；其他服务调用会被拒绝。模型调用保持原有策略。</p></section>}
+          {selected.connection && <section className='space-y-3'><h3 className='text-sm font-medium'>接入服务</h3><dl className='grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[6rem_minmax(0,1fr)]'><dt className='text-muted-foreground'>目标地址</dt><dd className='break-all'>{selected.connection.definition.base_url}</dd><dt className='text-muted-foreground'>批准后连接</dt><dd>{selected.connection.definition.enabled ? '启用' : '禁用 · 需要重新准备'}</dd><dt className='text-muted-foreground'>认证方式</dt><dd>{selected.connection.definition.auth.type}</dd><dt className='text-muted-foreground'>模板</dt><dd>{selected.connection.template_id} · v{selected.connection.template_version}</dd></dl><div className='divide-y rounded-md border'>{selected.connection.definition.routes.map(route => <div key={route.operation_id} className='px-4 py-3 text-sm'><p className='font-medium'>{route.summary || route.operation_id}</p><p className='mt-1 break-all font-mono text-xs text-muted-foreground'>{route.methods.join(', ')} {route.path} · {route.operation_id}</p></div>)}</div></section>}
+          {selected.bundle && <section className='space-y-3'><h3 className='text-sm font-medium'>授予 {selected.grant_token_id ? agentName(selected.grant_token_id) : '能力包目录'} 的服务能力</h3><BundleMembers bundle={selected.bundle} /><p className='text-sm text-muted-foreground'>本次服务能力与下方保留的旧能力共同生效；Token 策略、共享额度和服务连接状态也必须允许调用。</p></section>}
+          {selected.retained_bundle && <section className='space-y-3'><h3 className='text-sm font-medium'>继续保留的既有服务</h3><BundleMembers bundle={selected.retained_bundle} /></section>}
+          {selected.grant_policy && <section className='space-y-3 rounded-md border p-4 text-sm' aria-label='生效权限'><h3 className='font-medium'>批准后的完整 Token 范围</h3><p>接口：{selected.grant_policy.after.surfaces?.join('、') || '全部'}；服务：{selected.grant_policy.after.packs?.join('、') || '全部'}。</p><p className='break-all'>操作（含必要依赖）：{selected.grant_policy.after.operations?.join('、') || '全部'}。</p><p>模型：{selected.grant_policy.after.models?.join('、') || '所选操作的全部模型'}。请求次数、并发、金额预算与身份有效期沿用原策略；共享额度仍然生效。</p><details><summary className='cursor-pointer'>核对调整前后策略</summary><pre className='mt-2 max-h-64 overflow-auto text-xs'>{JSON.stringify({before:selected.grant_policy.before,after:selected.grant_policy.after},null,2)}</pre></details></section>}
           {selected.maintainer_token_id && <section className='rounded-md border p-4 text-sm leading-6'><p className='font-medium'>允许 {agentName(selected.maintainer_token_id)} 维护这个服务</p><p className='mt-2 text-muted-foreground'>可以修复既定接口内的 JSON 映射、说明、计量和超时。目标地址、认证、操作、路径、方法或工作流发生变化时，需要新的授权。维护 Token 必须单独签发，维护入口需已启用。</p></section>}
           {selected.template && <section className='text-sm leading-6'><p>发布模板 {selected.template.name} · v{selected.template.version}</p><p className='mt-2 text-muted-foreground'>{selected.template.summary}</p></section>}
           <details className='rounded-md border p-4 text-sm'><summary className='cursor-pointer font-medium'>查看这次变更的完整范围</summary><div className='mt-3 space-y-2 text-muted-foreground'>{selected.impact?.files.map(file => <p className='break-all' key={file.path}>{file.change} · {file.path}</p>)}<p className='break-all'>方案版本 {selected.digest}</p>{selected.pack_digest && <p className='break-all'>Pack 版本 {selected.pack_digest}</p>}</div></details>
-          {selected.state === 'awaiting_approval' && selected.connection && selected.connection.definition.auth.type !== 'none' && <div className='space-y-2'><Label htmlFor='service-credential'>服务密钥</Label><Input id='service-credential' type='password' autoComplete='new-password' value={credential} onChange={event => setCredential(event.target.value)} /><p className='text-xs text-muted-foreground'>首次接入时填写；已有凭据绑定时留空。密钥单独保存在本机，不会写入模板或调用记录。</p></div>}
+          {selected.state === 'awaiting_approval' && !reviewBlocked && selected.connection && selected.connection.definition.auth.type !== 'none' && <div className='space-y-2'><Label htmlFor='service-credential'>服务密钥</Label><Input id='service-credential' type='password' autoComplete='new-password' value={credential} onChange={event => setCredential(event.target.value)} /><p className='text-xs text-muted-foreground'>首次接入时填写；已有凭据绑定时留空。密钥单独保存在本机，不会写入模板或调用记录。</p></div>}
           {(error || selected.error) && <p role='alert' className='break-words rounded-md border border-destructive/30 p-3 text-sm text-destructive'>{error || selected.error}</p>}
           {evidence && <section aria-label='验证记录' className='rounded-md border p-4 text-sm leading-6'><p className='font-medium'>{evidence.installation === 'matches' ? '安装内容与授权版本一致' : '安装内容需要核对'}</p><p className='mt-2'>{evidence.upstream_operation === 'response-received' ? '已找到真实调用响应，业务结果请结合任务状态查看。' : '暂未找到这个版本的成功调用响应；已安装不代表服务已验证。'}</p><p className='mt-2 text-muted-foreground'>此次检查只读取已有记录，没有发起供应商调用。</p></section>}
           <div className='flex flex-wrap justify-end gap-3 border-t pt-4'>
-            {selected.state === 'awaiting_approval' && <><Button variant='outline' disabled={busy} onClick={() => decide('reject')}>暂不授权</Button><Button disabled={busy} onClick={() => decide('approve')}>{busy ? '正在执行…' : '授权并执行这份方案'}<ArrowRight aria-hidden='true' /></Button></>}
+            {selected.state === 'awaiting_approval' && <><Button variant='outline' disabled={busy} onClick={() => decide('reject')}>暂不授权</Button><Button variant='outline' disabled={busy} onClick={reprepare}>{selected.connection?.definition.enabled === false ? '改为启用并重新准备' : '重新准备供审阅'}</Button><Button disabled={busy || reviewBlocked} onClick={() => decide('approve')}>{busy ? '正在执行…' : '授权并执行这份方案'}<ArrowRight aria-hidden='true' /></Button></>}
             {selected.state === 'applied' && selected.connection && <Button variant='outline' disabled={busy} onClick={verify}>查看调用验证</Button>}
-            {selected.state === 'applying' && <Button variant='outline' disabled={busy} onClick={reconcile}>核对已安装状态</Button>}
+            {selected.state === 'applying' && <><p className='w-full text-sm text-muted-foreground'>撤销未完成授权会恢复这次应用前的策略；若之后已有人工改动则保留该改动。已安装服务和上游任务保留。</p><Button variant='outline' disabled={busy} onClick={() => decide('abandon')}>撤销未完成授权</Button><Button variant='outline' disabled={busy} onClick={reconcile}>核对已安装状态</Button></>}
           </div>
         </div>}
       </DialogContent>

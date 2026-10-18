@@ -42,6 +42,8 @@ export default function App() {
   const [activeHash, setActiveHash] = useState(() => window.location.hash)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [logPage, setLogPage] = useState(1)
+  const [logQuery, setLogQuery] = useState('')
+  const [logAgentId, setLogAgentId] = useState('')
   const [dark, setDark] = useState(() => {
     try {
       const saved = window.localStorage.getItem('localrouter-theme')
@@ -61,7 +63,7 @@ export default function App() {
   const consoleAccessReady = Boolean(publicStatus.data) && !sessionExpired && (!adminAuthEnabled || adminToken !== null)
   const requestAdminToken = adminToken || ''
 
-  const consoleData = useConsoleData(requestAdminToken, consoleAccessReady, activeSection, logPage)
+  const consoleData = useConsoleData(requestAdminToken, consoleAccessReady, activeSection, logPage, logQuery, logAgentId)
 
   useEffect(() => {
     if (!consoleData.authError) return
@@ -254,7 +256,7 @@ export default function App() {
         )
         break
       case 'logs':
-        content = <LogsPage logs={data.logs} page={logPage} total={data.logTotal} onPageChange={setLogPage} />
+        content = <LogsPage logs={data.logs} agents={data.agentUsage} query={logQuery} agentId={logAgentId} onFilterChange={(query, agentId) => { setLogQuery(query); setLogAgentId(agentId); setLogPage(1) }} page={logPage} total={data.logTotal} onPageChange={setLogPage} />
         break
       default:
         content = (

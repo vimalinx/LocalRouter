@@ -12,6 +12,7 @@ import (
 )
 
 type serviceProposalInput struct {
+	supersedes      string
 	ID              string             `json:"id,omitempty"`
 	Kind            string             `json:"kind"`
 	Reason          string             `json:"reason"`
@@ -28,7 +29,7 @@ func proposalReviewDigest(proposal serviceProposal) string {
 	// Mutable state and execution results never change the reviewed authority.
 	return serviceDigest(struct {
 		Owner                                   int
-		Kind, Reason                            string
+		Kind, Reason, Supersedes                string
 		Bundle                                  *serviceBundle
 		Connection                              *serviceConnection
 		Template                                *serviceTemplate
@@ -37,12 +38,14 @@ func proposalReviewDigest(proposal serviceProposal) string {
 		MaintainerID                            int
 		MaintenanceMode, PackDigest, BaseDigest string
 		Impact                                  *protocolDraftImpact
-	}{proposal.OwnerTokenID, proposal.Kind, proposal.Reason, proposal.Bundle, proposal.Connection, proposal.Template, proposal.GrantTokenID, proposal.GrantExpiresAt, proposal.MaintainerID, proposal.MaintenanceMode, proposal.PackDigest, proposal.BaseDigest, proposal.Impact})
+		GrantPolicy                             *serviceGrantPolicy
+		RetainedBundle                          *serviceBundle
+	}{proposal.OwnerTokenID, proposal.Kind, proposal.Reason, proposal.Supersedes, proposal.Bundle, proposal.Connection, proposal.Template, proposal.GrantTokenID, proposal.GrantExpiresAt, proposal.MaintainerID, proposal.MaintenanceMode, proposal.PackDigest, proposal.BaseDigest, proposal.Impact, proposal.GrantPolicy, proposal.RetainedBundle})
 }
 
 func (hub *serviceWorkspace) prepare(owner localToken, input serviceProposalInput) (serviceProposal, error) {
 	if owner.AgentCode == "localrouter-system" || owner.Name == localTokenName {
-		return serviceProposal{}, errors.New("agent_identity_required: run lr init and use a dedicated registered Agent Token before preparing a proposal")
+		return serviceProposal{}, errors.New("agent_identity_required: run lr identity prepare <agent-code>, obtain human approval and lr identity claim before preparing a new service; an existing independent identity can prepare directly")
 	}
 	if owner.ID <= 0 || len(input.Reason) == 0 || len(input.Reason) > 2000 {
 		return serviceProposal{}, errors.New("a registered identity and a short reason are required")
@@ -79,7 +82,7 @@ func (hub *serviceWorkspace) prepare(owner localToken, input serviceProposalInpu
 		}
 	}
 	now := time.Now().UTC()
-	proposal := serviceProposal{ID: input.ID, OwnerTokenID: owner.ID, AgentCode: owner.AgentCode, Kind: input.Kind, Reason: input.Reason, CreatedAt: now, UpdatedAt: now, State: "preparing", Verification: "contract-only", GrantTokenID: input.GrantTokenID, GrantExpiresAt: input.GrantExpiresAt, MaintainerID: input.MaintainerID, MaintenanceMode: input.MaintenanceMode}
+	proposal := serviceProposal{ID: input.ID, Supersedes: input.supersedes, OwnerTokenID: owner.ID, AgentCode: owner.AgentCode, Kind: input.Kind, Reason: input.Reason, CreatedAt: now, UpdatedAt: now, State: "preparing", Verification: "contract-only", GrantTokenID: input.GrantTokenID, GrantExpiresAt: input.GrantExpiresAt, MaintainerID: input.MaintainerID, MaintenanceMode: input.MaintenanceMode}
 	switch input.Kind {
 	case "bundle":
 		if input.Bundle == nil || input.Connection != nil || input.Template != nil || input.MaintainerID != 0 {
@@ -130,6 +133,9 @@ func (hub *serviceWorkspace) prepare(owner localToken, input serviceProposalInpu
 	default:
 		return proposal, errors.New("kind must be connection, bundle, or template")
 	}
+	if err := hub.prepareGrantPolicy(&proposal); err != nil {
+		return proposal, err
+	}
 	// Reserve ownership before touching the isolated draft. A consumer can only
 	// prepare a new server-named draft, never select or overwrite a human draft.
 	if err := hub.update(func(doc *serviceWorkspaceDocument) error {
@@ -170,6 +176,9 @@ func (hub *serviceWorkspace) prepare(owner localToken, input serviceProposalInpu
 
 func (hub *serviceWorkspace) normalizeConnection(connection *serviceConnection, proposalID string) error {
 	definition := &connection.Definition
+	if !definition.Enabled {
+		return errors.New("connection.definition.enabled must be true; copy the authoring template, not a runtime route projection")
+	}
 	if err := validateServiceSource(connection.SourceURL); err != nil {
 		return err
 	}
@@ -330,6 +339,14 @@ func (hub *serviceWorkspace) decide(id, digest, decision, credential string, act
 	if proposal.State == "applied" {
 		return proposal, nil
 	}
+	if proposal.State == "applying" && decision == "abandon" {
+		if actor > 0 {
+			return proposal, errors.New("only the human operator may abandon an interrupted activation")
+		}
+		err := hub.abandonGrantPolicy(proposal)
+		item, _ := hub.proposal(id, 0)
+		return item, err
+	}
 	if proposal.State != "awaiting_approval" {
 		return proposal, fmt.Errorf("proposal is %s; inspect it before proceeding", proposal.State)
 	}
@@ -357,6 +374,11 @@ func (hub *serviceWorkspace) decide(id, digest, decision, credential string, act
 			return proposal, errors.New("an existing credential binding is preserved; omit credential to reuse it")
 		}
 	}
+	if decision == "approve" {
+		if reason := proposalReviewBlocker(proposal); reason != "" {
+			return proposal, errors.New(reason)
+		}
+	}
 	if proposal.Connection != nil && decision == "approve" {
 		if hub.registry.currentDigest() != proposal.BaseDigest {
 			return proposal, errors.New("stale proposal: live Packs changed; prepare a new proposal")
@@ -368,6 +390,12 @@ func (hub *serviceWorkspace) decide(id, digest, decision, credential string, act
 		}
 	}
 	if decision == "approve" {
+		if proposal.Bundle != nil && proposal.GrantTokenID > 0 && proposal.GrantPolicy == nil {
+			return proposal, errors.New("legacy proposal lacks reviewed effective policy; prepare and review a new proposal")
+		}
+		if proposal.GrantPolicy != nil && identityPolicyDigest(hub.policies, proposal.GrantTokenID) != proposal.GrantPolicy.BaseDigest {
+			return proposal, errors.New("target policy changed since review; prepare a new proposal")
+		}
 		if err := hub.validateApprovalTargets(proposal); err != nil {
 			return proposal, err
 		}
@@ -383,6 +411,9 @@ func (hub *serviceWorkspace) decide(id, digest, decision, credential string, act
 		current := doc.Proposals[id]
 		if current.Digest != digest || current.State != "awaiting_approval" {
 			return errors.New("proposal changed before decision")
+		}
+		if decision == "approve" && current.GrantPolicy != nil && current.GrantPolicy.BaseAuthority != serviceAuthorityDigest(doc) {
+			return errors.New("service grants changed since review; prepare a new proposal")
 		}
 		current.State, current.UpdatedAt = state, time.Now().UTC()
 		current.AuthorityBase = serviceAuthorityDigest(doc)
@@ -474,13 +505,21 @@ func (hub *serviceWorkspace) finishApprovedProposal(id string) error {
 	if !exists || item.State != "applying" {
 		return errors.New("proposal is not applying")
 	}
+	if item.Bundle != nil && item.GrantTokenID > 0 && item.GrantPolicy == nil {
+		return errors.New("legacy proposal lacks reviewed effective policy; abandon it in the human console and prepare a new proposal")
+	}
 	if err := hub.validateApprovalTargets(item); err != nil {
 		return err
 	}
-	return hub.update(func(doc *serviceWorkspaceDocument) error {
+	return hub.commitGrantPolicy(item, func(doc *serviceWorkspaceDocument) error {
 		item := doc.Proposals[id]
 		if item.State != "applying" || item.AuthorityBase != serviceAuthorityDigest(doc) {
 			return errors.New("authority changed since approval; operator inspection required")
+		}
+		if item.RetainedBundle != nil {
+			retained := item.RetainedBundle
+			doc.Bundles[retained.Revision] = *retained
+			doc.Grants[item.GrantTokenID] = append(doc.Grants[item.GrantTokenID], serviceBundleGrant{Revision: retained.Revision, GrantedAt: time.Now().UTC()})
 		}
 		if item.Bundle != nil {
 			doc.Bundles[item.Bundle.Revision] = *item.Bundle

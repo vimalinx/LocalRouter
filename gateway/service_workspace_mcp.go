@@ -9,13 +9,13 @@ import (
 )
 
 func serviceProposalSchema() gin.H {
-	return maintenanceObjectSchema(gin.H{
+	schema := maintenanceObjectSchema(gin.H{
 		"id":     maintenanceString("Optional unique id for this proposal; inspect an existing id instead of replaying preparation"),
 		"kind":   maintenanceEnum("Preparation kind", "connection", "bundle", "template"),
 		"reason": maintenanceString("What the Agent needs and why this authority is appropriate"),
 		"connection": maintenanceObjectSchema(gin.H{
 			"template_id": maintenanceString("Exact template id"), "template_version": maintenanceString("Exact template version"),
-			"definition": gin.H{"type": "object", "description": "Complete Protocol Pack v3 adapted from the template and observed provider documentation; no credential values or locators", "additionalProperties": true},
+			"definition": setupDefinitionSchema(),
 			"guide":      maintenanceString("Observed provider usage and maintenance instructions"), "source_url": maintenanceString("Documentation source, without credentials or query"),
 		}, "template_id", "template_version", "definition"),
 		"bundle": maintenanceObjectSchema(gin.H{
@@ -29,6 +29,8 @@ func serviceProposalSchema() gin.H {
 		"maintainer_token_id": gin.H{"type": "integer", "minimum": 1, "description": "Optional separate maintenance-only Token to receive a compatible repair delegation"},
 		"maintenance_mode":    maintenanceEnum("Requested maintenance authority, requires human approval", "compatible"),
 	}, "kind", "reason")
+	schema["$defs"] = protocolAuthoringSchema()["$defs"]
+	return schema
 }
 
 func serviceSetupTools(maintenance bool) []maintenanceToolDefinition {
@@ -36,6 +38,7 @@ func serviceSetupTools(maintenance bool) []maintenanceToolDefinition {
 		{Name: "localrouter_setup_templates", Description: "Discover versioned service recipes and maintenance guides. Examples are shape-only; no upstream call.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Optional exact template id; requires version"), "version": maintenanceString("Exact template version; requires id"), "full": gin.H{"type": "boolean", "description": "Return all full recipes instead of compact metadata"}}), ReadOnly: true},
 		{Name: "localrouter_setup_prepare", Description: "Prepare an owned service connection, capability bundle or template proposal. Returns exact impact and approval digest; never grants authority or calls a provider.", InputSchema: serviceProposalSchema()},
 		{Name: "localrouter_setup_list", Description: "List this Agent's durable onboarding proposals and their progress.", InputSchema: maintenanceObjectSchema(gin.H{"page": gin.H{"type": "integer", "minimum": 1}, "page_size": gin.H{"type": "integer", "minimum": 1, "maximum": 100}}), ReadOnly: true},
+		{Name: "localrouter_setup_reprepare", Description: "Prepare a replacement review from an owned unapplied proposal. Preserves history; grants no authority and calls no provider.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Original proposal id"), "digest": maintenanceString("Exact original digest"), "enable": gin.H{"type": "boolean", "description": "Explicitly enable the connection in the replacement review"}}, "id", "digest")},
 		{Name: "localrouter_setup_get", Description: "Inspect one owned proposal and its next action.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id")}, "id"), ReadOnly: true},
 		{Name: "localrouter_setup_withdraw", Description: "Withdraw an owned proposal before approval without modifying installed services.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id"), "digest": maintenanceString("Exact proposal digest")}, "id", "digest")},
 		{Name: "localrouter_setup_verify", Description: "Inspect installation and recorded real-response evidence. Does not call the provider or claim business completion from HTTP status.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id")}, "id"), ReadOnly: true},
@@ -89,6 +92,14 @@ func (registry *protocolRegistry) handleServiceSetupTool(c *gin.Context, runtime
 			code = "needs_approval"
 		}
 		payload := gin.H{"success": false, "code": code, "message": err.Error(), "retryable": false, "next_action": "Inspect the owned proposal. Human approval is required for new authority; do not replay an uncertain apply."}
+		if strings.Contains(err.Error(), "agent_identity_required") {
+			payload["code"], payload["next_action"] = "agent_identity_required", setupIdentityAction
+		}
+		if strings.Contains(err.Error(), "unknown field") || strings.Contains(err.Error(), "definition.enabled") {
+			payload["next_action"] = "Read lr setup schema and lr setup schema pack. Use template.example with enabled:true; runtime route fields enabled, operation_key and call_url are not authoring fields."
+		}
+		payload["schema_url"] = "/docs/setup-proposal.schema.json"
+		payload["reason"], payload["alternatives"], payload["retry_after"] = err.Error(), []any{}, nil
 		text, _ := json.Marshal(payload)
 		mcpResult(c, request.ID, gin.H{"isError": true, "structuredContent": payload, "content": []gin.H{{"type": "text", "text": string(text)}}})
 		return true
@@ -99,6 +110,14 @@ func (registry *protocolRegistry) handleServiceSetupTool(c *gin.Context, runtime
 }
 
 func (hub *serviceWorkspace) callSetupTool(owner localToken, name string, raw json.RawMessage, maintenance bool) (any, error) {
+	if name == "localrouter_setup_reprepare" {
+		var input serviceReprepareInput
+		if err := decodeMaintenanceArguments(raw, &input); err != nil {
+			return nil, err
+		}
+		p, err := hub.reprepare(input.ID, input.Digest, owner.ID, input.Enable)
+		return serviceProposalView(p), err
+	}
 	if name == "localrouter_setup_prepare" {
 		var input serviceProposalInput
 		if err := decodeMaintenanceArguments(raw, &input); err != nil {

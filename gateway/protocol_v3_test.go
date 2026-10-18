@@ -704,7 +704,7 @@ func TestProtocolV3GraphWorkflowParallelCallbackCancelAndScheduler(t *testing.T)
 
 	callbackJob := create("callback-flow")
 	require.Equal(t, "wait", callbackJob.CurrentStep)
-	getRequest, _ := http.NewRequest(http.MethodGet, base+"/w/workflowapi/callback-flow/"+callbackJob.ID, nil)
+	getRequest, _ := http.NewRequest(http.MethodPost, base+"/w/workflowapi/callback-flow/"+callbackJob.ID+"/advance", nil)
 	getRequest.Header.Set("Authorization", "Bearer sk-local")
 	getResponse, err := http.DefaultClient.Do(getRequest)
 	require.NoError(t, err)

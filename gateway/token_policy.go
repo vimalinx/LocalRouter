@@ -23,16 +23,20 @@ const (
 )
 
 type localTokenPolicy struct {
-	TokenID           int      `json:"token_id"`
-	Surfaces          []string `json:"surfaces,omitempty"`
-	Packs             []string `json:"packs,omitempty"`
-	Operations        []string `json:"operations,omitempty"`
-	Models            []string `json:"models,omitempty"`
-	Capabilities      []string `json:"capabilities,omitempty"`
-	RequestsPerMinute int      `json:"requests_per_minute,omitempty"`
-	DailyRequestLimit int      `json:"daily_request_limit,omitempty"`
-	MaxInFlight       int      `json:"max_in_flight,omitempty"`
-	ExpiresAt         int64    `json:"expires_at,omitempty"`
+	SetupOnly               bool     `json:"setup_only,omitempty"`
+	DailyBudgetUSDMicros    int64    `json:"daily_budget_usd_micros,omitempty"`
+	MonthlyBudgetUSDMicros  int64    `json:"monthly_budget_usd_micros,omitempty"`
+	RequestReserveUSDMicros int64    `json:"request_reserve_usd_micros,omitempty"`
+	TokenID                 int      `json:"token_id"`
+	Surfaces                []string `json:"surfaces,omitempty"`
+	Packs                   []string `json:"packs,omitempty"`
+	Operations              []string `json:"operations,omitempty"`
+	Models                  []string `json:"models,omitempty"`
+	Capabilities            []string `json:"capabilities,omitempty"`
+	RequestsPerMinute       int      `json:"requests_per_minute,omitempty"`
+	DailyRequestLimit       int      `json:"daily_request_limit,omitempty"`
+	MaxInFlight             int      `json:"max_in_flight,omitempty"`
+	ExpiresAt               int64    `json:"expires_at,omitempty"`
 }
 
 type tokenPolicyDocument struct {
@@ -42,14 +46,17 @@ type tokenPolicyDocument struct {
 }
 
 type tokenPolicyUsage struct {
-	MinuteStart time.Time
-	MinuteCount int
-	DayStart    time.Time
-	DayCount    int
-	InFlight    int `json:"-"`
+	ControlMinute time.Time
+	ControlCount  int
+	MinuteStart   time.Time
+	MinuteCount   int
+	DayStart      time.Time
+	DayCount      int
+	InFlight      int `json:"-"`
 }
 
 type tokenPolicyStore struct {
+	budgets                 *agentBudgetStore
 	allowances              *serviceAllowanceStore
 	workspace               *serviceWorkspace
 	path                    string
@@ -120,6 +127,14 @@ func normalizePolicyValues(values []string) []string {
 }
 
 func validateLocalTokenPolicy(policy *localTokenPolicy) error {
+	for _, amount := range []int64{policy.DailyBudgetUSDMicros, policy.MonthlyBudgetUSDMicros, policy.RequestReserveUSDMicros} {
+		if amount < 0 || amount > maxAllowanceAmount {
+			return errors.New("budget amount must be between 0 and 1000000000000 USD micros")
+		}
+	}
+	if policy.RequestReserveUSDMicros > 0 && ((policy.DailyBudgetUSDMicros > 0 && policy.RequestReserveUSDMicros > policy.DailyBudgetUSDMicros) || (policy.MonthlyBudgetUSDMicros > 0 && policy.RequestReserveUSDMicros > policy.MonthlyBudgetUSDMicros)) {
+		return errors.New("per-request reservation exceeds the Agent budget")
+	}
 	policy.Surfaces = normalizePolicyValues(policy.Surfaces)
 	policy.Packs = normalizePolicyValues(policy.Packs)
 	policy.Operations = normalizePolicyValues(policy.Operations)
@@ -208,6 +223,15 @@ func (store *tokenPolicyStore) policyFor(tokenID int) (localTokenPolicy, bool) {
 // concurrency counters. Agent resolution and preflight use it to avoid
 // recommending an operation the supplied service Token cannot call.
 func (store *tokenPolicyStore) preview(tokenID int, surface, pack, operation, modelName string) (bool, int, string) {
+	return store.previewPolicy(tokenID, surface, pack, operation, modelName, true, false)
+}
+
+// Discovery and stored job observation check authority, not dispatch capacity.
+func (store *tokenPolicyStore) previewScope(tokenID int, surface, pack, operation, modelName string) (bool, int, string) {
+	return store.previewPolicy(tokenID, surface, pack, operation, modelName, false, false)
+}
+
+func (store *tokenPolicyStore) previewPolicy(tokenID int, surface, pack, operation, modelName string, admission, control bool) (bool, int, string) {
 	if store == nil || tokenID <= 0 {
 		return true, 0, ""
 	}
@@ -217,7 +241,7 @@ func (store *tokenPolicyStore) preview(tokenID int, surface, pack, operation, mo
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	policy, exists := store.policies[tokenID]
-	if !exists {
+	if !exists && !control {
 		return true, 0, ""
 	}
 	if policyHasCapability(policy, localRouterMaintainCapability) {
@@ -239,8 +263,20 @@ func (store *tokenPolicyStore) preview(tokenID int, surface, pack, operation, mo
 	if modelName != "" && !containsPolicyValue(policy.Models, modelName) {
 		return false, http.StatusForbidden, "token policy does not allow this model"
 	}
+	if policy.SetupOnly {
+		return false, http.StatusForbidden, "setup-only identity cannot call services"
+	}
 	usage := store.usage[tokenID]
-	if usage == nil {
+	if !admission || usage == nil {
+		return true, 0, ""
+	}
+	if control {
+		if usage.ControlMinute.Equal(now.Truncate(time.Minute)) && usage.ControlCount >= 120 {
+			return false, http.StatusTooManyRequests, "token control request limit exceeded"
+		}
+		if policy.MaxInFlight > 0 && usage.InFlight >= policy.MaxInFlight {
+			return false, http.StatusTooManyRequests, "token concurrency limit exceeded"
+		}
 		return true, 0, ""
 	}
 	minuteCount := usage.MinuteCount
@@ -373,6 +409,12 @@ func containsPolicyValue(values []string, value string) bool {
 }
 
 func (store *tokenPolicyStore) begin(tokenID int, surface, pack, operation, modelName string) (func(), int, string) {
+	return store.beginClass(tokenID, surface, pack, operation, modelName, false)
+}
+
+// Only server-classified catalogue reads and existing-job recovery use this
+// bounded lane. They retain scope, expiry, concurrency and monetary controls.
+func (store *tokenPolicyStore) beginClass(tokenID int, surface, pack, operation, modelName string, control bool) (func(), int, string) {
 	if store != nil && !store.workspace.bundleAllows(tokenID, surface, pack, operation) {
 		return nil, http.StatusForbidden, "capability bundle does not grant this service operation"
 	}
@@ -381,9 +423,13 @@ func (store *tokenPolicyStore) begin(tokenID int, surface, pack, operation, mode
 	}
 	store.mu.Lock()
 	policy, exists := store.policies[tokenID]
-	if !exists {
+	if !exists && !control {
 		store.mu.Unlock()
 		return func() {}, 0, ""
+	}
+	if policy.SetupOnly {
+		store.mu.Unlock()
+		return nil, http.StatusForbidden, "setup-only identity cannot call services"
 	}
 	if policyHasCapability(policy, localRouterMaintainCapability) {
 		store.mu.Unlock()
@@ -423,11 +469,11 @@ func (store *tokenPolicyStore) begin(tokenID int, surface, pack, operation, mode
 	if !usage.DayStart.Equal(day) {
 		usage.DayStart, usage.DayCount = day, 0
 	}
-	if policy.RequestsPerMinute > 0 && usage.MinuteCount >= policy.RequestsPerMinute {
+	if !control && policy.RequestsPerMinute > 0 && usage.MinuteCount >= policy.RequestsPerMinute {
 		store.mu.Unlock()
 		return nil, http.StatusTooManyRequests, "token minute request limit exceeded"
 	}
-	if policy.DailyRequestLimit > 0 && usage.DayCount >= policy.DailyRequestLimit {
+	if !control && policy.DailyRequestLimit > 0 && usage.DayCount >= policy.DailyRequestLimit {
 		store.mu.Unlock()
 		return nil, http.StatusTooManyRequests, "token daily request limit exceeded"
 	}
@@ -435,13 +481,28 @@ func (store *tokenPolicyStore) begin(tokenID int, surface, pack, operation, mode
 		store.mu.Unlock()
 		return nil, http.StatusTooManyRequests, "token concurrency limit exceeded"
 	}
-	usage.MinuteCount++
-	usage.DayCount++
+	if control {
+		if !usage.ControlMinute.Equal(minute) {
+			usage.ControlMinute, usage.ControlCount = minute, 0
+		}
+		if usage.ControlCount >= 120 {
+			store.mu.Unlock()
+			return nil, http.StatusTooManyRequests, "token control request limit exceeded"
+		}
+		usage.ControlCount++
+	} else {
+		usage.MinuteCount++
+		usage.DayCount++
+	}
 	usage.InFlight++
-	if policy.DailyRequestLimit > 0 || policy.RequestsPerMinute > 0 {
+	if control || policy.DailyRequestLimit > 0 || policy.RequestsPerMinute > 0 {
 		if err := store.saveUsageLocked(); err != nil {
-			usage.MinuteCount--
-			usage.DayCount--
+			if control {
+				usage.ControlCount--
+			} else {
+				usage.MinuteCount--
+				usage.DayCount--
+			}
 			usage.InFlight--
 			store.mu.Unlock()
 			return nil, http.StatusServiceUnavailable, "cannot persist token usage; request was not admitted"
@@ -467,7 +528,7 @@ func abortTokenPolicy(c *gin.Context, status int, message string) {
 }
 
 func (store *tokenPolicyStore) authorizeRequest(c *gin.Context, surface, pack, operation, modelName string) (func(), bool) {
-	release, status, message := store.begin(c.GetInt(tokenPolicyContextID), surface, pack, operation, modelName)
+	release, status, message := store.beginClass(c.GetInt(tokenPolicyContextID), surface, pack, operation, modelName, c.GetBool("localrouter_control_call"))
 	if status != 0 {
 		abortTokenPolicy(c, status, message)
 		return nil, false
@@ -475,7 +536,7 @@ func (store *tokenPolicyStore) authorizeRequest(c *gin.Context, surface, pack, o
 	return release, true
 }
 
-func (store *tokenPolicyStore) middleware(surface string) gin.HandlerFunc {
+func (store *tokenPolicyStore) middleware(surface string, profiles ...*localChannelProfileRegistry) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenID := c.GetInt("token_id")
 		c.Set(tokenPolicyContextID, tokenID)
@@ -489,7 +550,17 @@ func (store *tokenPolicyStore) middleware(surface string) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "model is required"}})
 			return
 		}
-		release, status, message := store.begin(tokenID, surface, "", "", modelName)
+		pack, operation := "", ""
+		if len(profiles) > 0 && profiles[0] != nil {
+			var ok bool
+			pack, operation, ok = profiles[0].requestCapability(c.Request.Method, c.Request.URL.Path)
+			if !ok {
+				abortTokenPolicy(c, http.StatusForbidden, "compatibility operation is not published")
+				return
+			}
+		}
+		control := c.Request.Method == http.MethodGet && (strings.HasPrefix(c.Request.URL.Path, "/v1/models") || strings.HasPrefix(c.Request.URL.Path, "/v1beta/models"))
+		release, status, message := store.beginClass(tokenID, surface, pack, operation, modelName, control)
 		if status != 0 {
 			abortTokenPolicy(c, status, message)
 			return

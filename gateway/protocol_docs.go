@@ -281,7 +281,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"service_templates": "/agent/service-templates", "onboarding": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 				"catalog": "/agent/operations", "resolve": "/agent/resolve", "describe": "/agent/operations/{pack}/{operation}",
 				"compare": "/agent/compare", "preflight": "/agent/preflight", "whoami": "/agent/whoami",
-				"identity_enrollment": gin.H{"available": scope == loopbackScope, "scope": loopbackScope, "request": "/agent/identity-requests", "approval": "human-console", "claim": "private proof, no Service Token required"},
+				"identity_enrollment": gin.H{"available": scope == loopbackScope, "scope": loopbackScope, "request": "/agent/identity-requests", "approval": "human-console", "claim": "private proof, no Service Token required", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "schema": "/docs/identity-request.schema.json"},
 				"access_requests":     "/agent/access-requests",
 				"workflow":            "/w/{pack}/{workflow}", "docs": "/docs/agent.json", "getting_started": "/docs/agent-start.md", "start_command": "lr init",
 				"selection_mode": "agent", "merged": false,
@@ -315,6 +315,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 			},
 			"documentation": gin.H{
 				"html": "/docs", "index": "/docs/index.json", "openapi": "/docs/openapi.json",
+				"pack_schema": "/docs/protocol-pack-v3.schema.json", "setup_schema": "/docs/setup-proposal.schema.json", "identity_schema": "/docs/identity-request.schema.json",
 				"agent": "/docs/agent.json", "pool_catalog": "/docs/pools/index.json", "pool_guide": "/docs/pools/catalog.md", "mcp": "/mcp",
 			},
 			"maintenance":         maintenance,
@@ -405,6 +406,7 @@ func (registry *protocolRegistry) openAPIDocument() gin.H {
 			createPath := view.WorkflowMount + "/" + workflow.ID
 			jobPath := createPath + "/{job}"
 			paths[createPath] = map[string]any{
+				"get": gin.H{"operationId": view.ID + ".workflow." + workflow.ID + ".list", "summary": "List stored jobs without upstream calls", "security": []gin.H{{"LocalRouterBearer": []string{}}}, "responses": gin.H{"200": gin.H{"description": "Owned workflow jobs"}}},
 				"post": gin.H{
 					"operationId": view.ID + ".workflow." + workflow.ID + ".create",
 					"summary":     "Start " + workflow.Name, "tags": []string{view.ID},
@@ -416,7 +418,7 @@ func (registry *protocolRegistry) openAPIDocument() gin.H {
 			jobOperations := map[string]any{
 				"get": gin.H{
 					"operationId": view.ID + ".workflow." + workflow.ID + ".get",
-					"summary":     "Poll " + workflow.Name, "tags": []string{view.ID},
+					"summary":     "Read stored state of " + workflow.Name, "tags": []string{view.ID},
 					"security":  []gin.H{{"LocalRouterBearer": []string{}}},
 					"responses": gin.H{"200": gin.H{"description": "Local workflow job state"}},
 				},
@@ -430,6 +432,12 @@ func (registry *protocolRegistry) openAPIDocument() gin.H {
 				}
 			}
 			paths[jobPath] = jobOperations
+			paths[jobPath+"/advance"] = gin.H{"post": gin.H{
+				"operationId": view.ID + ".workflow." + workflow.ID + ".advance",
+				"summary":     "Advance the existing job once; may call upstream",
+				"security":    []gin.H{{"LocalRouterBearer": []string{}}},
+				"responses":   gin.H{"200": gin.H{"description": "Updated workflow job state; outcome_unknown must be reconciled without replay"}},
+			}}
 		}
 	}
 	return gin.H{

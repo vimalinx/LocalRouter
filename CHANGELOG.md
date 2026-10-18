@@ -4,6 +4,35 @@ All notable LocalRouter changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once a stable `1.0.0` contract is
 published.
 
+## Unreleased
+
+- Complete new-service enrollment discovery and structured recovery errors; publish live enrollment and Pack authoring schemas, credential-free examples, and exact-digest proposal repreparation with preserved history and fresh approval.
+- Contract schema 15 adds setup-only identities (`lr identity prepare`) that can
+  prepare proposals but never call services, and reports `setup_only`,
+  `service_access` and `maintenance_access` from `/agent/whoami`.
+
+- Added setup-only enrollment, reviewed dependency closure, and exact workflow
+  and compatibility selectors enforced by the actual service routes.
+- Made connection grants review and activate the complete Token policy while
+  retaining prior permissions. Stale policies cannot overwrite concurrent edits;
+  interrupted activation blocks calls until reconciliation completes.
+- Separated bounded discovery and existing-job recovery from business request
+  counts, and aligned budget preflight failures with human recovery guidance.
+- Persisted workflow creation intent before dispatch, propagated unknown outcomes
+  through parallel/graph execution, and stopped CLI watches on unknown outcomes.
+- Contract schema 14 makes workflow GET observational; use POST /advance to
+  progress a job. Updated CLI workflows retain a private single-dispatch receipt.
+
+- Added independent daily/monthly USD budgets per Agent, atomic pre-dispatch
+  reservations, durable settlement, and operator reconciliation of unknown or
+  over-reservation charges. Variable prices require an explicit reservation;
+  this estimate is not a provider-enforced maximum charge.
+- Retained revoked Agent identities, usage and costs in a durable billing ledger,
+  importing retained history once and preserving it across diagnostic rotation.
+- Added per-Agent billing details and server-side Agent/name/model/channel log
+  filtering with pagination, including revoked identities.
+- Included monetary budget checks in Agent preflight (introduced in schema 13).
+
 ## 0.3.0 - 2026-09-22
 
 - Updated the Vitest development dependency to 4.1.11 to address

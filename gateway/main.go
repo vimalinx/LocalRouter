@@ -70,6 +70,7 @@ type runtimeConfig struct {
 
 type localRuntime struct {
 	workflowContext context.Context
+	callRecovery    bool
 	callOwner       int
 	callTraceID     string
 	callParentID    string
@@ -556,6 +557,10 @@ func initializeRuntime(config runtimeConfig) (localRuntime, error) {
 		balancer: newLocalRelayBalancer(), protocols: protocols, policies: policies, events: events, channelProfiles: channelProfiles,
 		updates: newUpdateChecker(config.UpdateCheckEnabled, buildVersion, nil, ""),
 	}
+	policies.budgets, err = initializeAgentBudgets(runtime)
+	if err != nil {
+		return localRuntime{}, fmt.Errorf("initialize Agent billing: %w", err)
+	}
 	workspace, err := newServiceWorkspace(runtime)
 	if err != nil {
 		return localRuntime{}, fmt.Errorf("load service workspace: %w", err)
@@ -865,6 +870,8 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 		admin.POST("/update/check", handleUpdateCheck(runtime))
 		admin.GET("/analytics", localAnalyticsHandler(runtime))
 		admin.GET("/agent-usage", localAgentUsageHandler(runtime))
+		admin.GET("/agent-billing/:id", handleAgentBilling(runtime))
+		admin.POST("/agent-billing/:id/:receipt/reconcile", humanAllowanceAccess, handleAgentBillingReconcile(runtime))
 		admin.PUT("/admin-auth", handleAdminAuthChange(runtime))
 		admin.PUT("/admin-token", handleAdminTokenChange(runtime))
 		admin.GET("/providers", listProviders(runtime))

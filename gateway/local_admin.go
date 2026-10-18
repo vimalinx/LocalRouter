@@ -517,7 +517,21 @@ func handleUpdateTokenKey(runtime localRuntime) gin.HandlerFunc {
 func handleListLogs(runtime localRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		page, pageSize := parsePage(c.Request.URL.Query(), 50)
-		items, total, err := runtime.store.listLogs(runtime.rootUser.ID, page, pageSize)
+		tokenID := 0
+		if raw := c.Query("token_id"); raw != "" {
+			var err error
+			tokenID, err = strconv.Atoi(raw)
+			if err != nil || tokenID <= 0 {
+				localFailure(c, http.StatusBadRequest, "invalid token id")
+				return
+			}
+		}
+		query := strings.TrimSpace(c.Query("q"))
+		if len(query) > 256 {
+			localFailure(c, http.StatusBadRequest, "query exceeds 256 bytes")
+			return
+		}
+		items, total, err := runtime.store.filteredLogs(runtime.rootUser.ID, page, pageSize, tokenID, query)
 		if err != nil {
 			localFailure(c, http.StatusInternalServerError, "cannot list request logs")
 			return

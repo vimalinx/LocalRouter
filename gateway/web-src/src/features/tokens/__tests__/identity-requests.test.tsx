@@ -36,3 +36,13 @@ it('keeps a stale approval visible with an actionable error and refresh control'
   expect(screen.getByText('search.find')).toBeVisible()
   expect(screen.getByRole('button', { name: '刷新申请' })).toBeEnabled()
 })
+it('makes setup-only enrollment visibly deny service calls', async () => {
+ vi.mocked(adminRequest).mockResolvedValue([{ ...request, policy: { setup_only: true } }])
+ render(<IdentityRequests adminToken='' onChanged={vi.fn()} />)
+ expect(await screen.findByText('仅准备身份')).toBeVisible()
+ expect(screen.getByText('无服务调用权；只能准备接入方案，另行审批后才可调用')).toBeVisible()
+ expect(screen.getByText('禁止服务调用')).toBeVisible()
+ expect(screen.getByText('不可调用模型')).toBeVisible()
+ expect(screen.getByText('不可调用，不分配业务请求额度')).toBeVisible()
+ expect(vi.mocked(adminRequest).mock.calls.some((call) => call[2]?.method === 'POST')).toBe(false)
+})

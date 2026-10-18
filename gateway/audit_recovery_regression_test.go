@@ -97,12 +97,12 @@ func TestRecoverySlowWorkflowDoesNotBlockOtherPackCancel(t *testing.T) {
 	b := protocolWorkflowJob{ID: "b", ProtocolID: defB.ID, WorkflowID: "flow", State: "waiting_callback", CurrentStep: "wait", MaxAttempts: 10, WaitingCallback: true, OwnerTokenID: 7}
 	require.NoError(t, registry.saveWorkflowState(defA.ID, protocolWorkflowState{Jobs: map[string]protocolWorkflowJob{"a": a}}))
 	require.NoError(t, registry.saveWorkflowState(defB.ID, protocolWorkflowState{Jobs: map[string]protocolWorkflowJob{"b": b}}))
-	ca, _ := recoveryContext("GET", "a")
+	ca, _ := recoveryContext("POST", "a")
 	cb, _ := recoveryContext("DELETE", "b")
 	aDone := make(chan struct{})
 	bStarted := make(chan struct{})
 	bDone := make(chan struct{})
-	go func() { registry.handleGraphWorkflowGet(ca, rt, defA, wfA); close(aDone) }()
+	go func() { registry.serveStoredWorkflow(ca, rt, defA, wfA, "advance"); close(aDone) }()
 	select {
 	case <-entered:
 	case <-time.After(3 * time.Second):
@@ -159,9 +159,9 @@ func TestRecoveryCancelInterruptsActiveJobAndPreservesSibling(t *testing.T) {
 	b.State = "waiting_callback"
 	b.WaitingCallback = true
 	require.NoError(t, registry.saveWorkflowState(def.ID, protocolWorkflowState{Jobs: map[string]protocolWorkflowJob{"a": a, "b": b}}))
-	ca, _ := recoveryContext("GET", "a")
+	ca, _ := recoveryContext("POST", "a")
 	done := make(chan struct{})
-	go func() { registry.handleGraphWorkflowGet(ca, rt, def, wf); close(done) }()
+	go func() { registry.serveStoredWorkflow(ca, rt, def, wf, "advance"); close(done) }()
 	select {
 	case <-entered:
 	case <-time.After(3 * time.Second):

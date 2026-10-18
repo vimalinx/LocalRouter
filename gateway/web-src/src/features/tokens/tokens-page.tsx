@@ -2,6 +2,7 @@ import { Bot, ChevronRight, Copy, Eye, EyeOff, KeyRound, Plus, RefreshCw, Save, 
 import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 
+import { AgentBillingDialog, BudgetSummary, usdInputMicros } from './agent-billing'
 import { IdentityRequests } from './identity-requests'
 import { EmptyState } from '@/components/empty-state'
 import { SectionHeader } from '@/components/section-header'
@@ -23,13 +24,16 @@ type AgentDraft = {
   runtime: string
   requestsPerMinute: string
   dailyRequestLimit: string
+  dailyBudget: string
+  monthlyBudget: string
+  requestReserve: string
   maxInFlight: string
   maintainer: boolean
 }
 
 const emptyDraft: AgentDraft = {
   tokenName: '', agentCode: '', agentName: '', workspace: '', runtime: 'codex',
-  requestsPerMinute: '', dailyRequestLimit: '', maxInFlight: '', maintainer: false,
+  requestsPerMinute: '', dailyRequestLimit: '', maxInFlight: '', maintainer: false, dailyBudget: '', monthlyBudget: '', requestReserve: '',
 }
 
 const compactNumber = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 })
@@ -70,6 +74,7 @@ export function TokensPage(props: {
   lanListen?: string
   onChanged: () => Promise<LocalToken[]>
 }) {
+  const [billingTarget, setBillingTarget] = useState<{ id: number; name: string } | null>(null)
   const [visibleTokens, setVisibleTokens] = useState<Record<number, string>>({})
   const [loadingId, setLoadingId] = useState<number | null>(null)
   const [issueOpen, setIssueOpen] = useState(false)
@@ -197,6 +202,9 @@ export function TokensPage(props: {
             requests_per_minute: integerValue(draft.requestsPerMinute),
             daily_request_limit: integerValue(draft.dailyRequestLimit),
             max_in_flight: integerValue(draft.maxInFlight),
+            daily_budget_usd_micros: usdInputMicros(draft.dailyBudget),
+            monthly_budget_usd_micros: usdInputMicros(draft.monthlyBudget),
+            request_reserve_usd_micros: usdInputMicros(draft.requestReserve),
           }),
         })
         const fullToken = await readTokenKey(created)
@@ -272,6 +280,9 @@ export function TokensPage(props: {
       requestsPerMinute: policy?.requests_per_minute?.toString() || '',
       dailyRequestLimit: policy?.daily_request_limit?.toString() || '',
       maxInFlight: policy?.max_in_flight?.toString() || '',
+      dailyBudget: policy?.daily_budget_usd_micros ? String(policy.daily_budget_usd_micros / 1_000_000) : '',
+      monthlyBudget: policy?.monthly_budget_usd_micros ? String(policy.monthly_budget_usd_micros / 1_000_000) : '',
+      requestReserve: policy?.request_reserve_usd_micros ? String(policy.request_reserve_usd_micros / 1_000_000) : '',
       maintainer: policy?.capabilities?.includes('localrouter.maintain') || false,
     })
     setPolicyTarget(token)
@@ -300,6 +311,9 @@ export function TokensPage(props: {
           requests_per_minute: integerValue(draft.requestsPerMinute),
           daily_request_limit: integerValue(draft.dailyRequestLimit),
           max_in_flight: integerValue(draft.maxInFlight),
+            daily_budget_usd_micros: usdInputMicros(draft.dailyBudget),
+            monthly_budget_usd_micros: usdInputMicros(draft.monthlyBudget),
+            request_reserve_usd_micros: usdInputMicros(draft.requestReserve),
         }),
       })
       setPolicyTarget(null)
@@ -378,9 +392,10 @@ export function TokensPage(props: {
                     <span className='text-muted-foreground'>额度</span><span className='text-right tabular-nums'>{quotaLabel(usage)}</span>
                     <span className='text-muted-foreground'>成本</span><span className='text-right tabular-nums'>{costLabel(usage)}</span>
                     <span className='text-muted-foreground'>最后使用</span><span className='text-right'>{formatTimestamp(usage?.last_used_at || token.accessed_time || undefined)}</span>
-                    <span className='text-muted-foreground'>Token</span><code className='truncate text-right'>{visible || token.key || '已遮罩'}</code>
+                    <span className='text-muted-foreground'>Token</span><code className='truncate text-right'>{visible || token.key || '已遮罩'}</code><div className='col-span-2 mt-1'><BudgetSummary budget={usage?.budget} /></div>
                   </div>
                   <div className='flex flex-wrap gap-1 xl:justify-end'>
+                    <Button variant='outline' size='sm' onClick={() => setBillingTarget({ id: token.id, name: token.agent_name || token.name })} aria-label={`消费明细 ${token.name}`}>消费明细</Button>
                     {!system && registered && !maintainer ? <Button variant='outline' size='sm' disabled={loadingId === token.id} onClick={() => copyConnection(token)}><Copy aria-hidden='true' />{loadingId === token.id ? '读取中' : '快速接入'}</Button> : null}
                     <Button variant='ghost' size='icon' aria-label={`${visible ? '隐藏' : '显示'}令牌 ${token.name}`} disabled={loadingId === token.id} onClick={() => revealToken(token)}>{visible ? <EyeOff aria-hidden='true' /> : <Eye aria-hidden='true' />}</Button>
                     <Button variant='ghost' size='icon' aria-label={`复制令牌 ${token.name}`} disabled={loadingId === token.id} onClick={() => copyToken(token)}><KeyRound aria-hidden='true' /></Button>
@@ -393,6 +408,15 @@ export function TokensPage(props: {
           </div>
         ) : <EmptyState icon={Bot} title='暂无独立 Token' description='可以直接使用上方默认 Token，或点击「创建 Token」为不同应用分别管理访问。' />}
       </section>
+
+      {props.usage.some(item => item.revoked) ? <section aria-label='已撤销 Agent 的历史用量' className='space-y-3 border-y py-4'>
+        <h2 className='text-sm font-semibold'>已撤销 Agent · 历史用量</h2>
+        {props.usage.filter(item => item.revoked).map(item => <article key={item.token_id} className='flex flex-wrap items-center justify-between gap-3 border-b py-3 text-sm'>
+          <div><p>{item.agent_name || item.token_name} <Badge variant='secondary'>已撤销</Badge></p><p className='text-xs text-muted-foreground'>{item.agent_code} · {item.requests} 次调用 · {(item.prompt_tokens + item.completion_tokens).toLocaleString('zh-CN')} Token · {costLabel(item)}</p><BudgetSummary budget={item.budget} /></div>
+          <Button variant='outline' size='sm' onClick={() => setBillingTarget({ id: item.token_id, name: item.agent_name || item.token_name })} aria-label={`消费明细 ${item.token_name}`}>消费明细</Button>
+        </article>)}
+      </section> : null}
+      {billingTarget ? <AgentBillingDialog key={billingTarget.id} agent={billingTarget} adminToken={props.adminToken} onClose={() => setBillingTarget(null)} onChanged={props.onChanged} /> : null}
 
       <IdentityRequests adminToken={props.adminToken} onChanged={props.onChanged} />
 
@@ -422,14 +446,14 @@ export function TokensPage(props: {
 
       <Dialog open={Boolean(policyTarget)} onOpenChange={(open) => { if (!open) { setPolicyTarget(null); setDraft(emptyDraft) } }}>
         <DialogContent className='sm:max-w-2xl'>
-          <DialogHeader><DialogTitle>Agent 与额度 · {policyTarget?.agent_name || policyTarget?.name}</DialogTitle><DialogDescription>修改注册资料、每日请求上限、每分钟速率和并发上限。</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Agent 与额度 · {policyTarget?.agent_name || policyTarget?.name}</DialogTitle><DialogDescription>修改注册资料、请求限额和独立的每日 / 每月金额预算。</DialogDescription></DialogHeader>
           <AgentForm id='agent-policy-form' draft={draft} onChange={setDraft} onSubmit={savePolicy} system={policyTarget?.name === 'LocalRouter default'} />
           <DialogFooter><Button variant='outline' type='button' onClick={() => setPolicyTarget(null)}>取消</Button><Button form='agent-policy-form' type='submit' disabled={savingPolicy}><ShieldCheck aria-hidden='true' />保存</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={Boolean(revokeTarget)} onOpenChange={(open) => !open && setRevokeTarget(null)}>
-        <DialogContent><DialogHeader><DialogTitle>撤销 Agent Token？</DialogTitle><DialogDescription>“{revokeTarget?.agent_name || revokeTarget?.name}”将立即无法访问模型与 Protocol Pack；删除前的请求日志不会清除。</DialogDescription></DialogHeader><DialogFooter><Button variant='outline' onClick={() => setRevokeTarget(null)}>取消</Button><Button variant='destructive' onClick={revokeToken}><Trash2 aria-hidden='true' />确认撤销</Button></DialogFooter></DialogContent>
+        <DialogContent><DialogHeader><DialogTitle>撤销 Agent Token？</DialogTitle><DialogDescription>“{revokeTarget?.agent_name || revokeTarget?.name}”将立即无法访问模型与 Protocol Pack；历史用量、费用和消费明细会继续保留。</DialogDescription></DialogHeader><DialogFooter><Button variant='outline' onClick={() => setRevokeTarget(null)}>取消</Button><Button variant='destructive' onClick={revokeToken}><Trash2 aria-hidden='true' />确认撤销</Button></DialogFooter></DialogContent>
       </Dialog>
     </div>
   )
@@ -455,6 +479,10 @@ function AgentForm(props: {
       <div className='grid gap-1.5'><Label htmlFor={`${props.id}-rpm`}>每分钟请求</Label><Input id={`${props.id}-rpm`} type='number' min='0' max='100000' inputMode='numeric' value={props.draft.requestsPerMinute} onChange={(event) => update('requestsPerMinute', event.target.value)} placeholder='不限' /></div>
       <div className='grid gap-1.5'><Label htmlFor={`${props.id}-daily`}>每日请求</Label><Input id={`${props.id}-daily`} type='number' min='0' max='10000000' inputMode='numeric' value={props.draft.dailyRequestLimit} onChange={(event) => update('dailyRequestLimit', event.target.value)} placeholder='不限' /></div>
       <div className='grid gap-1.5'><Label htmlFor={`${props.id}-concurrency`}>最大并发</Label><Input id={`${props.id}-concurrency`} type='number' min='0' max='10000' inputMode='numeric' value={props.draft.maxInFlight} onChange={(event) => update('maxInFlight', event.target.value)} placeholder='不限' /></div>
+      <div className='grid gap-1.5'><Label htmlFor={`${props.id}-daily-budget`}>每日预算（USD）</Label><Input id={`${props.id}-daily-budget`} type='number' min='0' max='1000000' step='0.000001' value={props.draft.dailyBudget} onChange={event => update('dailyBudget', event.target.value)} placeholder='不限' /></div>
+      <div className='grid gap-1.5'><Label htmlFor={`${props.id}-monthly-budget`}>每月预算（USD）</Label><Input id={`${props.id}-monthly-budget`} type='number' min='0' max='1000000' step='0.000001' value={props.draft.monthlyBudget} onChange={event => update('monthlyBudget', event.target.value)} placeholder='不限' /></div>
+      <div className='grid gap-1.5'><Label htmlFor={`${props.id}-reserve`}>单次预留（USD）</Label><Input id={`${props.id}-reserve`} type='number' min='0' max='1000000' step='0.000001' value={props.draft.requestReserve} onChange={event => update('requestReserve', event.target.value)} placeholder='可变价格调用需要设置' /></div>
+      <p className='text-xs leading-5 text-muted-foreground sm:col-span-2'>金额预算留空或 0 表示关闭，按 UTC 日 / 月统计。发起调用前先预留，收到可靠费用后结算；费用未知会保留占用。单次预留是你设置的费用估计，不是上游收费上限；实际费用超出预留时会暂停新请求并要求核对。</p>
       <label className='flex min-h-10 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm'><input className='size-4 accent-primary' type='checkbox' checked={props.draft.maintainer} disabled={props.system} onChange={(event) => update('maintainer', event.target.checked)} /><span>维护专用 Token</span></label>
     </form>
   )

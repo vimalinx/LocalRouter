@@ -118,6 +118,7 @@ func TestIdentityEnrollmentExpiryAndFailedPersistenceStayUnapproved(t *testing.T
 	_, registry := agentAPIFixture(t)
 	rt.protocols = registry
 	request := identityRequest{ID: "identity-fixture", AgentCode: "fixture-pending", AgentName: "Fixture", Workspace: "/fixture", Runtime: "fixture", Policy: localTokenPolicy{Packs: []string{"readysearch"}, Operations: []string{"readysearch.search"}}, State: "pending", CreatedAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Hour).Unix(), Digest: "fixture-digest"}
+	require.NoError(t, validateIdentityRequest(rt, &request))
 	data, err := json.Marshal(request)
 	require.NoError(t, err)
 	_, err = rt.store.db.Exec(`INSERT INTO identity_requests (id,claim_hash,document,state,created_at,expires_at) VALUES (?,?,?,'pending',?,?)`, request.ID, "fixture", string(data), request.CreatedAt, request.ExpiresAt)

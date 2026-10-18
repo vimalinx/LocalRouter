@@ -959,6 +959,7 @@ func registerProtocolRoutes(engine *gin.Engine, runtime localRuntime) {
 }
 
 func registerProtocolDocumentationRoutes(engine *gin.Engine, runtime localRuntime) {
+	registerAuthoringSchemaRoutes(engine)
 	engine.GET("/.well-known/localrouter.json", runtime.protocols.handleDiscovery(runtime))
 	engine.GET("/doc", func(c *gin.Context) { c.Redirect(http.StatusPermanentRedirect, "/docs") })
 	engine.GET("/docs", runtime.protocols.handleDocsHTML)
@@ -999,6 +1000,7 @@ func registerProtocolConsumerRoutes(engine *gin.Engine, runtime localRuntime) {
 	workflow.POST("/:protocol/:workflow", runtime.protocols.handleWorkflowCreate(runtime))
 	workflow.GET("/:protocol/:workflow", runtime.protocols.handleWorkflowList)
 	workflow.GET("/:protocol/:workflow/:job", runtime.protocols.handleWorkflowGet(runtime))
+	workflow.POST("/:protocol/:workflow/:job/advance", runtime.protocols.handleWorkflowAdvance(runtime))
 	workflow.DELETE("/:protocol/:workflow/:job", runtime.protocols.handleWorkflowCancel(runtime))
 	engine.POST("/w/callback/:protocol/:workflow/:job/:token", runtime.protocols.handleGraphWorkflowCallback(runtime))
 	proxy := engine.Group("/p")
@@ -1164,6 +1166,9 @@ func (registry *protocolRegistry) handleProxy(c *gin.Context) {
 		return
 	}
 	if registry.policies != nil {
+		if protocolAllowanceExempt(definition, matched.Route.OperationID) {
+			c.Set("localrouter_control_call", true)
+		}
 		release, allowed := registry.policies.authorizeRequest(c, servicePolicySurface(c), definition.ID, matched.Route.OperationID, "")
 		if !allowed {
 			return
@@ -1518,6 +1523,7 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 	capture := &limitedCaptureWriter{limit: 2 << 20}
 	streamUsage := &streamUsageCollector{}
 	observe := func() {
+		c.Set("localrouter_stream_terminal", streamUsage.terminal)
 		observeProtocolUsage(c, response.Header.Get("Content-Type"), capture.Bytes())
 		observeServiceUnits(c, route, capture.Bytes(), "response")
 		if usage := streamUsage.result(); usage.hasTokens() || usage.ReportedCostUSD != nil {
@@ -1531,6 +1537,7 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 			_, _ = capture.Write(buffer[:count])
 			_, _ = streamUsage.Write(buffer[:count])
 			if _, writeErr := c.Writer.Write(buffer[:count]); writeErr != nil {
+				c.Set("localrouter_budget_incomplete", true)
 				if trace := serviceTraceContext(c); trace != nil {
 					trace.Outcome = "client_disconnected"
 				}
@@ -1543,6 +1550,7 @@ func (registry *protocolRegistry) writeProtocolResponse(c *gin.Context, definiti
 		}
 		if readErr != nil {
 			if readErr != io.EOF {
+				c.Set("localrouter_budget_incomplete", true)
 				if trace := serviceTraceContext(c); trace != nil {
 					trace.Outcome = "response_incomplete"
 				}

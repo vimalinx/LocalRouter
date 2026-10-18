@@ -13,6 +13,7 @@ import (
 )
 
 var errWorkflowNotFound = errors.New("workflow job not found")
+var errWorkflowOutcomeUnknown = errors.New("upstream outcome is unknown; reconcile the existing job before further execution")
 
 type workflowExecution struct {
 	cancel context.CancelFunc
@@ -81,10 +82,16 @@ func (registry *protocolRegistry) runStoredWorkflow(ctx context.Context, runtime
 			if !exists || job.WorkflowID != workflow.ID || (owner >= 0 && job.OwnerTokenID != 0 && job.OwnerTokenID != owner) {
 				return false, errWorkflowNotFound
 			}
+			if mode == "observe" {
+				return false, nil
+			}
 			if registry.workflowRunning == nil {
 				registry.workflowRunning = make(map[string]*workflowExecution)
 			}
 			if mode == "cancel" {
+				if len(workflow.Steps) == 0 && job.ResourceID == "" {
+					return false, errors.New("reconcile the resource id before cancellation")
+				}
 				if job.State == "succeeded" || job.State == "cancelled" {
 					return false, nil
 				}
@@ -150,6 +157,9 @@ func (registry *protocolRegistry) runStoredWorkflow(ctx context.Context, runtime
 	defer registry.finishWorkflowExecution(key, execution)
 	runtime.callOwner, runtime.callTraceID, runtime.callParentID, runtime.callTaskID = job.OwnerTokenID, job.TraceID, job.ParentSpanID, job.TaskID
 	runtime.callSurface = "w"
+	// Only polling status/cancel operations are recovery calls. Graph steps
+	// can create further resources and continue to consume business quota.
+	runtime.callRecovery = len(workflow.Steps) == 0
 	claimID := job.ExecutionID
 	if mode == "cancel" {
 		job.State, job.WaitingCallback = "running", false
@@ -225,6 +235,10 @@ func advancePollingWorkflow(runtime localRuntime, definition protocolDefinition,
 		job.Attempts++
 	}
 	job.NextPollAt = time.Now().UTC().Add(time.Duration(workflow.PollIntervalMS) * time.Millisecond)
+	if errors.Is(callErr, errWorkflowOutcomeUnknown) {
+		job.State, job.Error = "outcome_unknown", callErr.Error()
+		return job
+	}
 	if callErr != nil || code < 200 || code >= 300 {
 		job.Error = fmt.Sprintf("workflow operation failed (HTTP %d); upstream state requires reconciliation", code)
 		if cancelling {
@@ -255,7 +269,12 @@ func (registry *protocolRegistry) serveStoredWorkflow(c *gin.Context, runtime lo
 		if errors.Is(err, errWorkflowNotFound) {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"success": false, "message": "cannot execute or read workflow job"})
+		if job.ID != "" && !errors.Is(err, errWorkflowNotFound) {
+			job.State = "outcome_unknown"
+			c.JSON(status, gin.H{"success": false, "code": "workflow_outcome_unknown", "retryable": false, "next_action": "reconcile this existing job; do not create a replacement", "data": publicWorkflowJob(job)})
+		} else {
+			c.JSON(status, gin.H{"success": false, "message": "cannot execute or read workflow job"})
+		}
 		return
 	}
 	c.Set("localrouter_workflow_job", job.ID)

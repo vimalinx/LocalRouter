@@ -65,6 +65,7 @@ const supplements: Record<string, ConsoleKey[]> = {
   overview: ['protocols', 'agentUsage'],
   tokens: ['agentUsage'],
   jobs: ['events'],
+  logs: ['agentUsage'],
 }
 
 type QueryValue = { data?: unknown; error?: Error | null; isPending?: boolean }
@@ -84,15 +85,15 @@ export function collectConsole(values: QueryValue[]): ConsoleData {
   return data
 }
 
-export function useConsoleData(token: string, enabled: boolean, section: string, logPage: number) {
+export function useConsoleData(token: string, enabled: boolean, section: string, logPage: number, logQuery = '', logAgentId = '') {
   const queryClient = useQueryClient()
   const needed = requirements[section] || requirements.overview
   const selected = [...needed, ...(supplements[section] || [])]
   const queries = useQueries({ queries: consoleSources.map(([key, , path]) => ({
-    queryKey: ['console-data', key, ...(key === 'logs' ? [logPage] : [])],
+    queryKey: ['console-data', key, ...(key === 'logs' ? [logPage, logQuery, logAgentId] : [])],
     queryFn: ({ signal }) => key === 'channels' || key === 'tokens'
       ? adminCollection(path, token, signal)
-      : adminRequest<unknown>(key === 'logs' ? `${path}?page=${logPage}&page_size=50` : path, token, { signal }),
+      : adminRequest<unknown>(key === 'logs' ? `${path}?page=${logPage}&page_size=50&q=${encodeURIComponent(logQuery)}${logAgentId ? `&token_id=${encodeURIComponent(logAgentId)}` : ''}` : path, token, { signal }),
     enabled: enabled && selected.includes(key),
     staleTime: 10_000,
     retry: false,
