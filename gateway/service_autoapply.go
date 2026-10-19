@@ -226,7 +226,7 @@ func (hub *serviceWorkspace) undoApplied(id, by string) (serviceProposal, error)
 			}
 			doc.Grants[item.GrantTokenID] = kept
 		}
-		item.State, item.UpdatedAt, item.Error = "undone", time.Now().UTC(), "undone by "+by
+		item.State, item.UpdatedAt, item.UndoneBy = "undone", time.Now().UTC(), by
 		doc.Proposals[id] = item
 		return nil
 	})

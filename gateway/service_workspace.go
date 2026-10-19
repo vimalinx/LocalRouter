@@ -99,7 +99,8 @@ type serviceProposal struct {
 	AuthorityBase   string               `json:"authority_base,omitempty"`
 	DecidedBy       string               `json:"decided_by,omitempty"`
 	// The Agent supplied the credential at preparation; never the value itself.
-	CredentialProvisioned bool `json:"credential_provisioned,omitempty"`
+	CredentialProvisioned bool   `json:"credential_provisioned,omitempty"`
+	UndoneBy              string `json:"undone_by,omitempty"`
 }
 
 type serviceConnection struct {
