@@ -1150,7 +1150,9 @@ command_budget() {
         done
       fi
       jq '.data' <<<"$response"
-      [[ "$state" != denied ]]
+      # Without --wait a pending request is the expected result; after waiting
+      # only an approval counts as success.
+      [[ "$state" == approved || ( "$wait" == false && "$state" == pending ) ]]
       ;;
     *) fail "use lr budget [status [<budget-id>]] or lr budget request <formal|trial> ..." ;;
   esac

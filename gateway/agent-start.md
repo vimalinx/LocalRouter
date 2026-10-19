@@ -84,7 +84,7 @@ lr result <call-id> --refresh
 - 价格不固定的调用先按单次预留（默认 $0.02）占用，调用后按上游报告的真实费用结算；最后一笔可能略超试用额度。
 - 用完时调用在发往上游之前被拦下，返回 `agent_trial_exhausted` 或 `agent_trial_pool_exhausted`。不要换身份或改用默认 Token 绕过。
 - 转为长期使用时，先按供应商公布的价格和预计用量估算金额，再运行 `lr budget request formal --monthly <usd> [--daily <usd>] --reason <用途与估算依据>`。只需要再试一下时用 `lr budget request trial --reason <理由>`，金额由人决定。
-- 加 `--wait` 会最多等 15 分钟，期间只查询状态，不重复提交。人可在批准时调低金额；`denied` 表示拒绝，不要原样重提。
+- 加 `--wait` 会最多等 15 分钟，期间只查询状态，不重复提交；只有获批才返回 0，超时仍待处理或被拒绝都非零退出，之后用 `lr budget status <id>` 查看。人可在批准时调低金额；`denied` 表示拒绝，不要原样重提。
 - 正式预算按 UTC 日/月重置，只统计转正之后的正式消费。扩大服务范围（`lr identity access`）不会改变金额。
 
 ## 自主额度与维护
