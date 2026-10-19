@@ -23,6 +23,8 @@ type serviceProposalInput struct {
 	GrantExpiresAt  int64              `json:"grant_expires_at,omitempty"`
 	MaintainerID    int                `json:"maintainer_token_id,omitempty"`
 	MaintenanceMode string             `json:"maintenance_mode,omitempty"`
+	// Write-only: stored as the service credential, never kept in the proposal.
+	Credential string `json:"credential,omitempty"`
 }
 
 func proposalReviewDigest(proposal serviceProposal) string {
@@ -327,6 +329,11 @@ func (hub *serviceWorkspace) mayRepair(tokenID int, proposal serviceProposal) bo
 }
 
 func (hub *serviceWorkspace) decide(id, digest, decision, credential string, actor int) (serviceProposal, error) {
+	return hub.decideAs(id, digest, decision, credential, actor, "")
+}
+
+// decideAs records who decided; automatic approval passes "auto:<agent>".
+func (hub *serviceWorkspace) decideAs(id, digest, decision, credential string, actor int, by string) (serviceProposal, error) {
 	hub.applyMu.Lock()
 	defer hub.applyMu.Unlock()
 	proposal, exists := hub.proposal(id, actor)
@@ -421,12 +428,16 @@ func (hub *serviceWorkspace) decide(id, digest, decision, credential string, act
 		if actor > 0 {
 			current.DecidedBy = fmt.Sprintf("agent:%d", actor)
 		}
+		if by != "" {
+			current.DecidedBy = by
+		}
 		doc.Proposals[id] = current
 		return nil
 	}); err != nil {
 		return proposal, err
 	}
 	if decision != "approve" {
+		hub.discardProvisionedCredential(proposal)
 		item, _ := hub.proposal(id, actor)
 		return item, nil
 	}

@@ -6,13 +6,15 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func serviceProposalSchema() gin.H {
 	schema := maintenanceObjectSchema(gin.H{
-		"id":     maintenanceString("Optional unique id for this proposal; inspect an existing id instead of replaying preparation"),
-		"kind":   maintenanceEnum("Preparation kind", "connection", "bundle", "template"),
-		"reason": maintenanceString("What the Agent needs and why this authority is appropriate"),
+		"id":         maintenanceString("Optional unique id for this proposal; inspect an existing id instead of replaying preparation"),
+		"kind":       maintenanceEnum("Preparation kind", "connection", "bundle", "template"),
+		"reason":     maintenanceString("What the Agent needs and why this authority is appropriate"),
+		"credential": maintenanceString("Write-only service credential for an authenticated connection; lr setup prepare --credential-file fills it from a mode-600 file. Stored as the binding, never echoed"),
 		"connection": maintenanceObjectSchema(gin.H{
 			"template_id": maintenanceString("Exact template id"), "template_version": maintenanceString("Exact template version"),
 			"definition": setupDefinitionSchema(),
@@ -82,6 +84,9 @@ func (registry *protocolRegistry) handleServiceSetupTool(c *gin.Context, runtime
 		}
 	}
 	owner, err := serviceOwner(c, runtime)
+	if err == nil && requestServerScope(c) == lanServiceScope && gjson.GetBytes(raw, "credential").Exists() {
+		err = errors.New("credentials are accepted only on the loopback listener")
+	}
 	var result any
 	if err == nil {
 		result, err = registry.workspace.callSetupTool(owner, name, raw, maintenance)
@@ -123,11 +128,7 @@ func (hub *serviceWorkspace) callSetupTool(owner localToken, name string, raw js
 		if err := decodeMaintenanceArguments(raw, &input); err != nil {
 			return nil, err
 		}
-		proposal, err := hub.prepare(owner, input)
-		if err != nil {
-			return nil, err
-		}
-		return serviceProposalView(proposal), nil
+		return hub.prepareService(owner, input)
 	}
 	if name == "localrouter_setup_templates" {
 		var input struct {

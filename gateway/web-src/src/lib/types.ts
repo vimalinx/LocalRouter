@@ -547,6 +547,7 @@ export type AgentBudget = {
 
 export type AgentBudgetSettings = {
   auto_approve_identities: boolean
+  auto_apply_services: boolean
   trial_per_agent_usd_micros: number
   trial_pool_monthly_usd_micros: number
   trial_request_reserve_usd_micros: number

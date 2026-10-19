@@ -12,7 +12,7 @@ Live discovery is authoritative. Readiness is not provider proof.
 1. Request configured discovery, defaulting to `http://127.0.0.1:8317/.well-known/localrouter.json`. Before sending a Token to non-loopback, require `scope=lan-service` and `maintenance.available=false`.
 2. Run `lr init` and `lr guide`. Bootstrap identity is not an independent Agent; follow the returned registration steps. Agent maintenance requires an enabled, distinct maintenance-only Token. Never read the administrator credential or use its human fallback.
 3. Classify the work before reading more detail:
-   - **New service/template/bundle:** `lr setup templates` → `lr setup template <id> <version>` → `lr setup schema` → prepare → human exact approval → verify. Preparation grants no authority.
+   - **New service/template/bundle:** `lr setup templates` → `lr setup template <id> <version>` → `lr setup schema` → prepare → auto-apply or human approval → verify. Preparation grants no authority.
    - **Use only:** call the already documented operation and do not edit the Pack.
    - **Compatibility Pack:** standard APIs use Channel Profile + Channels on `/v1` or `/v1beta`.
    - **Pack change:** use authorized `maintenance.mcp`; LocalRouter owns formatting, validation, digests, installation, and rollback.

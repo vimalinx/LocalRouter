@@ -65,7 +65,9 @@ lr result <call-id> --refresh
 
 扩权提交的是完整替换策略，批准前保持原权限，批准后保留 Token 和累计用量；策略已被他人修改时须重新准备。能力包固定在批准版本，新增操作不自动获得授权，显式空授权禁止调用。模型限制不等于任意业务资源的访问控制。
 
-新服务提案即使普通模式也要求独立身份；准备不安装、不调用上游、不授予权限。`connection` 可附带明确的 `bundle`，由人一次批准目标和完整生效策略，保留原金额、模型、次数和有效期限制；新增连接时还会展示并保留此前可用的服务能力。审批后发生策略漂移会拒绝覆盖；密钥由人单独填写，Agent 不指定 secret_file。用 `lr setup get/bundles/verify` 核对状态和已有证据；中断在 `applying` 时用 `lr setup reconcile`，不重放 apply。`LOCALROUTER_TASK_ID` 仅用于关联追踪，不改变权限。
+新服务提案即使普通模式也要求独立身份；准备不安装、不调用上游、不授予权限。`connection` 可附带明确的 `bundle`，由人一次批准目标和完整生效策略，保留原金额、模型、次数和有效期限制；新增连接时还会展示并保留此前可用的服务能力。审批后发生策略漂移会拒绝覆盖。密钥用 `lr setup prepare @proposal.json --credential-file <0600 文件>` 提供，只保存为凭据绑定，不回显，方案被拒或撤回时删除；不要把密钥写进定义、命令参数或输出，也不指定 secret_file。
+
+普通模式下，只新增公网 HTTPS 服务、授权仅给自己、带有价格条目（官方价格、`source_url`、`checked_at`）且已提供密钥的方案会立即生效（`auto_apply.applied=true`），之后在预算内预检并调用；人可以随时撤销，撤销后状态为 `undone`，不要自行重新接入。不满足条件时 `auto_apply.reason` 说明原因，方案等人批准。价格请查服务商官方价格页后填写。用 `lr setup get/bundles/verify` 核对状态和已有证据；中断在 `applying` 时用 `lr setup reconcile`，不重放 apply。`LOCALROUTER_TASK_ID` 仅用于关联追踪，不改变权限。
 
 ## 新服务的可提交形状与旧提案恢复
 

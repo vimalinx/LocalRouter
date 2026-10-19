@@ -70,6 +70,7 @@ export function BudgetRequests({ adminToken, onChanged }: { adminToken: string; 
 
 function TrialSettings({ adminToken, settings, onSaved }: { adminToken: string; settings: AgentBudgetSettings; onSaved: () => Promise<void> }) {
   const [auto, setAuto] = useState(settings.auto_approve_identities)
+  const [autoServices, setAutoServices] = useState(settings.auto_apply_services)
   const [perAgent, setPerAgent] = useState(dollars(settings.trial_per_agent_usd_micros))
   const [pool, setPool] = useState(dollars(settings.trial_pool_monthly_usd_micros))
   const [reserve, setReserve] = useState(dollars(settings.trial_request_reserve_usd_micros))
@@ -79,7 +80,7 @@ function TrialSettings({ adminToken, settings, onSaved }: { adminToken: string; 
     setSaving(true)
     try {
       await adminRequest('/local/api/agent-budget-settings', adminToken, { method: 'PUT', body: JSON.stringify({
-        auto_approve_identities: auto, trial_per_agent_usd_micros: usdInputMicros(perAgent),
+        auto_approve_identities: auto, auto_apply_services: autoServices, trial_per_agent_usd_micros: usdInputMicros(perAgent),
         trial_pool_monthly_usd_micros: usdInputMicros(pool), trial_request_reserve_usd_micros: usdInputMicros(reserve), revision: settings.revision,
       }) })
       toast.success('试用设置已保存，只影响之后发放的额度')
@@ -91,6 +92,7 @@ function TrialSettings({ adminToken, settings, onSaved }: { adminToken: string; 
     <summary className='cursor-pointer text-sm font-medium'>试用设置 <span className='text-xs font-normal text-muted-foreground'>每个 Agent {microUSD(settings.trial_per_agent_usd_micros)} · 每月合计 {microUSD(settings.trial_pool_monthly_usd_micros)}</span></summary>
     <form onSubmit={save} className='mt-3 grid max-w-2xl gap-3 sm:grid-cols-3'>
       <label className='flex items-center gap-2 text-sm sm:col-span-3'><Checkbox checked={auto} onChange={(event) => setAuto(event.target.checked)} />自动批准 Agent 身份申请（严格模式开启时始终需要人工审批）</label>
+      <label className='flex items-center gap-2 text-sm sm:col-span-3'><Checkbox checked={autoServices} onChange={(event) => setAutoServices(event.target.checked)} />自动接入 Agent 提供了密钥和价格的新公网 HTTPS 服务（可随时撤销）</label>
       <div className='grid gap-1.5'><Label htmlFor='trial-per-agent'>每个 Agent 试用（USD）</Label><Input id='trial-per-agent' type='number' min='0' step='0.01' required value={perAgent} onChange={(event) => setPerAgent(event.target.value)} /></div>
       <div className='grid gap-1.5'><Label htmlFor='trial-pool'>每月试用合计（USD）</Label><Input id='trial-pool' type='number' min='0' step='0.01' required value={pool} onChange={(event) => setPool(event.target.value)} /></div>
       <div className='grid gap-1.5'><Label htmlFor='trial-reserve'>单次默认预留（USD）</Label><Input id='trial-reserve' type='number' min='0' step='0.001' required value={reserve} onChange={(event) => setReserve(event.target.value)} /></div>

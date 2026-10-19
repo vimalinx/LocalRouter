@@ -65,6 +65,8 @@ func proposalNextAction(proposal serviceProposal) string {
 			return "Inspect readiness; request a capability bundle if needed, then preflight and execute one authorized call. Verify from its recorded trace."
 		}
 		return "Refresh effective permissions or the template catalogue. Existing bundle grants remain pinned to their approved revisions."
+	case "undone":
+		return "The human undid this connection: the service is disabled and its grant withdrawn. Do not reconnect it without asking the human."
 	case "applying":
 		return "Reconcile the installed digest using setup reconcile; do not repeat apply."
 	case "preparation_failed", "apply_failed":
@@ -119,12 +121,16 @@ func registerServiceAgentRoutes(agent *gin.RouterGroup, runtime localRuntime) {
 			serviceWorkspaceError(c, err)
 			return
 		}
-		proposal, err := hub.prepare(owner, input)
+		if requestServerScope(c) == lanServiceScope && input.Credential != "" {
+			serviceWorkspaceError(c, errors.New("credentials are accepted only on the loopback listener"))
+			return
+		}
+		view, err := hub.prepareService(owner, input)
 		if err != nil {
 			serviceWorkspaceError(c, err)
 			return
 		}
-		c.JSON(http.StatusCreated, serviceProposalView(proposal))
+		c.JSON(http.StatusCreated, view)
 	})
 	agent.GET("/onboarding/:id", func(c *gin.Context) {
 		owner, err := serviceOwner(c, runtime)
@@ -278,6 +284,16 @@ func registerServiceAdminRoutes(admin *gin.RouterGroup, runtime localRuntime) {
 			serviceWorkspaceError(c, err)
 			return
 		}
+		runtime.humanEvent(gin.H{"event": "service_proposal_decided", "id": proposal.ID, "state": proposal.State})
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
+	})
+	admin.POST("/service-proposals/:id/undo", func(c *gin.Context) {
+		proposal, err := hub.undoApplied(c.Param("id"), "console")
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
 	})
 	admin.GET("/service-proposals/:id/verification", func(c *gin.Context) {

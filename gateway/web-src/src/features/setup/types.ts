@@ -14,7 +14,7 @@ export type ServiceProposal = {
     workflows?: { id: string; name: string }[]
   } }
   grant_token_id?: number; grant_expires_at?: number; maintainer_token_id?: number; maintenance_mode?: string
-  draft_id?: string; pack_digest?: string; applied_digest?: string; error?: string; decided_by?: string
+  draft_id?: string; pack_digest?: string; applied_digest?: string; error?: string; decided_by?: string; credential_provisioned?: boolean
   impact?: { changed_files: number; files: { path: string; change: string; area: string }[]; protocols: { id: string; sections: string[] }[]; pool_ids: string[] }
 }
 export type WorkspaceData = {

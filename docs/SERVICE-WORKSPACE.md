@@ -84,7 +84,32 @@ To request the service and call permissions in one approval, include a bundle:
 
 The placeholder above is deliberately not a runnable Pack. Read the current
 machine schema and adapt the actual template. Omit `auth.secret_file`; LocalRouter
-owns the binding. The human enters a new credential in the approval dialog.
+owns the binding. Supply a new credential with
+`lr setup prepare @proposal.json --credential-file <mode-600 file>`; it is stored
+as the binding at preparation, never echoed or kept in the proposal, and deleted
+if the proposal is rejected or withdrawn. Without it the human enters the
+credential in the approval dialog.
+
+### Automatic connection in ordinary mode
+
+The proposal applies at once, recorded as `decided_by: auto:<agent-code>`, when
+all of these hold; otherwise `auto_apply.reason` names the missing condition and
+the proposal waits for the human:
+
+- ordinary mode and **Token management → budget requests → trial settings →
+  automatic service connection** is on (default);
+- the preparing identity has a trial or formal budget;
+- it adds a new Pack (never changes an existing one) and grants only the
+  preparing Agent, without maintenance delegation;
+- `base_url` is a public `https` host name (no IP, loopback or private suffix);
+- `definition.pricing.entries` carries the provider's published prices with
+  `source_url` and `checked_at`;
+- an authenticated service has its credential from `--credential-file`.
+
+The human is told through the optional desktop notification and the
+`LOCAL_GATEWAY_HUMAN_REQUEST_HOOK` event `service_applied`, and can undo it from
+the notification or the proposal in `/#setup`. Undo disables the Pack through a
+reviewed draft and withdraws the grant; history stays.
 The first version supports one target with none/bearer/header authentication.
 Pools, adapters, target selection and advanced authentication retain the full
 Protocol Pack authoring lifecycle.

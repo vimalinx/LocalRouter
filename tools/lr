@@ -129,7 +129,9 @@ Agent-led service setup
   lr setup schema [proposal|pack]  Read the live authoring schema
   lr setup reprepare <id> <digest> [--enable]
                                     Replace an unapplied proposal for a fresh human review
-  lr setup prepare <json|@file>     Prepare a connection, bundle or template for exact approval
+  lr setup prepare <json|@file> [--credential-file <mode-600 file>]
+                                    Prepare a connection, bundle or template; in ordinary mode a new
+                                    public HTTPS service with prices applies at once (human can undo)
   lr setup list                    List this Agent's proposals
   lr setup get <id>                 Inspect progress, impact, digest and next action
   lr setup verify <id>              Inspect recorded evidence without calling the provider
@@ -1162,6 +1164,30 @@ command_whoami() {
   authenticated_request GET "$base_url/agent/whoami" | jq .
 }
 
+# The credential travels from its file to the request body inside jq and curl
+# stdin; it never appears in argv, output or the saved proposal.
+command_setup_prepare_with_credential() {
+  local proposal file="$2" request response
+  [[ "$base_url" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$ ]] || fail "credentials are accepted only on the loopback listener"
+  [[ "${LOCALROUTER_SETUP_LANE:-service}" == service ]] || fail "supply credentials on the service lane"
+  proposal="$(json_argument "$1")"
+  jq -e 'has("credential") | not' >/dev/null <<<"$proposal" || fail "never put the credential in the proposal; use --credential-file"
+  [[ -f "$file" && ! -L "$file" ]] || fail "credential file must be a regular file"
+  [[ "$(stat -c '%u:%a' "$file")" == "$EUID:600" ]] || fail "credential file must be owned by you with mode 0600"
+  [[ "$(wc -l <"$file")" -le 1 && -s "$file" ]] || fail "credential file must contain exactly one line"
+  request="$(jq -c --rawfile credential "$file" '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"localrouter_setup_prepare",arguments:(. + {credential:($credential | rtrimstr("\n"))})}}' <<<"$proposal")"
+  response="$(authenticated_request POST "$mcp_url" "$request")"
+  if jq -e '.error != null' >/dev/null <<<"$response"; then
+    jq -r '"lr: MCP error " + (.error.code | tostring) + ": " + .error.message' <<<"$response" >&2
+    return 1
+  fi
+  if jq -e '.result.isError == true' >/dev/null <<<"$response"; then
+    jq '.result.structuredContent // .result' <<<"$response" >&2
+    return 1
+  fi
+  jq '.result.structuredContent // .result' <<<"$response"
+}
+
 command_setup() {
   local action="${1:-help}"
   shift || true
@@ -1180,7 +1206,14 @@ command_setup() {
       [[ -n "${1:-}" && -n "${2:-}" ]] || fail "select an exact template id and version"
       arguments="$(jq -cn --arg id "$1" --arg version "$2" '{id:$id,version:$version}')"; tool_name=localrouter_setup_templates ;;
     list|bundles) tool_name="localrouter_setup_$action" ;;
-    prepare) [[ -n "${1:-}" ]] || fail "setup prepare requires JSON or @file"; arguments="$(json_argument "$1")"; tool_name=localrouter_setup_prepare ;;
+    prepare)
+      [[ -n "${1:-}" ]] || fail "setup prepare requires JSON or @file"
+      if [[ "${2:-}" == --credential-file ]]; then
+        [[ $# == 3 ]] || fail "use lr setup prepare <json|@file> [--credential-file <mode-600 file>]"
+        command_setup_prepare_with_credential "$1" "$3"; return
+      fi
+      [[ $# == 1 ]] || fail "use lr setup prepare <json|@file> [--credential-file <mode-600 file>]"
+      arguments="$(json_argument "$1")"; tool_name=localrouter_setup_prepare ;;
     get|verify|reconcile)
       [[ -n "${1:-}" ]] || fail "setup $action requires a proposal id"
       arguments="$(jq -cn --arg id "$1" '{id:$id}')"; tool_name="localrouter_setup_$action" ;;

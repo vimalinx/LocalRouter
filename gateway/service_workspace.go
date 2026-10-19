@@ -27,6 +27,8 @@ type serviceWorkspace struct {
 	policies *tokenPolicyStore
 	store    *localStore
 	userID   int
+	// Configuration and stores as of startup; its workspace field is unset.
+	runtime localRuntime
 }
 
 type serviceWorkspaceDocument struct {
@@ -96,6 +98,8 @@ type serviceProposal struct {
 	Error           string               `json:"error,omitempty"`
 	AuthorityBase   string               `json:"authority_base,omitempty"`
 	DecidedBy       string               `json:"decided_by,omitempty"`
+	// The Agent supplied the credential at preparation; never the value itself.
+	CredentialProvisioned bool `json:"credential_provisioned,omitempty"`
 }
 
 type serviceConnection struct {
@@ -111,7 +115,7 @@ func emptyServiceWorkspace() serviceWorkspaceDocument {
 }
 
 func newServiceWorkspace(runtime localRuntime) (*serviceWorkspace, error) {
-	hub := &serviceWorkspace{path: filepath.Join(runtime.config.DataDir, "service-workspace.json"), doc: emptyServiceWorkspace(), registry: runtime.protocols, policies: runtime.policies, store: runtime.store, userID: runtime.rootUser.ID}
+	hub := &serviceWorkspace{path: filepath.Join(runtime.config.DataDir, "service-workspace.json"), doc: emptyServiceWorkspace(), registry: runtime.protocols, policies: runtime.policies, store: runtime.store, userID: runtime.rootUser.ID, runtime: runtime}
 	exists, err := inspectPrivateRegularFile(hub.path, "service workspace")
 	if err != nil {
 		return nil, err

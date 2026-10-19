@@ -68,6 +68,8 @@ type runtimeConfig struct {
 	UpdateCheckEnabled  bool
 	// Desktop notifications let the human decide budget requests in place.
 	DesktopNotifications bool
+	// Optional absolute command that receives human-facing events as JSON.
+	HumanRequestHook string
 }
 
 type localRuntime struct {
@@ -314,6 +316,10 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 	if err != nil {
 		return runtimeConfig{}, err
 	}
+	humanRequestHook := strings.TrimSpace(os.Getenv("LOCAL_GATEWAY_HUMAN_REQUEST_HOOK"))
+	if humanRequestHook != "" && !filepath.IsAbs(humanRequestHook) {
+		return runtimeConfig{}, errors.New("LOCAL_GATEWAY_HUMAN_REQUEST_HOOK must be an absolute path")
+	}
 	lanHost := ""
 	lanPort := 0
 	var lanAllowedOrigins []string
@@ -417,6 +423,7 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		APITokenFile:         filepath.Join(dataDir, "api-token"),
 		UpdateCheckEnabled:   updateCheckEnabled,
 		DesktopNotifications: desktopNotifications,
+		HumanRequestHook:     humanRequestHook,
 	}, nil
 }
 

@@ -5,12 +5,10 @@ package main
 // pool; money above that needs one human decision on an Agent-written budget
 // request. The human sets every amount. Agents can never raise their own budget.
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +18,7 @@ import (
 
 type agentBudgetSettings struct {
 	AutoApproveIdentities bool  `json:"auto_approve_identities"`
+	AutoApplyServices     bool  `json:"auto_apply_services"`
 	TrialPerAgent         int64 `json:"trial_per_agent_usd_micros"`
 	TrialPoolMonthly      int64 `json:"trial_pool_monthly_usd_micros"`
 	TrialRequestReserve   int64 `json:"trial_request_reserve_usd_micros"`
@@ -27,7 +26,7 @@ type agentBudgetSettings struct {
 }
 
 func defaultBudgetSettings() agentBudgetSettings {
-	return agentBudgetSettings{AutoApproveIdentities: true, TrialPerAgent: 2_000_000, TrialPoolMonthly: 5_000_000, TrialRequestReserve: 20_000}
+	return agentBudgetSettings{AutoApproveIdentities: true, AutoApplyServices: true, TrialPerAgent: 2_000_000, TrialPoolMonthly: 5_000_000, TrialRequestReserve: 20_000}
 }
 
 func readBudgetSettings(q budgetQuerier) (agentBudgetSettings, error) {
@@ -296,6 +295,7 @@ func handleBudgetRequestCreate(runtime localRuntime) gin.HandlerFunc {
 		}
 		if created {
 			runtime.policies.budgets.notify(runtime, request)
+			runtime.humanEvent(gin.H{"event": "budget_request", "id": request.ID, "agent_code": request.AgentCode, "agent_name": request.AgentName, "title": budgetRequestTitle(request), "body": budgetRequestBody(request)})
 		}
 		stored, _ := runtime.policies.budgets.request(request.ID)
 		localSuccess(c, budgetRequestResponse(runtime, stored))
@@ -437,7 +437,11 @@ func decideBudgetRequest(runtime localRuntime, id string, approve bool, override
 	request.DecidedAt, request.DecidedBy = time.Now().Unix(), by
 	if !approve {
 		request.State = "denied"
-		return request, 0, budgets.storeDecision(request)
+		if err = budgets.storeDecision(request); err != nil {
+			return request, 500, err
+		}
+		runtime.humanEvent(gin.H{"event": "budget_request_decided", "id": request.ID, "state": request.State})
+		return request, 0, nil
 	}
 	for _, value := range []struct {
 		override *int64
@@ -486,6 +490,7 @@ func decideBudgetRequest(runtime localRuntime, id string, approve bool, override
 		_ = runtime.policies.saveLocked()
 		return request, 500, errors.New("approval did not complete; the previous budget remains")
 	}
+	runtime.humanEvent(gin.H{"event": "budget_request_decided", "id": request.ID, "state": request.State})
 	return request, 0, nil
 }
 
@@ -505,46 +510,35 @@ func formatUSD(micros int64) string {
 	return "$" + strconv.FormatFloat(float64(micros)/1e6, 'f', -1, 64)
 }
 
+func budgetRequestTitle(request agentBudgetRequest) string {
+	return fmt.Sprintf("LocalRouter · %s 申请预算", request.AgentName)
+}
+
+func budgetRequestBody(request agentBudgetRequest) string {
+	if request.Kind != "formal" {
+		return fmt.Sprintf("再给一轮试用（已花 %s）\n理由：%s", formatUSD(request.TrialSpent), request.Reason)
+	}
+	limits := []string{}
+	if request.Monthly > 0 {
+		limits = append(limits, formatUSD(request.Monthly)+"/月")
+	}
+	if request.Daily > 0 {
+		limits = append(limits, formatUSD(request.Daily)+"/日")
+	}
+	return fmt.Sprintf("转为正式预算：%s（试用已花 %s）\n理由：%s", strings.Join(limits, "，"), formatUSD(request.TrialSpent), request.Reason)
+}
+
 // Desktop notifications are a convenience front end to the same decision; the
-// console stays authoritative. Without a display or on timeout the request
-// simply stays pending.
+// console stays authoritative.
 func (s *agentBudgetStore) notify(runtime localRuntime, request agentBudgetRequest) {
-	if !runtime.config.DesktopNotifications {
-		return
-	}
-	select {
-	case s.notifySlots <- struct{}{}:
-	default:
-		return
-	}
-	go func() {
-		defer func() { <-s.notifySlots }()
-		title := fmt.Sprintf("LocalRouter · %s 申请预算", request.AgentName)
-		body := fmt.Sprintf("再给一轮试用（已花 %s）\n理由：%s", formatUSD(request.TrialSpent), request.Reason)
-		if request.Kind == "formal" {
-			limits := []string{}
-			if request.Monthly > 0 {
-				limits = append(limits, formatUSD(request.Monthly)+"/月")
-			}
-			if request.Daily > 0 {
-				limits = append(limits, formatUSD(request.Daily)+"/日")
-			}
-			body = fmt.Sprintf("转为正式预算：%s（试用已花 %s）\n理由：%s", strings.Join(limits, "，"), formatUSD(request.TrialSpent), request.Reason)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-		defer cancel()
-		output, err := exec.CommandContext(ctx, "notify-send", "--app-name=LocalRouter", "--urgency=critical", "--wait",
-			"--action=approve=同意", "--action=deny=拒绝", "--action=open=打开控制台", title, body).Output()
-		if err != nil {
-			return
-		}
-		switch strings.TrimSpace(string(output)) {
+	desktopNotify(runtime, s.notifySlots, "critical", budgetRequestTitle(request), budgetRequestBody(request), [][2]string{{"approve", "同意"}, {"deny", "拒绝"}, {"open", "打开控制台"}}, func(action string) {
+		switch action {
 		case "approve":
 			_, _, _ = decideBudgetRequest(runtime, request.ID, true, budgetOverrides{}, "desktop")
 		case "deny":
 			_, _, _ = decideBudgetRequest(runtime, request.ID, false, budgetOverrides{}, "desktop")
 		case "open":
-			_ = exec.Command("xdg-open", fmt.Sprintf("http://%s:%d/#tokens", runtime.config.Host, runtime.config.Port)).Start()
+			openConsole(runtime, "tokens")
 		}
-	}()
+	})
 }

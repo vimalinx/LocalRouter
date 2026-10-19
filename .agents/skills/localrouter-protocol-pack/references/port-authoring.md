@@ -82,10 +82,14 @@ verified LocalRouter origin. No checkout path is required.
 
 Start from the selected template's `example` and retain top-level `enabled:true`.
 Runtime route fields `enabled`, `operation_key` and `call_url` are projections,
-not authoring input. For human-provided credentials specify only
+not authoring input. For credentials specify only
 `"auth":{"type":"bearer"}` or `"auth":{"type":"header","header":"X-API-Key"}`.
-Omit credential values and `secret_file`; LocalRouter assigns the binding and the
-human supplies the key during approval. No-auth services use `{"type":"none"}`.
+Omit credential values and `secret_file`; LocalRouter assigns the binding. Pass
+the key with `lr setup prepare @proposal.json --credential-file <mode-600 file>`,
+or the human supplies it during approval. No-auth services use `{"type":"none"}`.
+In ordinary mode a new public HTTPS service with `pricing.entries` (published
+price, `source_url`, `checked_at`) granted only to you applies at once; read
+`auto_apply.reason` otherwise. The human may undo it.
 
 If a pending proposal lacks a reviewed effective policy or its review is stale,
 its owner may run `lr setup reprepare <id> <digest> [--enable]`. `--enable` explicitly

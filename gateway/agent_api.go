@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "16"
+const agentContractSchemaVersion = "17"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -148,7 +148,8 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"authentication_examples": gin.H{"bearer": gin.H{"type": "bearer"}, "header": gin.H{"type": "header", "header": "X-API-Key"}, "credential_owner": "human supplies the credential only at approval; omit secret_file"},
 			"identity_preparation":    setupIdentityAction,
 			"flow":                    []string{"choose exact template", "adapt observed contract", "prepare proposal", "human approves exact authority digest", "inspect installation", "request explicit capability bundle", "preflight and authorized call", "verify recorded trace"},
-			"preparation":             "Service Tokens may prepare owned proposals without maintenance authority; preparation never calls the provider or grants permissions.",
+			"preparation":             "Service Tokens may prepare owned proposals without maintenance authority; preparation never calls the provider.",
+			"auto_apply":              gin.H{"cli": "lr setup prepare @proposal.json [--credential-file <mode-600 file>]", "rule": "in ordinary mode a new public HTTPS service with published pricing entries, granted only to the preparing budgeted Agent, applies at once; the human may undo it. Other proposals wait for the human; the response auto_apply.reason says why.", "credential": "write-only; never put a credential in the definition, argv or logs"},
 			"maintenance":             "A separate maintenance-only Token uses setup tools on /manage/mcp. Compatible repairs within human-approved Pack delegations need no repeated approval; target/auth/path/method/operation/workflow changes do.",
 			"trace_headers":           gin.H{"task": "X-LocalRouter-Task-Id", "trace": "traceparent or X-LocalRouter-Trace-Id", "privacy": "metadata and declared numeric resource units only; correlation labels do not grant access"},
 		},

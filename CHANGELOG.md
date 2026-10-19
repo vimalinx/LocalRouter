@@ -6,6 +6,20 @@ published.
 
 ## Unreleased
 
+- Agents connect new services themselves: `lr setup prepare --credential-file`
+  stores the credential at preparation (deleted on rejection or withdrawal), so
+  the human never types it. In ordinary mode a new public HTTPS service with
+  published pricing entries, granted only to the preparing budgeted Agent,
+  applies at once; anything else waits for review with `auto_apply.reason`.
+- The human can undo an automatic connection from the desktop notification or
+  `/#setup`; undo disables the Pack through a reviewed draft and withdraws the
+  grant. A console switch turns automatic connection off.
+- `LOCAL_GATEWAY_HUMAN_REQUEST_HOOK` receives budget and service events as JSON,
+  for example to keep requests in a Todo list until decided.
+- Contract schema 17.
+- The installer now restarts a running service on upgrade, and
+  `lr budget request --wait` succeeds only when the request is approved.
+
 - Trial budgets replace identity review in ordinary mode. `lr identity request`
   and `lr identity prepare` now issue and bind immediately; every new identity
   starts on a one-time trial ($2 by default) drawn from a shared monthly trial

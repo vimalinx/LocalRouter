@@ -91,6 +91,6 @@ func setupDefinitionSchema() gin.H {
 	delete(schema, "$defs")
 	props := schema["properties"].(map[string]any)
 	props["enabled"] = gin.H{"const": true, "description": "The connection must be explicitly enabled; preparation itself grants no call rights"}
-	props["auth"] = maintenanceObjectSchema(gin.H{"type": maintenanceEnum("Human supplies credentials at approval", "none", "bearer", "header"), "header": maintenanceString("Required for header authentication"), "value_template": maintenanceString("Optional header value template")}, "type")
+	props["auth"] = maintenanceObjectSchema(gin.H{"type": maintenanceEnum("Credential comes from the top-level credential field (lr setup prepare --credential-file) or from the human at approval", "none", "bearer", "header"), "header": maintenanceString("Required for header authentication"), "value_template": maintenanceString("Optional header value template")}, "type")
 	return schema
 }

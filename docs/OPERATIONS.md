@@ -110,6 +110,8 @@ LAN 监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent` 及公�
 | `LOCAL_GATEWAY_CACHE_DIR` | 覆盖缓存目录 |
 | `LOCAL_GATEWAY_PROTOCOL_DIR` | 覆盖 Pack 目录，默认为配置目录中的 `protocols` |
 | `LOCAL_GATEWAY_CHANNEL_PROFILES_FILE` | 覆盖模型协议配置文件位置 |
+| `LOCAL_GATEWAY_DESKTOP_NOTIFICATIONS` | `false`（安装模板为 `true`），用 `notify-send` 弹出预算申请与自动接入通知，可直接同意、拒绝或撤销 |
+| `LOCAL_GATEWAY_HUMAN_REQUEST_HOOK` | 空。绝对路径的可执行文件；需要人处理或已处理的事件以 JSON 写入其标准输入，30 秒超时，失败不影响请求 |
 
 版本检查只显示更新提示，不下载或安装程序，也不读取 GitHub Token。正式版本只跟踪正式发行，预发布版本同时跟踪预发布与正式发行；请求失败不影响转发。离线运行可关闭 `LOCAL_GATEWAY_UPDATE_CHECK_ENABLED`。
 
