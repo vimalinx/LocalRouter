@@ -12,8 +12,10 @@ published.
   published pricing entries, granted only to the preparing budgeted Agent,
   applies at once; anything else waits for review with `auto_apply.reason`.
 - The human can undo an automatic connection from the desktop notification or
-  `/#setup`; undo disables the Pack through a reviewed draft and withdraws the
-  grant. A console switch turns automatic connection off.
+  `/#setup`, and the preparing Agent can undo its own with `lr setup undo`.
+  Undo removes exactly the Pack files the proposal added through a reviewed
+  draft, withdraws the grant and deletes the Agent's credential. A console
+  switch turns automatic connection off.
 - `LOCAL_GATEWAY_HUMAN_REQUEST_HOOK` receives budget and service events as JSON,
   for example to keep requests in a Todo list until decided.
 - Contract schema 17.

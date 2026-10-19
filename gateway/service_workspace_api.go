@@ -66,7 +66,10 @@ func proposalNextAction(proposal serviceProposal) string {
 		}
 		return "Refresh effective permissions or the template catalogue. Existing bundle grants remain pinned to their approved revisions."
 	case "undone":
-		return "The human undid this connection: the service is disabled and its grant withdrawn. Do not reconnect it without asking the human."
+		if strings.HasPrefix(proposal.UndoneBy, "agent:") {
+			return "You undid this connection: the service it added, its grant and the credential you supplied are removed. Prepare a new proposal if you need it again."
+		}
+		return "The human undid this connection: the service it added and its grant are removed. Do not reconnect it without asking the human."
 	case "applying":
 		return "Reconcile the installed digest using setup reconcile; do not repeat apply."
 	case "preparation_failed", "apply_failed":
@@ -196,6 +199,20 @@ func registerServiceAgentRoutes(agent *gin.RouterGroup, runtime localRuntime) {
 		}
 		c.JSON(http.StatusOK, serviceProposalView(proposal))
 	})
+	agent.POST("/onboarding/:id/undo", func(c *gin.Context) {
+		owner, err := serviceOwner(c, runtime)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		proposal, err := hub.undoApplied(c.Param("id"), "agent:"+owner.AgentCode, owner.ID)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
+		c.JSON(http.StatusOK, serviceProposalView(proposal))
+	})
 	agent.POST("/onboarding/:id/reconcile", func(c *gin.Context) {
 		owner, err := serviceOwner(c, runtime)
 		if err != nil {
@@ -288,7 +305,7 @@ func registerServiceAdminRoutes(admin *gin.RouterGroup, runtime localRuntime) {
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
 	})
 	admin.POST("/service-proposals/:id/undo", func(c *gin.Context) {
-		proposal, err := hub.undoApplied(c.Param("id"), "console")
+		proposal, err := hub.undoApplied(c.Param("id"), "console", 0)
 		if err != nil {
 			serviceWorkspaceError(c, err)
 			return

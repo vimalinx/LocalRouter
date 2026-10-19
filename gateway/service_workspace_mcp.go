@@ -44,6 +44,7 @@ func serviceSetupTools(maintenance bool) []maintenanceToolDefinition {
 		{Name: "localrouter_setup_get", Description: "Inspect one owned proposal and its next action.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id")}, "id"), ReadOnly: true},
 		{Name: "localrouter_setup_withdraw", Description: "Withdraw an owned proposal before approval without modifying installed services.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id"), "digest": maintenanceString("Exact proposal digest")}, "id", "digest")},
 		{Name: "localrouter_setup_verify", Description: "Inspect installation and recorded real-response evidence. Does not call the provider or claim business completion from HTTP status.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id")}, "id"), ReadOnly: true},
+		{Name: "localrouter_setup_undo", Description: "Undo your own applied connection or bundle: removes the service it added, withdraws its grant and deletes the credential you supplied. Services other Agents use, or changes to existing services, need the human.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id")}, "id")},
 		{Name: "localrouter_setup_reconcile", Description: "Reconcile an interrupted apply with the installed exact digest, without replaying the release or upstream requests.", InputSchema: maintenanceObjectSchema(gin.H{"id": maintenanceString("Proposal id")}, "id")},
 		{Name: "localrouter_setup_bundles", Description: "List available capability bundle revisions and this identity's effective assignments.", InputSchema: maintenanceObjectSchema(gin.H{}), ReadOnly: true},
 		{Name: "localrouter_setup_traces", Description: "Inspect this Agent's service calls, attempts, resource units and cost provenance. Correlation never grants access to another Agent's records.", InputSchema: maintenanceObjectSchema(gin.H{"trace_id": maintenanceString("Optional trace id"), "task_id": maintenanceString("Optional Agent task correlation label"), "page": gin.H{"type": "integer", "minimum": 1}, "page_size": gin.H{"type": "integer", "minimum": 1, "maximum": 200}}), ReadOnly: true},
@@ -216,6 +217,12 @@ func (hub *serviceWorkspace) callSetupTool(owner localToken, name string, raw js
 		return hub.verifyProposal(input.ID, owner.ID)
 	case "localrouter_setup_reconcile":
 		proposal, err := hub.reconcile(input.ID, owner.ID)
+		return serviceProposalView(proposal), err
+	case "localrouter_setup_undo":
+		proposal, err := hub.undoApplied(input.ID, "agent:"+owner.AgentCode, owner.ID)
+		if err == nil {
+			hub.runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
+		}
 		return serviceProposalView(proposal), err
 	case "localrouter_setup_withdraw":
 		proposal, err := hub.decide(input.ID, input.Digest, "withdraw", "", owner.ID)

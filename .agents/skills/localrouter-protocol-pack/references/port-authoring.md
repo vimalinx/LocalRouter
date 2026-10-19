@@ -89,7 +89,8 @@ the key with `lr setup prepare @proposal.json --credential-file <mode-600 file>`
 or the human supplies it during approval. No-auth services use `{"type":"none"}`.
 In ordinary mode a new public HTTPS service with `pricing.entries` (published
 price, `source_url`, `checked_at`) granted only to you applies at once; read
-`auto_apply.reason` otherwise. The human may undo it.
+`auto_apply.reason` otherwise. Undo your own mistake with `lr setup undo <id>`;
+the human may also undo it.
 
 If a pending proposal lacks a reviewed effective policy or its review is stale,
 its owner may run `lr setup reprepare <id> <digest> [--enable]`. `--enable` explicitly

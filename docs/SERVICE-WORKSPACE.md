@@ -108,8 +108,12 @@ the proposal waits for the human:
 
 The human is told through the optional desktop notification and the
 `LOCAL_GATEWAY_HUMAN_REQUEST_HOOK` event `service_applied`, and can undo it from
-the notification or the proposal in `/#setup`. Undo disables the Pack through a
-reviewed draft and withdraws the grant; history stays.
+the notification or the proposal in `/#setup`. The preparing Agent can undo its
+own applied proposal with `lr setup undo <id>`, unless another Agent is granted
+the service. Undo removes exactly the Pack files the proposal added through a
+reviewed draft, withdraws its grant and deletes a credential the Agent
+supplied; history stays. A proposal that changed an existing service is
+edited by the human instead.
 The first version supports one target with none/bearer/header authentication.
 Pools, adapters, target selection and advanced authentication retain the full
 Protocol Pack authoring lifecycle.

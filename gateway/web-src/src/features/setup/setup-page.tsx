@@ -82,7 +82,7 @@ export function SetupPage({ adminToken, tokens }: { adminToken: string; tokens: 
   async function undo() {
     if (!selected) return
     setBusy(true); setError('')
-    try { await adminRequest(`/local/api/service-proposals/${encodeURIComponent(selected.id)}/undo`, adminToken, { method: 'POST' }); await refresh(); toast.success('已撤销：服务已停用，授权已收回，记录保留') }
+    try { await adminRequest(`/local/api/service-proposals/${encodeURIComponent(selected.id)}/undo`, adminToken, { method: 'POST' }); await refresh(); toast.success('已撤销：新增的服务已删除，授权已收回，记录保留') }
     catch (cause) { setError(cause instanceof Error ? cause.message : '撤销失败，请刷新查看状态') }
     finally { setBusy(false) }
   }
@@ -158,7 +158,7 @@ export function SetupPage({ adminToken, tokens }: { adminToken: string; tokens: 
           <div className='flex flex-wrap justify-end gap-3 border-t pt-4'>
             {selected.state === 'awaiting_approval' && <><Button variant='outline' disabled={busy} onClick={() => decide('reject')}>暂不授权</Button><Button variant='outline' disabled={busy} onClick={reprepare}>{selected.connection?.definition.enabled === false ? '改为启用并重新准备' : '重新准备供审阅'}</Button><Button disabled={busy || reviewBlocked} onClick={() => decide('approve')}>{busy ? '正在执行…' : '授权并执行这份方案'}<ArrowRight aria-hidden='true' /></Button></>}
             {selected.state === 'applied' && selected.connection && <Button variant='outline' disabled={busy} onClick={verify}>查看调用验证</Button>}
-            {selected.state === 'undone' && <p className='w-full text-sm text-muted-foreground'>已由{selected.undone_by === 'desktop' ? '桌面通知' : '控制台'}撤销：服务已停用，授权已收回，记录保留。</p>}
+            {selected.state === 'undone' && <p className='w-full text-sm text-muted-foreground'>已由{selected.undone_by?.startsWith('agent:') ? ' Agent 自己' : selected.undone_by === 'desktop' ? '桌面通知' : '控制台'}撤销：这次新增的服务已删除，授权已收回，Agent 提供的密钥已删除，记录保留。</p>}
             {selected.state === 'applied' && (selected.connection || selected.bundle) && <Button variant='outline' disabled={busy} onClick={undo}>撤销接入</Button>}
             {selected.state === 'applying' && <><p className='w-full text-sm text-muted-foreground'>撤销未完成授权会恢复这次应用前的策略；若之后已有人工改动则保留该改动。已安装服务和上游任务保留。</p><Button variant='outline' disabled={busy} onClick={() => decide('abandon')}>撤销未完成授权</Button><Button variant='outline' disabled={busy} onClick={reconcile}>核对已安装状态</Button></>}
           </div>

@@ -3,7 +3,7 @@ package main
 // In ordinary mode an Agent may connect a brand-new public HTTPS service for
 // itself without a human click: it supplies the credential file and the
 // published prices, its budget limits the spend, and the human can undo the
-// connection at any time. Anything that changes an existing service, targets
+// connection at any time, and the Agent can undo its own connection. Anything that changes an existing service, targets
 // a private network, grants another Token or lacks prices waits for review.
 import (
 	"bytes"
@@ -187,7 +187,7 @@ func (hub *serviceWorkspace) announceAppliedService(owner localToken, proposal s
 	desktopNotify(runtime, runtime.policies.budgets.notifySlots, "normal", title, body, [][2]string{{"undo", "撤销"}, {"open", "打开控制台"}}, func(action string) {
 		switch action {
 		case "undo":
-			if _, err := hub.undoApplied(proposal.ID, "desktop"); err == nil {
+			if _, err := hub.undoApplied(proposal.ID, "desktop", 0); err == nil {
 				runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
 			}
 		case "open":
@@ -196,21 +196,41 @@ func (hub *serviceWorkspace) announceAppliedService(owner localToken, proposal s
 	})
 }
 
-// undoApplied disables an applied connection through the reviewed draft
-// lifecycle and withdraws the grant it created. History is kept.
-func (hub *serviceWorkspace) undoApplied(id, by string) (serviceProposal, error) {
+// undoApplied reverses an applied proposal: the Pack files it added are
+// removed through a reviewed draft, its grant is withdrawn and a credential the
+// Agent supplied is deleted. History stays. An Agent (actor > 0) may undo only
+// its own proposal, and only while no other Token is granted that service.
+func (hub *serviceWorkspace) undoApplied(id, by string, actor int) (serviceProposal, error) {
 	hub.applyMu.Lock()
 	defer hub.applyMu.Unlock()
 	proposal, exists := hub.proposal(id, 0)
-	if !exists {
-		return proposal, errors.New("unknown proposal")
+	if !exists || (actor > 0 && proposal.OwnerTokenID != actor) {
+		return proposal, errors.New("unknown proposal; an Agent can undo only its own proposals")
 	}
 	if proposal.State != "applied" {
 		return proposal, fmt.Errorf("proposal is %s; only applied proposals can be undone", proposal.State)
 	}
+	if proposal.MaintainerID != 0 || (proposal.GrantTokenID != 0 && proposal.GrantTokenID != proposal.OwnerTokenID) {
+		return proposal, errors.New("needs_approval: this proposal delegated maintenance or granted another Token; ask the human to undo it")
+	}
 	if proposal.Connection != nil {
-		if current, live := hub.registry.get(proposal.Connection.Definition.ID); live && current.Enabled {
-			if err := hub.disablePack(proposal); err != nil {
+		pack := proposal.Connection.Definition.ID
+		added := []string{}
+		if proposal.Impact != nil {
+			for _, file := range proposal.Impact.Files {
+				if file.ProtocolID == pack && file.Change == "added" {
+					added = append(added, file.Path)
+				}
+			}
+		}
+		if len(added) == 0 {
+			return proposal, errors.New("needs_approval: this proposal changed an existing service; ask the human to edit it")
+		}
+		if actor > 0 && hub.packGrantedToOthers(pack, proposal.OwnerTokenID) {
+			return proposal, errors.New("needs_approval: other Agents are granted this service; ask the human to remove it")
+		}
+		if _, live := hub.registry.get(pack); live {
+			if err := hub.removeDraftFiles(added); err != nil {
 				return proposal, err
 			}
 		}
@@ -230,28 +250,56 @@ func (hub *serviceWorkspace) undoApplied(id, by string) (serviceProposal, error)
 		doc.Proposals[id] = item
 		return nil
 	})
+	if err == nil {
+		hub.discardProvisionedCredential(proposal)
+	}
 	item, _ := hub.proposal(id, 0)
 	return item, err
 }
 
-func (hub *serviceWorkspace) disablePack(proposal serviceProposal) error {
+func (hub *serviceWorkspace) packGrantedToOthers(pack string, owner int) bool {
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	for tokenID, grants := range hub.doc.Grants {
+		if tokenID == owner {
+			continue
+		}
+		for _, grant := range grants {
+			for _, member := range hub.doc.Bundles[grant.Revision].Members {
+				if member.Pack == pack {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// removeDraftFiles deletes exactly the files a proposal added, then applies the
+// reviewed draft so validation, digests and rollback stay with LocalRouter.
+func (hub *serviceWorkspace) removeDraftFiles(paths []string) error {
 	draftID := "undo-" + serviceID("")[:20]
 	if _, failure := hub.registry.maintenanceOpenDraft(draftID); failure != nil {
 		return errors.New(failure.Message)
 	}
-	definition := proposal.Connection.Definition
-	definition.Enabled = false
 	hub.registry.lifecycleMu.Lock()
 	root, exists := hub.registry.protocolDraftRoot(draftID)
 	if !exists {
 		hub.registry.lifecycleMu.Unlock()
 		return errors.New("undo draft is missing")
 	}
-	err := writeMaintenanceDefinition(filepath.Join(root, definition.ID+".json"), definition)
-	hub.registry.lifecycleMu.Unlock()
-	if err != nil {
-		return err
+	for _, relative := range paths {
+		path := filepath.Join(root, filepath.Clean(relative))
+		if !strings.HasPrefix(path, root+string(filepath.Separator)) {
+			hub.registry.lifecycleMu.Unlock()
+			return errors.New("invalid draft path")
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			hub.registry.lifecycleMu.Unlock()
+			return err
+		}
 	}
+	hub.registry.lifecycleMu.Unlock()
 	result, failure := hub.registry.maintenanceReviewDraft(draftID)
 	if failure != nil {
 		return errors.New(failure.Message)
