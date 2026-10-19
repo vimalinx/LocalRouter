@@ -159,8 +159,7 @@ func (hub *serviceWorkspace) prepareService(owner localToken, input servicePropo
 	auto := gin.H{"applied": false, "credential": stored}
 	if blocker := hub.autoApplyBlocker(owner, proposal); blocker != "" {
 		auto["reason"] = blocker
-		runtime.humanEvent(gin.H{"event": "service_proposal", "id": proposal.ID, "agent_code": owner.AgentCode, "agent_name": owner.AgentName,
-			"title": "LocalRouter · " + owner.AgentName + " 申请接入服务", "body": proposal.Reason})
+		runtime.humanEvent(serviceProposalEvent(owner, proposal, blocker))
 	} else {
 		applied, err := hub.decideAs(proposal.ID, proposal.Digest, "approve", "", 0, "auto:"+owner.AgentCode)
 		if err != nil {
@@ -177,6 +176,30 @@ func (hub *serviceWorkspace) prepareService(owner localToken, input servicePropo
 		view["next_action"] = "the service is live for this Agent; preflight, then call within your budget. The human may undo it."
 	}
 	return view, nil
+}
+
+func proposalService(proposal serviceProposal) string {
+	switch {
+	case proposal.Connection != nil:
+		return proposal.Connection.Definition.ID
+	case proposal.Bundle != nil:
+		return proposal.Bundle.ID
+	case proposal.Template != nil:
+		return proposal.Template.ID
+	}
+	return proposal.ID
+}
+
+func serviceProposalEvent(owner localToken, proposal serviceProposal, why string) gin.H {
+	body := proposal.Reason
+	if why != "" {
+		body += "\n需要你处理：" + why
+	}
+	if proposal.Connection != nil {
+		body = "目标：" + proposal.Connection.Definition.BaseURL + "\n" + body
+	}
+	return gin.H{"event": "service_proposal", "id": proposal.ID, "agent_code": owner.AgentCode, "agent_name": owner.AgentName,
+		"title": "LocalRouter · " + owner.AgentName + " 申请接入 " + proposalService(proposal), "body": body}
 }
 
 func (hub *serviceWorkspace) announceAppliedService(owner localToken, proposal serviceProposal) {
