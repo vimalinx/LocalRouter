@@ -66,7 +66,8 @@ Start here
   lr identity schema                Read the live enrollment and policy schema
   lr identity prepare <agent-code> Request a setup-only identity with no call rights
   lr identity request <agent-code> <policy-json|@file>
-                                    Request exact scope; human approves once in Agent Workbench
+                                    Request exact scope; ordinary mode issues and binds it at once
+                                    on the trial budget, strict mode waits for human approval
   lr identity claim                 Privately receive and bind the approved identity
   lr identity cancel                Withdraw a pending request before changing its scope
   lr identity access <policy-json|@file>
@@ -77,6 +78,11 @@ Start here
                                     Verify and remember an issued identity for this Agent session
   lr identity forget                Forget this session's locator; never revoke or delete a Token
   lr guide                          Read the short Agent getting-started guide
+  lr budget [status [<budget-id>]]  Show this Agent's trial or formal budget, or one request
+  lr budget request formal --monthly <usd> [--daily <usd>] [--reserve <usd>] --reason <text> [--wait]
+                                    Ask the human once for a long-term budget you estimated
+  lr budget request trial --reason <text> [--wait]
+                                    Ask for another trial round; the human sets the amount
 
 Discover
   lr status                         Health and compatibility/Protocol Pack readiness
@@ -370,10 +376,14 @@ command_identity_enroll() {
       mv -- "$temporary" "$claim_file"
     fi
     response="$(bearer_request "$claim_file" POST "$base_url/agent/identity-requests" "$body" 30)" || { printf '%s\n' "$response"; return 1; }
-    jq --arg url "$base_url/#tokens" '.data + {registration_url:$url,ready:false,next_action:"Review this request once in Agent Workbench, then run lr identity claim. No Token copying is needed."}' <<<"$response"
-    return
+    # Ordinary mode approves on the trial budget immediately: claim and bind now.
+    if ! jq -e '.data.state == "approved"' >/dev/null <<<"$response"; then
+      jq --arg url "$base_url/#tokens" '.data + {registration_url:$url,ready:false,next_action:"Review this request once in Agent Workbench, then run lr identity claim. No Token copying is needed."}' <<<"$response"
+      return
+    fi
+  else
+    [[ $# == 1 ]] || fail "identity claim/cancel takes no arguments and resumes this Agent session's request"
   fi
-  [[ $# == 1 ]] || fail "identity claim/cancel takes no arguments and resumes this Agent session's request"
   [[ -f "$request_file" && ! -L "$request_file" && "$(stat -c '%u:%a' "$request_file")" = "$EUID:600" ]] || fail "no private request for this session; run lr identity request first"
   read_bearer_token "$claim_file"
   local claim_hash request_id agent_code
@@ -1090,12 +1100,60 @@ command_init() {
     json_fail "agent_identity_mismatch" "the bound Token no longer matches this Agent session" "bind the correct issued identity with lr identity bind; no fallback identity was selected"
     return 1
   fi
-  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready == true or .identity_required == false),next_action:(if .setup_only then "Setup identity is ready for lr setup prepare; service calls remain denied until the reviewed scope is approved." elif .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight." elif .identity_required == false then "Ordinary mode is ready. Use this service Token for authorized calls; independent Agent registration is optional. Token policies and provider pool limits still apply." else "Strict mode requires an independent Agent identity. This is a shared/bootstrap identity. For a new unpublished service use lr identity prepare <agent-code>; for existing services use lr identity request <agent-code> <policy-json> to request exact service scope; the human approves it once in Agent Workbench, then lr identity claim saves it privately. Existing issued files can use lr identity bind. Do not issue Tokens through /local/api." end)}' <<<"$identity"
+  jq --arg file "$api_token_file" --arg console "$base_url/#tokens" '. + {token_file:$file,registration_url:$console,ready:(.identity_ready == true or .identity_required == false),next_action:(if .setup_only then "Setup identity is ready for lr setup prepare; service calls remain denied until the reviewed scope is approved." elif .identity_ready then "Identity is ready. Bind the issued locator once with lr identity bind <agent-code> <token-file>; use lr exec for an authorized operation with automatic model checking and preflight. lr budget shows the remaining trial or formal budget." elif .identity_required == false and .auto_enrollment == true then "Ordinary mode is ready. For separate billing, lr identity request <agent-code> <policy-json> issues and binds your own identity at once on a small trial budget; when it runs out, lr budget request asks the human once. Token policies and provider pool limits still apply." elif .identity_required == false then "Ordinary mode is ready. Use this service Token for authorized calls; independent Agent registration is optional. Token policies and provider pool limits still apply." else "Strict mode requires an independent Agent identity. This is a shared/bootstrap identity. For a new unpublished service use lr identity prepare <agent-code>; for existing services use lr identity request <agent-code> <policy-json> to request exact service scope; the human approves it once in Agent Workbench, then lr identity claim saves it privately. Existing issued files can use lr identity bind. Do not issue Tokens through /local/api." end)}' <<<"$identity"
   jq -e '.identity_ready == true or .identity_required == false' >/dev/null <<<"$identity"
 }
 
 command_guide() {
   curl --noproxy '*' --fail-with-body --silent --show-error "$base_url/docs/agent-start.md"
+}
+
+command_budget() {
+  local action="${1:-status}"
+  case "$action" in
+    status)
+      if [[ $# == 2 ]]; then
+        [[ "$2" =~ ^budget-[a-f0-9]{24}$ ]] || fail "use lr budget status [<budget-id>]"
+        authenticated_request GET "$base_url/agent/budget-requests/$2" | jq '.data'
+        return
+      fi
+      [[ $# -le 1 ]] || fail "use lr budget status [<budget-id>]"
+      authenticated_request GET "$base_url/agent/whoami" | jq '{agent_code, auto_enrollment, budget}'
+      ;;
+    request)
+      [[ $# -ge 2 && ( "$2" == formal || "$2" == trial ) ]] || fail "use lr budget request <formal|trial> ... --reason <text>"
+      local kind="$2" reason="" wait=false body response id state
+      local -A amounts=()
+      shift 2
+      while (($#)); do
+        case "$1" in
+          --monthly|--daily|--reserve)
+            [[ $# -ge 2 && "$2" =~ ^[0-9]+(\.[0-9]+)?$ ]] || fail "$1 takes a USD amount such as 5 or 0.5"
+            amounts["${1#--}"]="$2"; shift 2 ;;
+          --reason) [[ $# -ge 2 ]] || fail "--reason takes a text"; reason="$2"; shift 2 ;;
+          --wait) wait=true; shift ;;
+          *) fail "unknown budget request option: $1" ;;
+        esac
+      done
+      body="$(jq -cn --arg kind "$kind" --arg reason "$reason" --arg monthly "${amounts[monthly]:-}" --arg daily "${amounts[daily]:-}" --arg reserve "${amounts[reserve]:-}" \
+        '{kind:$kind,reason:$reason} + (if $monthly != "" then {monthly_usd:($monthly|tonumber)} else {} end) + (if $daily != "" then {daily_usd:($daily|tonumber)} else {} end) + (if $reserve != "" then {request_reserve_usd:($reserve|tonumber)} else {} end)')"
+      response="$(authenticated_request POST "$base_url/agent/budget-requests" "$body" 30)" || { printf '%s\n' "$response"; return 1; }
+      id="$(jq -r '.data.request.id' <<<"$response")"
+      state="$(jq -r '.data.request.state' <<<"$response")"
+      # Waiting only observes; it never resubmits or decides.
+      if [[ "$wait" == true ]]; then
+        local deadline=$((SECONDS + 900))
+        while [[ "$state" == pending && $SECONDS -lt $deadline ]]; do
+          sleep 5
+          response="$(authenticated_request GET "$base_url/agent/budget-requests/$id" '' 30)" || { printf '%s\n' "$response"; return 1; }
+          state="$(jq -r '.data.request.state' <<<"$response")"
+        done
+      fi
+      jq '.data' <<<"$response"
+      [[ "$state" != denied ]]
+      ;;
+    *) fail "use lr budget [status [<budget-id>]] or lr budget request <formal|trial> ..." ;;
+  esac
 }
 
 command_whoami() {
@@ -1622,6 +1680,7 @@ case "$command_name" in
   mcp-list) command_mcp_list "$@" ;;
   mcp-call) command_mcp_call "$@" ;;
   whoami) command_whoami "$@" ;;
+  budget) command_budget "$@" ;;
   setup) command_setup "$@" ;;
   manage-status) command_manage_status "$@" ;;
   manage-list) command_manage_list "$@" ;;

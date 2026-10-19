@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 
 import { AgentBillingDialog, BudgetSummary, usdInputMicros } from './agent-billing'
+import { BudgetRequests } from './budget-requests'
 import { IdentityRequests } from './identity-requests'
 import { EmptyState } from '@/components/empty-state'
 import { SectionHeader } from '@/components/section-header'
@@ -307,6 +308,7 @@ export function TokensPage(props: {
         method: 'PUT',
         body: JSON.stringify({
           ...props.policies?.find((item) => item.token_id === policyTarget.id),
+          ...(usdInputMicros(draft.dailyBudget) || usdInputMicros(draft.monthlyBudget) ? { budget_tier: '', trial_budget_usd_micros: 0 } : {}),
           capabilities: draft.maintainer ? ['localrouter.maintain'] : [],
           requests_per_minute: integerValue(draft.requestsPerMinute),
           daily_request_limit: integerValue(draft.dailyRequestLimit),
@@ -418,6 +420,7 @@ export function TokensPage(props: {
       </section> : null}
       {billingTarget ? <AgentBillingDialog key={billingTarget.id} agent={billingTarget} adminToken={props.adminToken} onClose={() => setBillingTarget(null)} onChanged={props.onChanged} /> : null}
 
+      <BudgetRequests adminToken={props.adminToken} onChanged={props.onChanged} />
       <IdentityRequests adminToken={props.adminToken} onChanged={props.onChanged} />
 
       <details className='group border-y py-3'>

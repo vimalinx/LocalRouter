@@ -35,7 +35,7 @@ export function IdentityRequests({ adminToken, onChanged }: { adminToken: string
   return <section className='border-y py-3' aria-labelledby='identity-requests-title'>
     <div className='flex flex-wrap items-center justify-between gap-2'>
       <div><h2 id='identity-requests-title' className='text-sm font-semibold'>接入申请 <span className='text-muted-foreground'>{pending.length}</span></h2>
-        <p className='mt-1 text-xs text-muted-foreground'>{pending.length ? '核对范围后批准，凭据会自动交付给申请的 Agent。' : '暂无待处理申请。需要独立身份或扩大权限时，申请会显示在这里。'}</p></div>
+        <p className='mt-1 text-xs text-muted-foreground'>{pending.length ? '核对范围后批准，凭据会自动交付给申请的 Agent。' : '暂无待处理申请。普通模式下 Agent 身份自动批准并从试用额度开始；严格模式下申请会显示在这里。'}</p></div>
       <Button variant='ghost' size='sm' disabled={busy} onClick={reload}><RefreshCw aria-hidden='true' />刷新申请</Button>
     </div>
     {error ? <p role='alert' className='mt-3 text-sm text-destructive'>{error}</p> : null}

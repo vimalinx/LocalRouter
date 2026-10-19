@@ -13,7 +13,7 @@ lr describe <pack> <operation>
 lr exec <pack> <operation> @request.json
 ```
 
-- `lr init` 是只读检查。普通模式 `identity_required=false` 时，有效的现有 Service Token（包括默认 Token）即可调用，无需额外登记。严格模式才要求独立 Agent；已有身份的工作区绑定在两种模式下都继续检查。要求 `ready=true`；Token、能力包和账号池限制始终有效。
+- `lr init` 是只读检查。普通模式 `identity_required=false` 时，有效的现有 Service Token（包括默认 Token）即可调用，无需额外登记。需要单独计费时，`auto_enrollment=true` 表示 `lr identity request` 会立即签发并绑定独立身份，从试用额度开始。严格模式才要求独立 Agent；已有身份的工作区绑定在两种模式下都继续检查。要求 `ready=true`；Token、能力包和账号池限制始终有效。
 - 首次选择服务时，查看 `lr status`、`lr tree` 和操作契约中的输入、费用、验证范围与重试规则。已明确服务时不必重复浏览全目录。`ready=true` 表示就绪，不证明真实供应商调用成功；缺少价格不表示免费。
 - `lr exec` 适用于完整 Protocol Pack 操作：自动核对身份、当前契约和精确模型，预检通过后发送一次正式请求，并私下保存响应、退出状态和追踪 ID。它会自动领取已批准的待接入身份。已获人批准的范围内无需逐次询问；准备和预检不授予新权限。
 - JSON 可直接传对象，也可传 `@文件`。需要路径和查询参数时，使用 `lr exec <pack> <operation> <body-json> <path-json> <query-json>`。三份 JSON 默认 `{}`；GET 的 body 必须为 `{}`。路径参数值必须是字符串，查询参数可以是字符串、数字或布尔值。
@@ -49,13 +49,15 @@ lr result <call-id> --refresh
 
 | 需要 | 路径 |
 |---|---|
-| 严格模式要求独立身份，或希望分别授权 | `lr identity request <agent-code> @policy.json` → 人在返回的 registration_url（`/#tokens`，访问权限）批准 → `lr identity claim` |
-| 新服务尚未发布，只需要准备接入方案 | `lr identity prepare <agent-code>` → 人批准“仅准备身份” → `lr identity claim`；该身份不能调用任何服务 |
+| 独立身份（普通模式） | `lr identity request <agent-code> @policy.json`：立即签发、领取并绑定，从试用额度开始，无需等待 |
+| 严格模式要求独立身份 | 同一命令；申请等人在 registration_url（`/#tokens`）批准，再运行 `lr identity claim` |
+| 新服务尚未发布，只需要准备接入方案 | `lr identity prepare <agent-code>`；普通模式立即生效，严格模式等人批准后 `lr identity claim`；该身份不能调用任何服务 |
+| 试用或正式预算用完 | `lr budget request formal --monthly <usd> [--daily <usd>] --reason <理由> --wait`，或 `lr budget request trial --reason <理由> --wait`；人批准一次 |
 | 已有人签发独立 Token | `lr identity bind <agent-code> <token-file>`，核对编码、工作区与仅调用权限 |
 | 扩大现有服务范围或限额 | `lr identity access @complete-policy.json` → 人批准；`lr identity access-status <id>` 看进度 |
 | 接入新服务或能力包 | 独立身份运行 `lr setup templates` → `lr setup template <id> <version>` → `lr setup schema` → `lr setup prepare @proposal.json` → 人审阅精确方案并批准 |
 
-调用权限申请须明确 Pack 和 Pack 限定的操作，来自当前公开契约，不使用通配范围；仅准备身份使用 `{"setup_only":true}`，不填写这些选择器。`lr identity schema` 公布完整字段和类型；按需限制模型、每日请求、频率、并发和截止时间。请求不读取默认/管理员 Token，领取用私有证明，凭据只保存到 0600 文件。相同会话的相同申请复用原身份；申请及领取窗口为 24 小时。修改待接入范围先 `lr identity cancel`，已批准身份在控制台撤销。批准不能恢复已撤销身份，也不清零用量。
+调用权限申请须明确 Pack 和 Pack 限定的操作，来自当前公开契约，不使用通配范围；申请中的金额字段会被忽略，金额只能通过 `lr budget request` 由人决定；仅准备身份使用 `{"setup_only":true}`，不填写这些选择器。`lr identity schema` 公布完整字段和类型；按需限制模型、每日请求、频率、并发和截止时间。请求不读取默认/管理员 Token，领取用私有证明，凭据只保存到 0600 文件。相同会话的相同申请复用原身份；申请及领取窗口为 24 小时。修改待接入范围先 `lr identity cancel`，已批准身份在控制台撤销。批准不能恢复已撤销身份，也不清零用量。
 
 身份绑定按 Agent 会话、工作区和服务地址隔离。Codex 使用会话 ID，其他宿主设置稳定独立的 `LOCALROUTER_AGENT_SESSION`。显式 `LOCALROUTER_API_TOKEN_FILE` 优先；需要自动绑定时先去掉该覆盖。`lr identity forget` 只忘记定位器。身份未准备好时仍可阅读 `lr guide/tree/docs`。
 
@@ -74,6 +76,16 @@ lr result <call-id> --refresh
 遇到 `identity_scope_unpublished`，按错误的 `next_action` 先取消残留申请，再走 `lr identity prepare`；不要借无关服务充当载体。已有独立身份可直接准备新服务。
 
 旧提案缺少完整权限快照、权限发生变化时，提案所有者用 `lr setup reprepare <id> <digest>` 生成替代方案；旧连接为禁用状态且本次意图是接入启用服务时，明确加 `--enable`。控制台提供同样的重新准备入口。旧记录保留并指向新提案；重试会返回同一替代方案，不继承旧批准、不安装、不调用。人必须审阅新的摘要、完整权限和启用状态，再批准。正在 `applying` 的提案须先 reconcile，不能以重新准备绕过未知结果。
+
+## 试用与正式预算
+
+新签发的独立身份从试用档开始：每个 Agent 一次性试用额度（默认 $2），所有试用 Agent 每个 UTC 自然月合计不超过试用总额（默认 $5），金额都由人在控制台设置。`lr budget` 查看当前档位和剩余金额。
+
+- 价格不固定的调用先按单次预留（默认 $0.02）占用，调用后按上游报告的真实费用结算；最后一笔可能略超试用额度。
+- 用完时调用在发往上游之前被拦下，返回 `agent_trial_exhausted` 或 `agent_trial_pool_exhausted`。不要换身份或改用默认 Token 绕过。
+- 转为长期使用时，先按供应商公布的价格和预计用量估算金额，再运行 `lr budget request formal --monthly <usd> [--daily <usd>] --reason <用途与估算依据>`。只需要再试一下时用 `lr budget request trial --reason <理由>`，金额由人决定。
+- 加 `--wait` 会最多等 15 分钟，期间只查询状态，不重复提交。人可在批准时调低金额；`denied` 表示拒绝，不要原样重提。
+- 正式预算按 UTC 日/月重置，只统计转正之后的正式消费。扩大服务范围（`lr identity access`）不会改变金额。
 
 ## 自主额度与维护
 

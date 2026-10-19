@@ -66,6 +66,8 @@ type runtimeConfig struct {
 	AdminTokenFile      string
 	APITokenFile        string
 	UpdateCheckEnabled  bool
+	// Desktop notifications let the human decide budget requests in place.
+	DesktopNotifications bool
 }
 
 type localRuntime struct {
@@ -308,6 +310,10 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 	if err != nil {
 		return runtimeConfig{}, err
 	}
+	desktopNotifications, err := parseEnvironmentBooleanDefault("LOCAL_GATEWAY_DESKTOP_NOTIFICATIONS", false)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
 	lanHost := ""
 	lanPort := 0
 	var lanAllowedOrigins []string
@@ -392,24 +398,25 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 	}
 
 	return runtimeConfig{
-		Host:                host,
-		Port:                port,
-		LANEnabled:          lanEnabled,
-		LANHost:             lanHost,
-		LANPort:             lanPort,
-		LANAllowedOrigins:   lanAllowedOrigins,
-		LANPublicBaseURL:    lanPublicBaseURL,
-		ConfigDir:           configDir,
-		DataDir:             dataDir,
-		StateDir:            stateDir,
-		CacheDir:            cacheDir,
-		ProtocolDir:         protocolDir,
-		ChannelProfilesPath: channelProfilesPath,
-		DatabasePath:        filepath.Join(dataDir, "localrouter.db"),
-		AdminAuthFile:       filepath.Join(dataDir, "admin-auth.json"),
-		AdminTokenFile:      filepath.Join(dataDir, "admin-token"),
-		APITokenFile:        filepath.Join(dataDir, "api-token"),
-		UpdateCheckEnabled:  updateCheckEnabled,
+		Host:                 host,
+		Port:                 port,
+		LANEnabled:           lanEnabled,
+		LANHost:              lanHost,
+		LANPort:              lanPort,
+		LANAllowedOrigins:    lanAllowedOrigins,
+		LANPublicBaseURL:     lanPublicBaseURL,
+		ConfigDir:            configDir,
+		DataDir:              dataDir,
+		StateDir:             stateDir,
+		CacheDir:             cacheDir,
+		ProtocolDir:          protocolDir,
+		ChannelProfilesPath:  channelProfilesPath,
+		DatabasePath:         filepath.Join(dataDir, "localrouter.db"),
+		AdminAuthFile:        filepath.Join(dataDir, "admin-auth.json"),
+		AdminTokenFile:       filepath.Join(dataDir, "admin-token"),
+		APITokenFile:         filepath.Join(dataDir, "api-token"),
+		UpdateCheckEnabled:   updateCheckEnabled,
+		DesktopNotifications: desktopNotifications,
 	}, nil
 }
 
@@ -865,6 +872,7 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 	admin.Use(localAdminAuth(runtime.adminAuth, runtime.adminToken, runtime.rootUser))
 	registerServiceAdminRoutes(admin, runtime)
 	registerIdentityAdminRoutes(admin, runtime)
+	registerBudgetAdminRoutes(admin, runtime)
 	{
 		admin.GET("/summary", localSummary(runtime))
 		admin.POST("/update/check", handleUpdateCheck(runtime))

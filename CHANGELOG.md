@@ -6,6 +6,17 @@ published.
 
 ## Unreleased
 
+- Trial budgets replace identity review in ordinary mode. `lr identity request`
+  and `lr identity prepare` now issue and bind immediately; every new identity
+  starts on a one-time trial ($2 by default) drawn from a shared monthly trial
+  pool ($5 by default). Agent-supplied money fields are ignored.
+- Agents ask for more money with `lr budget request formal|trial`; the human
+  approves once in the console (optionally lowering the amount) or from a
+  desktop notification (`LOCAL_GATEWAY_DESKTOP_NOTIFICATIONS=true`).
+- Contract schema 16 adds `auto_enrollment` and `budget` to `/agent/whoami`,
+  the `agent_trial_exhausted` and `agent_trial_pool_exhausted` codes, and the
+  `/agent/budget-requests` routes. Scope changes keep the approved budget.
+
 - Complete new-service enrollment discovery and structured recovery errors; publish live enrollment and Pack authoring schemas, credential-free examples, and exact-digest proposal repreparation with preserved history and fresh approval.
 - Contract schema 15 adds setup-only identities (`lr identity prepare`) that can
   prepare proposals but never call services, and reports `setup_only`,

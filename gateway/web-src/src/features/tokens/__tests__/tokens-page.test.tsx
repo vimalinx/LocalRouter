@@ -7,6 +7,7 @@ import { adminRequest } from '@/lib/api'
 import type { LocalToken } from '@/lib/types'
 
 vi.mock('@/features/tokens/identity-requests', () => ({ IdentityRequests: () => null }))
+vi.mock('@/features/tokens/budget-requests', () => ({ BudgetRequests: () => null }))
 
 vi.mock('@/lib/api', () => ({
   adminRequest: vi.fn(),

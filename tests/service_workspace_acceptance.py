@@ -220,6 +220,9 @@ try:
         original_session = env['LOCALROUTER_AGENT_SESSION']
         env['LOCALROUTER_AGENT_SESSION'] = 'enrollment-session'
         requested_policy = {'packs':['demo-search'],'operations':['demo-search.models','demo-search.generate'],'models':['fixture-model'],'daily_request_limit':20}
+        # Automatic enrollment is the default; this section covers human review.
+        budget_settings = api('/local/api/agent-budget-settings')['data']
+        api('/local/api/agent-budget-settings','PUT',{**budget_settings,'auto_approve_identities':False})
         enrolled = cli('identity','request','enrolled-fixture',json.dumps(requested_policy))
         assert enrolled['state'] == 'pending' and not enrolled['ready']
         assert 'token' not in enrolled and Provider.generation_calls == before_generations+2
@@ -268,6 +271,9 @@ try:
         pending = payload(cli('setup','prepare','@'+str(input_path)))['proposal']
         env.update(XDG_DATA_HOME=str(root/'client-data'),LOCALROUTER_AGENT_SESSION='browser-enrollment')
         env.pop('LOCALROUTER_API_TOKEN_FILE',None)
+        # The demo shows requests awaiting review, so turn automatic enrollment off.
+        budget_settings = api('/local/api/agent-budget-settings')['data']
+        api('/local/api/agent-budget-settings','PUT',{**budget_settings,'auto_approve_identities':False})
         identity_request=cli('identity','request','browser-agent',json.dumps({'packs':['demo-search'],'operations':['demo-search.models','demo-search.generate'],'models':['fixture-model'],'daily_request_limit':50,'max_in_flight':2}))
         env['LOCALROUTER_AGENT_SESSION']='browser-setup-only'
         setup_request=cli('identity','prepare','setup-agent')

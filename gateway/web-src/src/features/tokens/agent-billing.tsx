@@ -21,7 +21,12 @@ export function microUSD(value: number) {
 }
 
 export function BudgetSummary({ budget }: { budget?: AgentBudget }) {
-  if (!budget || (!budget.daily_limit_usd_micros && !budget.monthly_limit_usd_micros)) return null
+  if (!budget) return null
+  if (budget.tier === 'trial') return <div className='space-y-1 text-xs' aria-label='金额预算'>
+    <p>试用：{microUSD((budget.trial_spent_usd_micros || 0) + (budget.trial_held_usd_micros || 0))} / {microUSD(budget.trial_limit_usd_micros || 0)} · 可用 {microUSD(budget.trial_remaining_usd_micros || 0)}</p>
+    {budget.trial_remaining_usd_micros === 0 ? <p className='text-amber-600'>试用额度已用完，Agent 可以申请转为正式预算。</p> : null}
+  </div>
+  if (!budget.daily_limit_usd_micros && !budget.monthly_limit_usd_micros) return null
   return <div className='space-y-1 text-xs' aria-label='金额预算'>
     {budget.daily_limit_usd_micros > 0 ? <p>日预算：{microUSD(budget.daily_spent_usd_micros)} / {microUSD(budget.daily_limit_usd_micros)} · 可用 {microUSD(budget.daily_remaining_usd_micros || 0)}</p> : null}
     {budget.monthly_limit_usd_micros > 0 ? <p>月预算：{microUSD(budget.monthly_spent_usd_micros)} / {microUSD(budget.monthly_limit_usd_micros)} · 可用 {microUSD(budget.monthly_remaining_usd_micros || 0)}</p> : null}

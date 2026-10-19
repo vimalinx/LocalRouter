@@ -984,6 +984,7 @@ func registerProtocolConsumerRoutes(engine *gin.Engine, runtime localRuntime) {
 	agent.GET("/whoami", handleAgentWhoAmI(runtime))
 	agent.POST("/access-requests", handleIdentityAccessRequest(runtime))
 	agent.GET("/access-requests/:id", handleIdentityAccessRequest(runtime))
+	registerBudgetAgentRoutes(agent, runtime)
 	agent.POST("/resolve", runtime.protocols.handleAgentResolve(runtime))
 	agent.POST("/compare", runtime.protocols.handleAgentCompare(runtime))
 	agent.GET("/operations", runtime.protocols.handleAgentCatalog(runtime))

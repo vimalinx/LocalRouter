@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "15"
+const agentContractSchemaVersion = "16"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -136,7 +136,7 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 			"binding": "service-token", "registration": "operator-issued", "console": console,
 			"required_fields": []string{"agent_code", "agent_name", "workspace"},
 			"whoami":          "/agent/whoami", "secret_values_returned": false, "start_command": "lr init", "getting_started": "/docs/agent-start.md",
-			"enrollment":    gin.H{"available": requestServerScope(c) != lanServiceScope, "request": "/agent/identity-requests", "cli": "lr identity request <agent-code> <policy-json>", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "setup_rule": setupIdentityAction, "schema": "/docs/identity-request.schema.json", "claim_cli": "lr identity claim", "approval": "human-reviewed exact scope", "delivery": "private claim; CLI saves mode-600 credential without displaying it", "scope_changes": "/agent/access-requests", "scope_change_cli": "lr identity access <complete-policy-json>"},
+			"enrollment":    gin.H{"available": requestServerScope(c) != lanServiceScope, "request": "/agent/identity-requests", "cli": "lr identity request <agent-code> <policy-json>", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "setup_rule": setupIdentityAction, "schema": "/docs/identity-request.schema.json", "claim_cli": "lr identity claim", "approval": "automatic on the trial budget in ordinary mode; human-reviewed exact scope in strict mode", "budget": gin.H{"status_cli": "lr budget", "request_cli": "lr budget request formal --monthly <usd> [--daily <usd>] --reason <why> | lr budget request trial --reason <why>", "request": "/agent/budget-requests", "rule": "new identities start on a small trial; the human approves any further money once"}, "delivery": "private claim; CLI saves mode-600 credential without displaying it", "scope_changes": "/agent/access-requests", "scope_change_cli": "lr identity access <complete-policy-json>"},
 			"reuse_command": "lr identity bind <agent-code> <token-file>", "reuse_scope": "Agent session, workspace and service origin; locator only",
 		},
 		"flow":       []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
@@ -243,18 +243,14 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 			"maintenance_access": false, "contract_digest": runtime.protocols.currentDigest(),
 			"contract_schema_version": agentContractSchemaVersion,
 		}
-		strictMode := false
-		if runtime.policies != nil && runtime.policies.allowances != nil {
-			if err := runtime.policies.allowances.transaction(false, func(doc *serviceAllowanceDocument) error {
-				strictMode = allowanceSettings(doc).Enabled
-				return nil
-			}); err != nil {
-				writeAgentError(c, http.StatusServiceUnavailable, "strict_mode_unavailable", "cannot read strict mode settings", "local settings unavailable", false, "localrouter", "restore readable service allowance settings, then retry the identity check", nil, nil, nil)
-				return
-			}
+		strictMode, err := runtime.strictMode()
+		if err != nil {
+			writeAgentError(c, http.StatusServiceUnavailable, "strict_mode_unavailable", "cannot read strict mode settings", "local settings unavailable", false, "localrouter", "restore readable service allowance settings, then retry the identity check", nil, nil, nil)
+			return
 		}
 		response["strict_mode"] = strictMode
 		response["identity_required"] = strictMode
+		response["auto_enrollment"] = runtime.autoApproveIdentities()
 
 		if runtime.store != nil && tokenID > 0 {
 			if token, err := runtime.store.tokenByID(runtime.rootUser.ID, tokenID, false); err == nil {
@@ -278,6 +274,11 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 			response["setup_only"] = policy.SetupOnly
 			response["service_access"] = !policy.SetupOnly && !policyHasCapability(policy, localRouterMaintainCapability)
 			response["maintenance_access"] = policyHasCapability(policy, localRouterMaintainCapability)
+			if budgetEnabled(policy) && runtime.policies.budgets != nil {
+				if view, err := runtime.policies.budgets.view(tokenID, policy, time.Now()); err == nil {
+					response["budget"] = view
+				}
+			}
 		} else {
 			response["unrestricted"] = true
 			response["policy"] = gin.H{"surfaces": []string{"*"}, "packs": []string{"*"}, "operations": []string{"*"}}
@@ -606,7 +607,7 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 			case "service_allowance":
 				nextAction = "ask the human to review the service allowance; do not retry automatically"
 			case "agent_budget":
-				nextAction = "ask the human to review the Agent budget, reservation or unsettled charges; preflight again after reconciliation"
+				nextAction = agentBudgetNextAction(budgetCode)
 			case "readiness":
 				nextAction = descriptor.NextAction
 			default:

@@ -12,7 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Enrollment proves possession of a private claim, not authority. Only the
+// Enrollment proves possession of a private claim, not authority. In ordinary
+// mode with a budget ledger the request activates immediately on the trial
+// tier, so money rather than scope is the human's decision. Otherwise only the
 // loopback human decision endpoint activates a service identity.
 type identityRequest struct {
 	ID               string           `json:"id"`
@@ -136,12 +138,21 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 			identityValidationError(c, err)
 			return
 		}
+		// Money only changes through budget requests; scope changes keep it.
+		current, _ := runtime.policies.policyFor(token.ID)
+		copyBudgetFields(&request.Policy, current)
+		auto := runtime.autoApproveIdentities()
 		data, _ := json.Marshal(request)
 		request.Digest = identityHash(string(data))
 		request.ID = "access-" + request.Digest[:24]
 		runtime.store.identityMu.Lock()
 		defer runtime.store.identityMu.Unlock()
 		if previous, _, err := loadIdentityRequest(runtime.store, request.ID); err == nil {
+			if auto && previous.State == "pending" {
+				if approved, status, _ := applyAccessLocked(runtime, previous); status == 0 {
+					previous = approved
+				}
+			}
 			localSuccess(c, previous)
 			return
 		} else if err != sql.ErrNoRows {
@@ -163,6 +174,11 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 		if _, err := runtime.store.db.Exec(`INSERT INTO identity_requests (id,claim_hash,document,state,created_at,expires_at) VALUES (?,'',?,'pending',?,?)`, request.ID, string(data), request.CreatedAt, request.ExpiresAt); err != nil {
 			identityFailure(c, 500, "cannot save access request")
 			return
+		}
+		if auto {
+			if approved, status, _ := applyAccessLocked(runtime, request); status == 0 {
+				request = approved
+			}
 		}
 		localSuccess(c, request)
 	}
@@ -245,6 +261,10 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 			identityValidationError(c, err)
 			return
 		}
+		auto := runtime.autoApproveIdentities()
+		if settings, ok := runtime.budgetSettings(); ok {
+			applyTrialBudget(&request.Policy, settings)
+		}
 		canonical, _ := json.Marshal(request)
 		request.Digest = identityHash(string(canonical))
 		request.ID = "identity-" + hash[:24]
@@ -254,6 +274,11 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 			if previous.Digest != request.Digest {
 				identityFailure(c, 409, "this claim is already bound to a different request")
 				return
+			}
+			if auto && previous.State == "pending" {
+				if approved, status, _ := issueIdentityLocked(runtime, previous); status == 0 {
+					previous = approved
+				}
 			}
 			localSuccess(c, previous)
 			return
@@ -277,6 +302,12 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 		if err != nil {
 			identityFailure(c, 500, "cannot save identity request")
 			return
+		}
+		// A failed automatic approval leaves the request pending for the human.
+		if auto {
+			if approved, status, _ := issueIdentityLocked(runtime, request); status == 0 {
+				request = approved
+			}
 		}
 		localSuccess(c, request)
 	}
@@ -405,64 +436,71 @@ func handleIdentityDecision(runtime localRuntime) gin.HandlerFunc {
 			identityFailure(c, 409, "scope dependencies changed; prepare and review a new request")
 			return
 		}
+		var status int
+		var message string
 		if request.OwnerTokenID > 0 {
-			handleIdentityAccessDecision(c, runtime, request)
+			request, status, message = applyAccessLocked(runtime, request)
+		} else {
+			request, status, message = issueIdentityLocked(runtime, request)
+		}
+		if status != 0 {
+			identityFailure(c, status, message)
 			return
 		}
-		secret, err := randomSecret(32, "")
-		if err != nil {
-			identityFailure(c, 500, "cannot prepare identity")
-			return
-		}
-		// Hold policy readers until both durable policy and token activation have
-		// committed. An interrupted approval cannot expose an unrestricted token.
-		runtime.policies.mu.Lock()
-		defer runtime.policies.mu.Unlock()
-		tx, err := runtime.store.db.Begin()
-		if err != nil {
-			identityFailure(c, 500, "cannot begin approval")
-			return
-		}
-		defer tx.Rollback()
-		result, err := tx.Exec(`INSERT INTO tokens (user_id,key,status,name,agent_code,agent_name,workspace,runtime,created_time,accessed_time,expired_time,unlimited_quota,"group") VALUES (?,?,1,?,?,?,?,?,?,0,-1,1,'default')`, runtime.rootUser.ID, secret, request.AgentName, request.AgentCode, request.AgentName, request.Workspace, request.Runtime, time.Now().Unix())
-		if err != nil {
-			identityFailure(c, 409, "Agent code already exists or identity cannot be issued; no authority was changed")
-			return
-		}
-		id, err := result.LastInsertId()
-		if err != nil {
-			identityFailure(c, 500, "cannot read issued identity")
-			return
-		}
-		request.Policy.TokenID = int(id)
-		previous, existed := runtime.policies.policies[int(id)]
-		runtime.policies.policies[int(id)] = request.Policy
-		if err = runtime.policies.saveLocked(); err == nil {
-			_, err = tx.Exec(`UPDATE identity_requests SET state='approved', token_id=?, issued_key_hash=? WHERE id=? AND state='pending'`, id, identityHash(secret), request.ID)
-			if err == nil {
-				err = tx.Commit()
-			}
-		}
-		if err != nil {
-			if existed {
-				runtime.policies.policies[int(id)] = previous
-			} else {
-				delete(runtime.policies.policies, int(id))
-			}
-			_ = runtime.policies.saveLocked()
-			identityFailure(c, 500, "approval did not complete; inspect this request before retrying")
-			return
-		}
-		request.State, request.TokenID = "approved", int(id)
 		localSuccess(c, request)
 	}
 }
 
-func handleIdentityAccessDecision(c *gin.Context, runtime localRuntime, request identityRequest) {
+// issueIdentityLocked activates a pending enrollment. Callers hold identityMu.
+func issueIdentityLocked(runtime localRuntime, request identityRequest) (identityRequest, int, string) {
+	secret, err := randomSecret(32, "")
+	if err != nil {
+		return request, 500, "cannot prepare identity"
+	}
+	// Hold policy readers until both durable policy and token activation have
+	// committed. An interrupted approval cannot expose an unrestricted token.
+	runtime.policies.mu.Lock()
+	defer runtime.policies.mu.Unlock()
+	tx, err := runtime.store.db.Begin()
+	if err != nil {
+		return request, 500, "cannot begin approval"
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`INSERT INTO tokens (user_id,key,status,name,agent_code,agent_name,workspace,runtime,created_time,accessed_time,expired_time,unlimited_quota,"group") VALUES (?,?,1,?,?,?,?,?,?,0,-1,1,'default')`, runtime.rootUser.ID, secret, request.AgentName, request.AgentCode, request.AgentName, request.Workspace, request.Runtime, time.Now().Unix())
+	if err != nil {
+		return request, 409, "Agent code already exists or identity cannot be issued; no authority was changed"
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return request, 500, "cannot read issued identity"
+	}
+	request.Policy.TokenID = int(id)
+	previous, existed := runtime.policies.policies[int(id)]
+	runtime.policies.policies[int(id)] = request.Policy
+	if err = runtime.policies.saveLocked(); err == nil {
+		_, err = tx.Exec(`UPDATE identity_requests SET state='approved', token_id=?, issued_key_hash=? WHERE id=? AND state='pending'`, id, identityHash(secret), request.ID)
+		if err == nil {
+			err = tx.Commit()
+		}
+	}
+	if err != nil {
+		if existed {
+			runtime.policies.policies[int(id)] = previous
+		} else {
+			delete(runtime.policies.policies, int(id))
+		}
+		_ = runtime.policies.saveLocked()
+		return request, 500, "approval did not complete; inspect this request before retrying"
+	}
+	request.State, request.TokenID = "approved", int(id)
+	return request, 0, ""
+}
+
+// applyAccessLocked activates a pending scope change. Callers hold identityMu.
+func applyAccessLocked(runtime localRuntime, request identityRequest) (identityRequest, int, string) {
 	token, err := runtime.store.tokenByID(runtime.rootUser.ID, request.OwnerTokenID, false)
 	if err != nil || (token.ExpiredTime >= 0 && token.ExpiredTime <= time.Now().Unix()) || token.Status != localStatusEnabled || token.AgentCode != request.AgentCode || token.Workspace != request.Workspace {
-		identityFailure(c, 409, "identity changed or was revoked; approval cannot restore it")
-		return
+		return request, 409, "identity changed or was revoked; approval cannot restore it"
 	}
 	// CAS is checked while holding the same policy lock used by all updates.
 	runtime.policies.mu.Lock()
@@ -473,8 +511,7 @@ func handleIdentityAccessDecision(c *gin.Context, runtime localRuntime, request 
 		Policy localTokenPolicy
 	}{exists, previous})
 	if identityHash(string(data)) != request.BasePolicyDigest {
-		identityFailure(c, 409, "current policy changed; prepare and review a new access request")
-		return
+		return request, 409, "current policy changed; prepare and review a new access request"
 	}
 	request.Policy.TokenID = token.ID
 	runtime.policies.policies[token.ID] = request.Policy
@@ -489,9 +526,8 @@ func handleIdentityAccessDecision(c *gin.Context, runtime localRuntime, request 
 			delete(runtime.policies.policies, token.ID)
 		}
 		_ = runtime.policies.saveLocked()
-		identityFailure(c, 500, "access approval did not complete; inspect current policy and request before retrying")
-		return
+		return request, 500, "access approval did not complete; inspect current policy and request before retrying"
 	}
 	request.State, request.TokenID = "approved", token.ID
-	localSuccess(c, request)
+	return request, 0, ""
 }

@@ -205,6 +205,8 @@ export type AgentUsage = {
 
 export type TokenPolicy = {
   setup_only?: boolean
+  budget_tier?: 'trial' | ''
+  trial_budget_usd_micros?: number
   daily_budget_usd_micros?: number
   monthly_budget_usd_micros?: number
   request_reserve_usd_micros?: number
@@ -534,6 +536,28 @@ export type AgentBudget = {
   daily_remaining_usd_micros?: number
   monthly_remaining_usd_micros?: number
   period_timezone: string
+  tier?: 'trial' | 'formal'
+  trial_limit_usd_micros?: number
+  trial_spent_usd_micros?: number
+  trial_held_usd_micros?: number
+  trial_remaining_usd_micros?: number
+  trial_pool_limit_usd_micros?: number
+  trial_pool_used_usd_micros?: number
+}
+
+export type AgentBudgetSettings = {
+  auto_approve_identities: boolean
+  trial_per_agent_usd_micros: number
+  trial_pool_monthly_usd_micros: number
+  trial_request_reserve_usd_micros: number
+  revision: number
+}
+
+export type AgentBudgetRequest = {
+  id: string; token_id: number; agent_code: string; agent_name: string; kind: 'trial' | 'formal'
+  daily_usd_micros?: number; monthly_usd_micros?: number; request_reserve_usd_micros?: number
+  reason: string; state: 'pending' | 'approved' | 'denied' | 'superseded'; created_at: number
+  decided_at?: number; decided_by?: string; trial_spent_usd_micros: number
 }
 export type AgentBillingEntry = {
   id: string; token_id: number; created_at: number; service: string; operation: string; model: string

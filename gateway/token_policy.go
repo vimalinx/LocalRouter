@@ -24,6 +24,8 @@ const (
 
 type localTokenPolicy struct {
 	SetupOnly               bool     `json:"setup_only,omitempty"`
+	BudgetTier              string   `json:"budget_tier,omitempty"`
+	TrialBudgetUSDMicros    int64    `json:"trial_budget_usd_micros,omitempty"`
 	DailyBudgetUSDMicros    int64    `json:"daily_budget_usd_micros,omitempty"`
 	MonthlyBudgetUSDMicros  int64    `json:"monthly_budget_usd_micros,omitempty"`
 	RequestReserveUSDMicros int64    `json:"request_reserve_usd_micros,omitempty"`
@@ -127,10 +129,16 @@ func normalizePolicyValues(values []string) []string {
 }
 
 func validateLocalTokenPolicy(policy *localTokenPolicy) error {
-	for _, amount := range []int64{policy.DailyBudgetUSDMicros, policy.MonthlyBudgetUSDMicros, policy.RequestReserveUSDMicros} {
+	for _, amount := range []int64{policy.TrialBudgetUSDMicros, policy.DailyBudgetUSDMicros, policy.MonthlyBudgetUSDMicros, policy.RequestReserveUSDMicros} {
 		if amount < 0 || amount > maxAllowanceAmount {
 			return errors.New("budget amount must be between 0 and 1000000000000 USD micros")
 		}
+	}
+	if policy.BudgetTier != "" && policy.BudgetTier != budgetTierTrial {
+		return errors.New("budget_tier must be trial or omitted")
+	}
+	if (policy.BudgetTier == budgetTierTrial) != (policy.TrialBudgetUSDMicros > 0) {
+		return errors.New("a trial budget needs both budget_tier=trial and a positive trial amount")
 	}
 	if policy.RequestReserveUSDMicros > 0 && ((policy.DailyBudgetUSDMicros > 0 && policy.RequestReserveUSDMicros > policy.DailyBudgetUSDMicros) || (policy.MonthlyBudgetUSDMicros > 0 && policy.RequestReserveUSDMicros > policy.MonthlyBudgetUSDMicros)) {
 		return errors.New("per-request reservation exceeds the Agent budget")

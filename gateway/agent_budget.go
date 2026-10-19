@@ -2,8 +2,10 @@ package main
 
 // Agent budgets reserve before dispatch, then settle against observed costs.
 // A reservation is an operator estimate, not a provider-enforced price ceiling.
-// Unknown outcomes remain held; a provider charge above the estimate stops the
-// Agent until the operator reconciles it. All amounts use integer USD micros.
+// Unknown outcomes remain held; a provider charge above the estimate stops a
+// formal Agent until the operator reconciles it. Trial Agents spend a small
+// lifetime allowance from a shared monthly pool instead: a known overrun is
+// simply counted. All amounts use integer USD micros.
 import (
 	"database/sql"
 	"encoding/json"
@@ -17,7 +19,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type agentBudgetStore struct{ store *localStore }
+type agentBudgetStore struct {
+	store       *localStore
+	notifySlots chan struct{}
+}
 
 type agentBudgetEntry struct {
 	NeedsReview bool         `json:"needs_review,omitempty"`
@@ -35,6 +40,7 @@ type agentBudgetEntry struct {
 	Status      int          `json:"http_status"`
 	Usage       usageMetrics `json:"usage"`
 	Budgeted    bool         `json:"budgeted"`
+	Tier        string       `json:"tier,omitempty"`
 }
 
 type agentBudgetView struct {
@@ -50,10 +56,26 @@ type agentBudgetView struct {
 	DailyRemaining   *int64 `json:"daily_remaining_usd_micros,omitempty"`
 	MonthlyRemaining *int64 `json:"monthly_remaining_usd_micros,omitempty"`
 	PeriodTimezone   string `json:"period_timezone"`
+	Tier             string `json:"tier"`
+	TrialLimit       int64  `json:"trial_limit_usd_micros,omitempty"`
+	TrialSpent       int64  `json:"trial_spent_usd_micros,omitempty"`
+	TrialHeld        int64  `json:"trial_held_usd_micros,omitempty"`
+	TrialRemaining   *int64 `json:"trial_remaining_usd_micros,omitempty"`
+	TrialPoolLimit   int64  `json:"trial_pool_limit_usd_micros,omitempty"`
+	TrialPoolUsed    int64  `json:"trial_pool_used_usd_micros,omitempty"`
 }
 
+const budgetTierTrial = "trial"
+
+// SQL predicates over the ledger document. Entries written before tiers
+// existed have no tier and belong to the formal budget.
+const (
+	trialEntry  = `json_extract(document,'$.tier')='trial'`
+	formalEntry = `COALESCE(json_extract(document,'$.tier'),'')!='trial'`
+)
+
 func budgetEnabled(p localTokenPolicy) bool {
-	return p.DailyBudgetUSDMicros > 0 || p.MonthlyBudgetUSDMicros > 0
+	return p.BudgetTier == budgetTierTrial || p.DailyBudgetUSDMicros > 0 || p.MonthlyBudgetUSDMicros > 0
 }
 
 func usdMicros(amount float64) (int64, bool) {
@@ -70,13 +92,17 @@ func usdMicros(amount float64) (int64, bool) {
 // historical price snapshots without re-importing modern ledger entries after
 // a restart. It cannot recover protocol events already rotated out before upgrade.
 func initializeAgentBudgets(runtime localRuntime) (*agentBudgetStore, error) {
-	s := &agentBudgetStore{store: runtime.store}
+	s := &agentBudgetStore{store: runtime.store, notifySlots: make(chan struct{}, 3)}
 	_, err := s.store.db.Exec(`CREATE TABLE IF NOT EXISTS agent_billing (
  id TEXT PRIMARY KEY, token_id INTEGER NOT NULL, created_at INTEGER NOT NULL,
  state TEXT NOT NULL, reserved INTEGER NOT NULL, charged INTEGER NOT NULL,
  document TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS agent_billing_token_time ON agent_billing(token_id, created_at);
- CREATE TABLE IF NOT EXISTS agent_billing_meta (name TEXT PRIMARY KEY);`)
+ CREATE TABLE IF NOT EXISTS agent_billing_meta (name TEXT PRIMARY KEY);
+ CREATE TABLE IF NOT EXISTS agent_budget_settings (name TEXT PRIMARY KEY, document TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS agent_budget_requests (id TEXT PRIMARY KEY, token_id INTEGER NOT NULL,
+ state TEXT NOT NULL, created_at INTEGER NOT NULL, document TEXT NOT NULL);
+ CREATE INDEX IF NOT EXISTS agent_budget_requests_token ON agent_budget_requests(token_id, state);`)
 	if err != nil {
 		return nil, err
 	}
@@ -168,19 +194,32 @@ func insertBudgetEntry(tx *sql.Tx, e agentBudgetEntry) error {
 
 type budgetQuerier interface{ QueryRow(string, ...any) *sql.Row }
 
-func budgetView(q budgetQuerier, id int, p localTokenPolicy, now time.Time) (agentBudgetView, error) {
+func budgetView(q budgetQuerier, id int, p localTokenPolicy, settings agentBudgetSettings, now time.Time) (agentBudgetView, error) {
 	now = now.UTC()
 	day := now.Truncate(24 * time.Hour).Unix()
 	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).Unix()
-	v := agentBudgetView{DailyLimit: p.DailyBudgetUSDMicros, MonthlyLimit: p.MonthlyBudgetUSDMicros, RequestReserve: p.RequestReserveUSDMicros, PeriodTimezone: "UTC"}
+	v := agentBudgetView{DailyLimit: p.DailyBudgetUSDMicros, MonthlyLimit: p.MonthlyBudgetUSDMicros, RequestReserve: p.RequestReserveUSDMicros, PeriodTimezone: "UTC", Tier: "formal"}
 	err := q.QueryRow(`SELECT
- COALESCE(SUM(CASE WHEN state IN ('settled','overrun') AND created_at >= ? THEN charged ELSE 0 END),0),
- COALESCE(SUM(CASE WHEN state IN ('settled','overrun') AND created_at >= ? THEN charged ELSE 0 END),0),
- COALESCE(SUM(CASE WHEN state IN ('reserved','unknown') THEN reserved ELSE 0 END),0),
+ COALESCE(SUM(CASE WHEN `+formalEntry+` AND state IN ('settled','overrun') AND created_at >= ? THEN charged ELSE 0 END),0),
+ COALESCE(SUM(CASE WHEN `+formalEntry+` AND state IN ('settled','overrun') AND created_at >= ? THEN charged ELSE 0 END),0),
+ COALESCE(SUM(CASE WHEN `+formalEntry+` AND state IN ('reserved','unknown') THEN reserved ELSE 0 END),0),
  COALESCE(SUM(CASE WHEN state IN ('reserved','unknown') AND reserved > 0 THEN 1 ELSE 0 END),0),
  COALESCE(SUM(CASE WHEN state='unknown' AND reserved=0 AND created_at >= ? THEN 1 ELSE 0 END),0),
- COALESCE(SUM(CASE WHEN state='overrun' OR json_extract(document,'$.needs_review')=1 THEN 1 ELSE 0 END),0)
- FROM agent_billing WHERE token_id=?`, day, month, month, id).Scan(&v.DailySpent, &v.MonthlySpent, &v.Held, &v.Pending, &v.Unpriced, &v.Overruns)
+ COALESCE(SUM(CASE WHEN `+formalEntry+` AND (state='overrun' OR json_extract(document,'$.needs_review')=1) THEN 1 ELSE 0 END),0),
+ COALESCE(SUM(CASE WHEN `+trialEntry+` AND state IN ('settled','overrun') THEN charged ELSE 0 END),0),
+ COALESCE(SUM(CASE WHEN `+trialEntry+` AND state IN ('reserved','unknown') THEN reserved ELSE 0 END),0)
+ FROM agent_billing WHERE token_id=?`, day, month, month, id).Scan(&v.DailySpent, &v.MonthlySpent, &v.Held, &v.Pending, &v.Unpriced, &v.Overruns, &v.TrialSpent, &v.TrialHeld)
+	if err != nil {
+		return v, err
+	}
+	if p.BudgetTier == budgetTierTrial {
+		v.Tier, v.TrialLimit, v.TrialPoolLimit = budgetTierTrial, p.TrialBudgetUSDMicros, settings.TrialPoolMonthly
+		remaining := max(int64(0), v.TrialLimit-v.TrialSpent-v.TrialHeld)
+		v.TrialRemaining = &remaining
+		// Held trial money stays counted until reconciled, even across months.
+		err = q.QueryRow(`SELECT COALESCE(SUM(CASE WHEN state IN ('settled','overrun') AND created_at >= ? THEN charged WHEN state IN ('reserved','unknown') THEN reserved ELSE 0 END),0)
+ FROM agent_billing WHERE `+trialEntry, month).Scan(&v.TrialPoolUsed)
+	}
 	if v.DailyLimit > 0 {
 		remaining := max(int64(0), v.DailyLimit-v.DailySpent-v.Held)
 		v.DailyRemaining = &remaining
@@ -193,13 +232,20 @@ func budgetView(q budgetQuerier, id int, p localTokenPolicy, now time.Time) (age
 }
 
 func (s *agentBudgetStore) view(id int, p localTokenPolicy, now time.Time) (agentBudgetView, error) {
-	return budgetView(s.store.db, id, p, now)
+	settings, err := s.settings()
+	if err != nil {
+		return agentBudgetView{}, err
+	}
+	return budgetView(s.store.db, id, p, settings, now)
 }
 
 func (s *agentBudgetStore) reserve(e agentBudgetEntry, p localTokenPolicy, quote int64, now time.Time) (string, error) {
 	e.CreatedAt = now.Unix()
 	e.State = "reserved"
 	e.Budgeted = budgetEnabled(p)
+	if p.BudgetTier == budgetTierTrial {
+		e.Tier = budgetTierTrial
+	}
 	if e.Budgeted {
 		e.Reserved = quote
 		if quote < 0 {
@@ -214,7 +260,11 @@ func (s *agentBudgetStore) reserve(e agentBudgetEntry, p localTokenPolicy, quote
 		return "", err
 	}
 	defer tx.Rollback()
-	v, err := budgetView(tx, e.TokenID, p, now)
+	settings, err := readBudgetSettings(tx)
+	if err != nil {
+		return "", err
+	}
+	v, err := budgetView(tx, e.TokenID, p, settings, now)
 	if err != nil {
 		return "", err
 	}
@@ -230,6 +280,15 @@ func (s *agentBudgetStore) reserve(e agentBudgetEntry, p localTokenPolicy, quote
 
 func agentBudgetBlock(v agentBudgetView, p localTokenPolicy, reserve int64) string {
 	if !budgetEnabled(p) {
+		return ""
+	}
+	if p.BudgetTier == budgetTierTrial {
+		if v.TrialSpent+v.TrialHeld+reserve > p.TrialBudgetUSDMicros {
+			return "agent_trial_exhausted"
+		}
+		if v.TrialPoolLimit > 0 && v.TrialPoolUsed+reserve > v.TrialPoolLimit {
+			return "agent_trial_pool_exhausted"
+		}
 		return ""
 	}
 	if v.Overruns > 0 {
@@ -299,7 +358,7 @@ func (s *agentBudgetStore) finish(id string, cost *usageCost, metrics usageMetri
 			e.Charged = amount
 			e.State = "settled"
 			e.Source = cost.Source
-			if e.Budgeted && amount > e.Reserved {
+			if e.Budgeted && e.Tier != budgetTierTrial && amount > e.Reserved {
 				e.State = "overrun"
 			}
 		}
@@ -358,8 +417,7 @@ func (p *tokenPolicyStore) reserveAgentBudget(c *gin.Context, service, operation
 		if err != nil {
 			status = http.StatusServiceUnavailable
 		}
-		messages := map[string]string{"agent_budget_quote_required": "configure a per-request USD reservation for variable or unknown prices", "agent_budget_reconciliation_required": "a charge exceeded its reservation; reconcile it before further calls", "agent_daily_budget_exceeded": "Agent daily USD budget has insufficient remaining funds", "agent_monthly_budget_exceeded": "Agent monthly USD budget has insufficient remaining funds", "agent_budget_unavailable": "cannot safely read or persist Agent budget; no upstream call was made"}
-		writeAgentError(c, status, code, messages[code], messages[code], false, "localrouter", "open /#tokens to inspect this Agent budget and reconcile unknown charges or adjust its limits", nil, nil, nil)
+		writeAgentError(c, status, code, agentBudgetMessages[code], agentBudgetMessages[code], false, "localrouter", agentBudgetNextAction(code), nil, nil, nil)
 		c.Abort()
 		return false
 	}
@@ -369,6 +427,24 @@ func (p *tokenPolicyStore) reserveAgentBudget(c *gin.Context, service, operation
 		c.Set("localrouter_allowance_single_attempt", true)
 	}
 	return true
+}
+
+var agentBudgetMessages = map[string]string{
+	"agent_budget_quote_required":          "configure a per-request USD reservation for variable or unknown prices",
+	"agent_budget_reconciliation_required": "a charge exceeded its reservation; reconcile it before further calls",
+	"agent_daily_budget_exceeded":          "Agent daily USD budget has insufficient remaining funds",
+	"agent_monthly_budget_exceeded":        "Agent monthly USD budget has insufficient remaining funds",
+	"agent_budget_unavailable":             "cannot safely read or persist Agent budget; no upstream call was made",
+	"agent_trial_exhausted":                "this Agent's trial budget is used up; no upstream call was made",
+	"agent_trial_pool_exhausted":           "the shared monthly trial pool is used up; no upstream call was made",
+}
+
+func agentBudgetNextAction(code string) string {
+	switch code {
+	case "agent_trial_exhausted", "agent_trial_pool_exhausted", "agent_daily_budget_exceeded", "agent_monthly_budget_exceeded":
+		return "run lr budget request formal --monthly <usd> [--daily <usd>] --reason <why>, or lr budget request trial --reason <why>; the human approves once, then preflight again"
+	}
+	return "ask the human to review the Agent budget, reservation or unsettled charges; preflight again after reconciliation"
 }
 
 func (p *tokenPolicyStore) finishAgentBudget(c *gin.Context, cost *usageCost, metrics usageMetrics, notSent bool) {

@@ -1,6 +1,27 @@
 # 独立 Agent 预算与消费明细
 
-在控制台 **Token 管理 → 创建 Token / 编辑 Agent** 配置各 Agent 的每日请求、每分钟请求、最大并发，以及独立的每日 / 每月美元预算。各项留空或填 0 表示关闭该限制。默认不启用金额限制，也不会改动现有 Token 的权限。
+在控制台 **Token 管理 → 创建 Token / 编辑 Agent** 配置各 Agent 的每日请求、每分钟请求、最大并发，以及独立的每日 / 每月美元预算。各项留空或填 0 表示关闭该限制。人手动创建的 Token 默认不启用金额限制，也不会改动现有 Token 的权限。
+
+## 试用档与正式档
+
+Agent 通过 `lr identity request` / `lr identity prepare` 申请的身份一律从**试用档**开始，人不需要审批身份本身，只决定花多少钱：
+
+| 设置（Token 管理 → 预算申请 → 试用设置） | 默认 | 说明 |
+|---|---|---|
+| 自动批准 Agent 身份申请 | 开启 | 普通模式下申请立即生效；严格模式开启时始终人工审批 |
+| 每个 Agent 试用 | $2 | 一次性额度，不按周期重置 |
+| 每月试用合计 | $5 | 所有试用 Agent 在一个 UTC 自然月内的合计上限 |
+| 单次默认预留 | $0.02 | 价格不固定时调用前的占用值，调用后按真实费用结算 |
+
+- 试用额度用完或试用合计用完时，调用不会发往上游，返回 `agent_trial_exhausted` / `agent_trial_pool_exhausted`。
+- 试用档中，已知费用超过单次预留时如实计入，不暂停 Agent；因此最后一笔可能略超试用额度。没有费用信息的调用仍按预留占用，直到人工核对。
+- Agent 用 `lr budget request formal --monthly <usd> [--daily <usd>] --reason <理由>` 申请转为**正式档**，或用 `lr budget request trial --reason <理由>` 申请再给一轮试用。每个 Agent 同时只有一条待处理申请，新申请会替换旧申请。
+- 申请出现在 **Token 管理 → 预算申请**。批准前可修改金额；批准只改写该 Agent 的金额字段，不改变服务范围。正式档只统计转正之后的消费。
+- Agent 在身份申请或扩权申请中填写的金额字段一律忽略，金额只能由人决定。在“编辑 Agent”中为试用 Agent 填写日或月预算，同样会把它转为正式档。
+
+### 桌面通知
+
+在 `$XDG_CONFIG_HOME/localrouter/config.env` 中设置 `LOCAL_GATEWAY_DESKTOP_NOTIFICATIONS=true` 并重启服务后，新的预算申请会通过 `notify-send` 弹出桌面通知，带有“同意 / 拒绝 / 打开控制台”按钮。“同意”按 Agent 申请的金额批准；需要改金额时打开控制台。通知同时最多 3 条；没有图形会话或两小时内未处理时，申请保持待处理，控制台仍然可用。默认关闭，避免测试或无桌面环境误弹窗。
 
 ## 金额预算如何扣减
 
@@ -31,6 +52,8 @@
 | `agent_monthly_budget_exceeded` | 月预算余额不足 |
 | `agent_budget_reconciliation_required` | 实际费用超出预留，等待人工核对 |
 | `agent_budget_unavailable` | 账本读写失败，请求未获准发送 |
+| `agent_trial_exhausted` | 该 Agent 的试用额度已用完 |
+| `agent_trial_pool_exhausted` | 本月所有 Agent 的试用合计已用完 |
 
 ## 撤销与迁移
 
@@ -48,9 +71,11 @@
 }
 ```
 
+试用档写作 `{"budget_tier": "trial", "trial_budget_usd_micros": 2000000, "request_reserve_usd_micros": 20000}`。
+
 这些字段扩展了策略文件；回滚到旧程序前应恢复兼容的策略备份。账本表是附加表，不删除原日志或 Token 数据。
 
-消费明细读取使用人类控制台 `/local/api/agent-billing/:id`；核对使用 `/local/api/agent-billing/:id/:receipt/reconcile`。这些入口不授予 Service Token 或维护 Token 人类管理权限，LAN 不暴露它们。
+消费明细读取使用人类控制台 `/local/api/agent-billing/:id`；核对使用 `/local/api/agent-billing/:id/:receipt/reconcile`。试用设置为 `GET/PUT /local/api/agent-budget-settings`（PUT 须带读取到的 `revision`），预算申请为 `GET /local/api/budget-requests` 与 `POST /local/api/budget-requests/:id/decision`（`{approve, monthly_usd_micros?, daily_usd_micros?}`）。Agent 侧只有 loopback 上的 `POST /agent/budget-requests` 与 `GET /agent/budget-requests/:id`，只能申请，不能批准。这些入口不授予 Service Token 或维护 Token 人类管理权限，LAN 不暴露它们。
 
 本地验收：
 

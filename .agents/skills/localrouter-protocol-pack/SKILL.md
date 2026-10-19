@@ -38,7 +38,7 @@ Live discovery is authoritative. Readiness is not provider proof.
 | Verifying a changed or released operation | [references/acceptance.md](references/acceptance.md) |
 | Delivering a newly published model to OMP or another Agent runtime | [references/runtime-handoff.md](references/runtime-handoff.md) |
 
-Use `lr setup schema [proposal|pack]` and `lr identity schema` for live schemas. For an unpublished service, use `lr identity prepare <agent-code>` → human approval → claim; No carrier scope. See [port-authoring](references/port-authoring.md).
+Use `lr setup schema [proposal|pack]` and `lr identity schema` for live schemas. For an unpublished service, use `lr identity prepare <agent-code>`; strict mode adds approval and claim. No carrier scope. See [port-authoring](references/port-authoring.md).
 
 ## Non-negotiable boundaries
 
