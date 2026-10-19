@@ -220,9 +220,6 @@ func (hub *serviceWorkspace) callSetupTool(owner localToken, name string, raw js
 		return serviceProposalView(proposal), err
 	case "localrouter_setup_undo":
 		proposal, err := hub.undoApplied(input.ID, "agent:"+owner.AgentCode, owner.ID)
-		if err == nil {
-			hub.runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
-		}
 		return serviceProposalView(proposal), err
 	case "localrouter_setup_withdraw":
 		proposal, err := hub.decide(input.ID, input.Digest, "withdraw", "", owner.ID)

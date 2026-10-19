@@ -210,7 +210,6 @@ func registerServiceAgentRoutes(agent *gin.RouterGroup, runtime localRuntime) {
 			serviceWorkspaceError(c, err)
 			return
 		}
-		runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
 		c.JSON(http.StatusOK, serviceProposalView(proposal))
 	})
 	agent.POST("/onboarding/:id/reconcile", func(c *gin.Context) {
@@ -301,7 +300,6 @@ func registerServiceAdminRoutes(admin *gin.RouterGroup, runtime localRuntime) {
 			serviceWorkspaceError(c, err)
 			return
 		}
-		runtime.humanEvent(gin.H{"event": "service_proposal_decided", "id": proposal.ID, "state": proposal.State})
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
 	})
 	admin.POST("/service-proposals/:id/undo", func(c *gin.Context) {
@@ -310,7 +308,6 @@ func registerServiceAdminRoutes(admin *gin.RouterGroup, runtime localRuntime) {
 			serviceWorkspaceError(c, err)
 			return
 		}
-		runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
 	})
 	admin.GET("/service-proposals/:id/verification", func(c *gin.Context) {

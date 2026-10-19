@@ -66,8 +66,8 @@ func (hub *serviceWorkspace) autoApplyBlocker(owner localToken, proposal service
 		return "only connection and bundle proposals apply automatically"
 	}
 	definition := proposal.Connection.Definition
-	if _, exists := hub.registry.get(definition.ID); exists {
-		return "changing an existing service needs human review"
+	if _, exists := hub.registry.get(definition.ID); exists && !hub.ownsService(definition.ID, owner) {
+		return "changing a service the human or another Agent connected needs human review"
 	}
 	if !publicHTTPSTarget(definition.BaseURL) {
 		return "only public HTTPS hosts apply automatically; private, loopback and IP targets need human review"
@@ -75,10 +75,25 @@ func (hub *serviceWorkspace) autoApplyBlocker(owner localToken, proposal service
 	if definition.Pricing == nil || len(definition.Pricing.Entries) == 0 {
 		return "add definition.pricing entries with the provider's published prices and source_url to apply automatically"
 	}
-	if definition.Auth.Type != "none" && !proposal.CredentialProvisioned {
-		return "supply the service credential with lr setup prepare --credential-file to apply automatically"
+	if definition.Auth.Type != "none" {
+		if _, err := hub.registry.readSecret(definition.Auth); err != nil {
+			return "supply the service credential with lr setup prepare --credential-file to apply automatically"
+		}
 	}
 	return ""
+}
+
+// An Agent owns a live service it connected automatically, as long as no other
+// Token is granted it. It may then repair that service without review.
+func (hub *serviceWorkspace) ownsService(pack string, owner localToken) bool {
+	var latest *serviceProposal
+	for _, item := range hub.proposals(0) {
+		if item.State == "applied" && item.Connection != nil && item.Connection.Definition.ID == pack && (latest == nil || item.UpdatedAt.After(latest.UpdatedAt)) {
+			current := item
+			latest = &current
+		}
+	}
+	return latest != nil && latest.OwnerTokenID == owner.ID && latest.DecidedBy == "auto:"+owner.AgentCode && !hub.packGrantedToOthers(pack, owner.ID)
 }
 
 // The Agent's credential is stored at preparation under the proposal's own
@@ -187,9 +202,7 @@ func (hub *serviceWorkspace) announceAppliedService(owner localToken, proposal s
 	desktopNotify(runtime, runtime.policies.budgets.notifySlots, "normal", title, body, [][2]string{{"undo", "撤销"}, {"open", "打开控制台"}}, func(action string) {
 		switch action {
 		case "undo":
-			if _, err := hub.undoApplied(proposal.ID, "desktop", 0); err == nil {
-				runtime.humanEvent(gin.H{"event": "service_undone", "id": proposal.ID})
-			}
+			_, _ = hub.undoApplied(proposal.ID, "desktop", 0)
 		case "open":
 			openConsole(runtime, "setup")
 		}
@@ -252,6 +265,7 @@ func (hub *serviceWorkspace) undoApplied(id, by string, actor int) (servicePropo
 	})
 	if err == nil {
 		hub.discardProvisionedCredential(proposal)
+		hub.runtime.humanEvent(gin.H{"event": "service_undone", "id": id})
 	}
 	item, _ := hub.proposal(id, 0)
 	return item, err

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 type serviceReprepareInput struct {
@@ -81,6 +83,11 @@ func (hub *serviceWorkspace) reprepare(id, digest string, actor int, enable bool
 		doc.Proposals[id] = current
 		return nil
 	})
+	if err == nil {
+		hub.runtime.humanEvent(gin.H{"event": "service_proposal_decided", "id": id, "state": "superseded"})
+		hub.runtime.humanEvent(gin.H{"event": "service_proposal", "id": item.ID, "agent_code": owner.AgentCode, "agent_name": owner.AgentName,
+			"title": "LocalRouter · " + owner.AgentName + " 申请接入服务", "body": item.Reason})
+	}
 	return item, err
 }
 

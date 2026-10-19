@@ -67,7 +67,7 @@ lr result <call-id> --refresh
 
 新服务提案即使普通模式也要求独立身份；准备不安装、不调用上游、不授予权限。`connection` 可附带明确的 `bundle`，由人一次批准目标和完整生效策略，保留原金额、模型、次数和有效期限制；新增连接时还会展示并保留此前可用的服务能力。审批后发生策略漂移会拒绝覆盖。密钥用 `lr setup prepare @proposal.json --credential-file <0600 文件>` 提供，只保存为凭据绑定，不回显，方案被拒或撤回时删除；不要把密钥写进定义、命令参数或输出，也不指定 secret_file。
 
-普通模式下，只新增公网 HTTPS 服务、授权仅给自己、带有价格条目（官方价格、`source_url`、`checked_at`）且已提供密钥的方案会立即生效（`auto_apply.applied=true`），之后在预算内预检并调用；接错或不再需要时，用 `lr setup undo <id>` 撤销自己接入的服务：删除这次新增的服务、收回授权并删除你提供的密钥，之后可以重新提交方案。别的 Agent 也在用的服务或对已有服务的修改由人处理。人也可以随时撤销；人撤销的（`undone_by` 不是 `agent:`）不要自行重新接入。不满足条件时 `auto_apply.reason` 说明原因，方案等人批准。价格请查服务商官方价格页后填写。用 `lr setup get/bundles/verify` 核对状态和已有证据；中断在 `applying` 时用 `lr setup reconcile`，不重放 apply。`LOCALROUTER_TASK_ID` 仅用于关联追踪，不改变权限。
+普通模式下，只新增公网 HTTPS 服务、授权仅给自己、带有价格条目（官方价格、`source_url`、`checked_at`）且已提供密钥的方案会立即生效（`auto_apply.applied=true`），之后在预算内预检并调用；修正自己自动接入、且没有别的 Agent 在用的服务时，提交不带 `bundle` 的连接方案即可自动生效，沿用原密钥。接错或不再需要时，用 `lr setup undo <id>` 撤销自己接入的服务：删除这次新增的服务、收回授权并删除你提供的密钥，之后可以重新提交方案。别的 Agent 也在用的服务或对已有服务的修改由人处理。人也可以随时撤销；人撤销的（`undone_by` 不是 `agent:`）不要自行重新接入。不满足条件时 `auto_apply.reason` 说明原因，方案等人批准。价格请查服务商官方价格页后填写。用 `lr setup get/bundles/verify` 核对状态和已有证据；中断在 `applying` 时用 `lr setup reconcile`，不重放 apply。`LOCALROUTER_TASK_ID` 仅用于关联追踪，不改变权限。
 
 ## 新服务的可提交形状与旧提案恢复
 

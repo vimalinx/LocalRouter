@@ -99,12 +99,14 @@ the proposal waits for the human:
 - ordinary mode and **Token management → budget requests → trial settings →
   automatic service connection** is on (default);
 - the preparing identity has a trial or formal budget;
-- it adds a new Pack (never changes an existing one) and grants only the
-  preparing Agent, without maintenance delegation;
+- it adds a new Pack, or repairs a Pack this Agent connected automatically
+  that no other Token is granted, and grants only the preparing Agent, without
+  maintenance delegation (a repair omits `bundle` and reuses the credential);
 - `base_url` is a public `https` host name (no IP, loopback or private suffix);
 - `definition.pricing.entries` carries the provider's published prices with
   `source_url` and `checked_at`;
-- an authenticated service has its credential from `--credential-file`.
+- an authenticated service has a credential binding, from `--credential-file`
+  or retained from the service being repaired.
 
 The human is told through the optional desktop notification and the
 `LOCAL_GATEWAY_HUMAN_REQUEST_HOOK` event `service_applied`, and can undo it from

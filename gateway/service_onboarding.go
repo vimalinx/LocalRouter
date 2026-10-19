@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 type serviceProposalInput struct {
@@ -439,6 +441,7 @@ func (hub *serviceWorkspace) decideAs(id, digest, decision, credential string, a
 	if decision != "approve" {
 		hub.discardProvisionedCredential(proposal)
 		item, _ := hub.proposal(id, actor)
+		hub.runtime.humanEvent(gin.H{"event": "service_proposal_decided", "id": id, "state": item.State})
 		return item, nil
 	}
 	var applyErr error
@@ -479,6 +482,9 @@ func (hub *serviceWorkspace) decideAs(id, digest, decision, credential string, a
 		return proposal, fmt.Errorf("apply receipt needs reconciliation: %w", err)
 	}
 	item, _ := hub.proposal(id, actor)
+	if !strings.HasPrefix(by, "auto:") {
+		hub.runtime.humanEvent(gin.H{"event": "service_proposal_decided", "id": id, "state": item.State})
+	}
 	return item, nil
 }
 

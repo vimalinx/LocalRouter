@@ -16,6 +16,9 @@ published.
   Undo removes exactly the Pack files the proposal added through a reviewed
   draft, withdraws the grant and deletes the Agent's credential. A console
   switch turns automatic connection off.
+- An Agent repairs a service it connected automatically, while no other Token
+  is granted it, without review; withdrawals and replacements now notify the
+  human hook so mirrored Todos close.
 - `LOCAL_GATEWAY_HUMAN_REQUEST_HOOK` receives budget and service events as JSON,
   for example to keep requests in a Todo list until decided.
 - Contract schema 17.
