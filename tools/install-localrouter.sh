@@ -262,7 +262,9 @@ install_release() {
   if ((manage_systemd)); then
     systemctl --user daemon-reload
     if ((start_service)); then
-      systemctl --user enable --now localrouter.service
+      # enable --now leaves an already running service on the replaced binary.
+      systemctl --user enable localrouter.service
+      systemctl --user restart localrouter.service
     fi
   fi
   "$bin_dir/localrouter" paths
