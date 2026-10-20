@@ -132,6 +132,7 @@ Agent-led service setup
   lr setup prepare <json|@file> [--credential-file <mode-600 file>]
                                     Prepare a connection, bundle or template; in ordinary mode a new
                                     public HTTPS service with prices applies at once (human can undo)
+  lr setup check <id>               Recheck an applied connection with one probe or model listing
   lr setup undo <id>                Remove a service you connected, its grant and your credential
   lr setup list                    List this Agent's proposals
   lr setup get <id>                 Inspect progress, impact, digest and next action
@@ -1215,7 +1216,7 @@ command_setup() {
       fi
       [[ $# == 1 ]] || fail "use lr setup prepare <json|@file> [--credential-file <mode-600 file>]"
       arguments="$(json_argument "$1")"; tool_name=localrouter_setup_prepare ;;
-    get|verify|reconcile|undo)
+    get|verify|check|reconcile|undo)
       [[ -n "${1:-}" ]] || fail "setup $action requires a proposal id"
       arguments="$(jq -cn --arg id "$1" '{id:$id}')"; tool_name="localrouter_setup_$action" ;;
     reprepare)

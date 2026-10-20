@@ -6,6 +6,22 @@ published.
 
 ## Unreleased
 
+- Approving one service no longer makes every other pending proposal stale.
+  A proposal records the live bytes of its own Pack files; while they are
+  unchanged, approval rebuilds the identical change on the current live Packs.
+  Proposals report `freshness`, and only a real conflict on their own files
+  needs repreparation.
+- After apply, a connection makes one credentialed request to its readiness
+  probe or model listing and records `verification: live-ok` or
+  `live-failed:<status>`; business operations are never called by setup.
+- The console approves several plain HTTPS connections in one reviewed batch,
+  shows whether each service is reachable, and `/#setup/<id>` opens a proposal
+  directly. `lr setup check <id>` and the console recheck an applied
+  connection the same way. Desktop notifications for waiting proposals offer 批准 for those
+  same connections and 查看 for everything else.
+- Human hook events are delivered by one worker in order, so a hook never races
+  itself or sees a decision before its request.
+
 - Agents connect new services themselves: `lr setup prepare --credential-file`
   stores the credential at preparation (deleted on rejection or withdrawal), so
   the human never types it. In ordinary mode a new public HTTPS service with

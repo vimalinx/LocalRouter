@@ -101,6 +101,11 @@ type serviceProposal struct {
 	// The Agent supplied the credential at preparation; never the value itself.
 	CredentialProvisioned bool   `json:"credential_provisioned,omitempty"`
 	UndoneBy              string `json:"undone_by,omitempty"`
+	// Live bytes of the reviewed paths at preparation; see service_rebase.go.
+	BaseFiles map[string]string `json:"base_files,omitempty"`
+	RebasedAt *time.Time        `json:"rebased_at,omitempty"`
+	// Computed for views only, never stored.
+	Freshness string `json:"freshness,omitempty"`
 }
 
 type serviceConnection struct {
@@ -183,28 +188,33 @@ func (hub *serviceWorkspace) updateLocked(change func(*serviceWorkspaceDocument)
 
 func (hub *serviceWorkspace) proposal(id string, owner int) (serviceProposal, bool) {
 	hub.mu.RLock()
-	defer hub.mu.RUnlock()
 	proposal, ok := hub.doc.Proposals[id]
 	if !ok || (owner > 0 && owner != proposal.OwnerTokenID) {
+		hub.mu.RUnlock()
 		return serviceProposal{}, false
 	}
 	// Returned state must not share mutable pointers with the active snapshot.
 	data, _ := json.Marshal(proposal)
+	hub.mu.RUnlock()
 	var copy serviceProposal
 	_ = json.Unmarshal(data, &copy)
+	copy.Freshness = hub.freshness(copy)
 	return copy, true
 }
 
 func (hub *serviceWorkspace) proposals(owner int) []serviceProposal {
 	hub.mu.RLock()
-	defer hub.mu.RUnlock()
 	items := []serviceProposal{}
 	for _, proposal := range hub.doc.Proposals {
 		if owner <= 0 || proposal.OwnerTokenID == owner {
 			items = append(items, proposal)
 		}
 	}
+	hub.mu.RUnlock()
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	for i := range items {
+		items[i].Freshness = hub.freshness(items[i])
+	}
 	return items
 }
 

@@ -120,6 +120,29 @@ The first version supports one target with none/bearer/header authentication.
 Pools, adapters, target selection and advanced authentication retain the full
 Protocol Pack authoring lifecycle.
 
+### Approval, staleness and live check
+
+A proposal records the live bytes of exactly the Pack files it changes. When
+other Packs change before approval (`freshness: rebase`), approval rebuilds the
+same change on the current live Packs, requires an identical impact and keeps
+the reviewed digest; several pending proposals can therefore be approved one
+after another. When one of its own files changed (`freshness: conflict`), or
+the proposal predates this record (`freshness: unknown`), approval is refused
+and `reprepare` produces a replacement to review against the current version.
+
+After apply, a connection makes one credentialed request to its declared
+readiness probe or, failing that, a parameterless `GET …/models` listing.
+Business operations are never called by setup. `verification` becomes
+`live-ok`, `live-failed:<status>` or stays `contract-only`; a failure keeps the
+service installed and `next_action` tells the Agent to repair or undo it.
+
+A proposal that waits for the human is mirrored as the hook event
+`service_proposal` with a `console_url` of `/#setup/<id>`, which opens that
+proposal. With desktop notifications enabled, a plain HTTPS connection that
+grants and delegates nothing offers **批准** in the notification
+(`decided_by: desktop`); every other proposal offers **查看**. The console
+offers the same set for batch approval, applied in order.
+
 A human opens `/#setup`, inspects the target, operations, bundle, maintenance
 boundary and digest, then approves once. Agents cannot approve authority changes
 through `/agent` or the consumer MCP. After approval, `lr setup get` reports the

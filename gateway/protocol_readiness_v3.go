@@ -92,7 +92,13 @@ func (registry *protocolRegistry) executeReadinessProbe(definition protocolDefin
 			lastStatus = "probe-transport-failed"
 			continue
 		}
-		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		// Only an expression needs the body; a status check must not depend on
+		// downloading a large catalogue within the probe timeout.
+		var body []byte
+		var readErr error
+		if config.Expression != "" {
+			body, readErr = io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		}
 		_ = response.Body.Close()
 		_ = registry.releaseCredential(definition, acquired, response.StatusCode, response.Header.Get("Retry-After"))
 		if readErr != nil {

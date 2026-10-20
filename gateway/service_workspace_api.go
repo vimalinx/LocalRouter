@@ -59,9 +59,18 @@ func proposalNextAction(proposal serviceProposal) string {
 		if reason := proposalReviewBlocker(proposal); reason != "" {
 			return reason
 		}
-		return "The exact proposal is ready for the human console. A delegated maintainer may apply a compatible repair through /manage/mcp; otherwise wait for approval."
+		switch proposal.Freshness {
+		case freshnessConflict:
+			return "This Pack changed after the review; reprepare so the change is reviewed against its current version."
+		case freshnessUnknown:
+			return "Live Packs changed and this proposal predates safe rebasing; reprepare it."
+		}
+		return "The exact proposal is ready for the human console; approval applies it on the current live Packs. A delegated maintainer may apply a compatible repair through /manage/mcp; otherwise wait for approval."
 	case "applied":
 		if proposal.Kind == "connection" {
+			if status, failed := strings.CutPrefix(proposal.Verification, "live-failed:"); failed {
+				return "Installed, but the live check failed (" + status + "). Fix the base URL, auth or credential with a new proposal for this Pack, or undo it."
+			}
 			return "Inspect readiness; request a capability bundle if needed, then preflight and execute one authorized call. Verify from its recorded trace."
 		}
 		return "Refresh effective permissions or the template catalogue. Existing bundle grants remain pinned to their approved revisions."
@@ -80,7 +89,7 @@ func proposalNextAction(proposal serviceProposal) string {
 }
 
 func serviceProposalView(proposal serviceProposal) gin.H {
-	return gin.H{"proposal": proposal, "next_action": proposalNextAction(proposal), "upstream_called_by_setup": false}
+	return gin.H{"proposal": proposal, "next_action": proposalNextAction(proposal), "upstream_called_by_setup": strings.HasPrefix(proposal.Verification, "live-")}
 }
 
 func registerServiceAgentRoutes(agent *gin.RouterGroup, runtime localRuntime) {
@@ -199,6 +208,19 @@ func registerServiceAgentRoutes(agent *gin.RouterGroup, runtime localRuntime) {
 		}
 		c.JSON(http.StatusOK, serviceProposalView(proposal))
 	})
+	agent.POST("/onboarding/:id/check", func(c *gin.Context) {
+		owner, err := serviceOwner(c, runtime)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		proposal, err := hub.recheck(c.Param("id"), owner.ID)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, serviceProposalView(proposal))
+	})
 	agent.POST("/onboarding/:id/undo", func(c *gin.Context) {
 		owner, err := serviceOwner(c, runtime)
 		if err != nil {
@@ -310,6 +332,14 @@ func registerServiceAdminRoutes(admin *gin.RouterGroup, runtime localRuntime) {
 		}
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
 	})
+	admin.POST("/service-proposals/:id/check", func(c *gin.Context) {
+		proposal, err := hub.recheck(c.Param("id"), 0)
+		if err != nil {
+			serviceWorkspaceError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": serviceProposalView(proposal)})
+	})
 	admin.GET("/service-proposals/:id/verification", func(c *gin.Context) {
 		result, err := hub.verifyProposal(c.Param("id"), 0)
 		if err != nil {
@@ -377,7 +407,7 @@ func (hub *serviceWorkspace) verifyProposal(id string, owner int) (gin.H, error)
 	if proposal.Connection == nil {
 		return gin.H{"proposal_id": id, "state": proposal.State, "verification": "not-applicable"}, nil
 	}
-	result := gin.H{"proposal_id": id, "state": proposal.State, "syntax": "passed", "contract": "passed", "upstream_operation": "not-covered", "upstream_called_by_verification": false}
+	result := gin.H{"proposal_id": id, "state": proposal.State, "syntax": "passed", "contract": "passed", "live_check": proposal.Verification, "upstream_operation": "not-covered", "upstream_called_by_verification": false}
 	if proposal.State != "applied" {
 		result["installation"] = "not-applied"
 		return result, nil

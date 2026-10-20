@@ -114,7 +114,7 @@ try:
         {'operation_id':'generate','capabilities':['ai.chat'],'methods':['POST'],'path':'/chat/completions','summary':'Streaming fixture','streaming':True,'request_example':{'model':'fixture-model','messages':[{'role':'user','content':'hi'}],'max_tokens':10},'retry':{'mode':'never','transport_errors':False}},
     ])
     definition['routes'][0]['metering'] = {'resource_id_path':'id','state_path':'state','units':[{'unit':'page','path':'usage.pages','source':'response','mode':'snapshot'}]}
-    proposal_input = {'kind':'connection','reason':'为资料研究任务接入文档检索，只申请 search 操作。准备与授权不会调用上游。','connection':{'template_id':'read-api','template_version':'1','definition':definition},'bundle':{'id':'research-kit','name':'资料研究工具包','description':'受限的文档检索权限','members':[{'pack':'demo-search','operations':['search','status','models','generate']}]}}
+    proposal_input = {'kind':'connection','reason':'为资料研究任务接入文档检索，只申请 search 操作。准备不调用上游，授权后只检查一次模型列表。','connection':{'template_id':'read-api','template_version':'1','definition':definition},'bundle':{'id':'research-kit','name':'资料研究工具包','description':'受限的文档检索权限','members':[{'pack':'demo-search','operations':['search','status','models','generate']}]}}
     input_path = root / 'proposal.json'; input_path.write_text(json.dumps(proposal_input))
     proposal = payload(cli('setup','prepare','@'+str(input_path)))['proposal']
     assert proposal['state'] == 'awaiting_approval' and Provider.calls == 0
@@ -124,8 +124,11 @@ try:
     except urllib.error.HTTPError as error:
         assert error.code == 409
     api(f"/local/api/service-proposals/{proposal['id']}/decision",'POST',{'decision':'approve','digest':proposal['digest']})
-    assert Provider.calls == 0
-    assert payload(cli('setup','get',proposal['id']))['proposal']['state'] == 'applied'
+    # Approval makes exactly one live check against the free model listing.
+    assert Provider.requests == ['/models'], Provider.requests
+    applied = payload(cli('setup','get',proposal['id']))['proposal']
+    assert applied['state'] == 'applied' and applied['verification'] == 'live-ok', applied
+    Provider.calls, Provider.requests, Provider.model_calls = 0, [], 0
     cli('preflight','demo-search','search','{}','{}','{"q":"fixture"}')
     # Capture the single authorized fixture call before offline inspection.
     response = subprocess.run([str(project/'tools/lr'),'call','demo-search','search','{}','{}','{"q":"fixture"}'], env=env, capture_output=True, timeout=20)

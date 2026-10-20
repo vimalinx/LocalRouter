@@ -85,7 +85,7 @@ func (hub *serviceWorkspace) reprepare(id, digest string, actor int, enable bool
 	})
 	if err == nil {
 		hub.runtime.humanEvent(gin.H{"event": "service_proposal_decided", "id": id, "state": "superseded"})
-		hub.runtime.humanEvent(serviceProposalEvent(owner, item, "replacement of "+id+" for review"))
+		hub.requestDecision(owner, item, "替代 "+id+"，需要重新审阅")
 	}
 	return item, err
 }

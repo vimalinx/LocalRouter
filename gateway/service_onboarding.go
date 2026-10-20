@@ -273,6 +273,7 @@ func (hub *serviceWorkspace) prepareConnectionDraft(proposal *serviceProposal) e
 		}
 	}
 	proposal.PackDigest, proposal.BaseDigest, proposal.Impact = review.Digest, review.BaseDigest, &review.Impact
+	hub.captureBaseFiles(proposal)
 	return nil
 }
 
@@ -389,8 +390,8 @@ func (hub *serviceWorkspace) decideAs(id, digest, decision, credential string, a
 		}
 	}
 	if proposal.Connection != nil && decision == "approve" {
-		if hub.registry.currentDigest() != proposal.BaseDigest {
-			return proposal, errors.New("stale proposal: live Packs changed; prepare a new proposal")
+		if err := hub.rebaseForApproval(&proposal); err != nil {
+			return proposal, err
 		}
 		if proposal.Connection.Definition.Auth.Type != "none" && credential == "" {
 			if _, err := hub.registry.readSecret(proposal.Connection.Definition.Auth); err != nil {
@@ -480,6 +481,15 @@ func (hub *serviceWorkspace) decideAs(id, digest, decision, credential string, a
 	}
 	if err := hub.finishApprovedProposal(id); err != nil {
 		return proposal, fmt.Errorf("apply receipt needs reconciliation: %w", err)
+	}
+	if proposal.Connection != nil {
+		verification := hub.liveCheck(proposal.Connection.Definition.ID)
+		_ = hub.update(func(doc *serviceWorkspaceDocument) error {
+			item := doc.Proposals[id]
+			item.Verification = verification
+			doc.Proposals[id] = item
+			return nil
+		})
 	}
 	item, _ := hub.proposal(id, actor)
 	if !strings.HasPrefix(by, "auto:") {

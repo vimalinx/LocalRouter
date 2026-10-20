@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -145,7 +147,6 @@ func (hub *serviceWorkspace) discardProvisionedCredential(proposal servicePropos
 
 // prepareService is shared by the HTTP and MCP preparation entry points.
 func (hub *serviceWorkspace) prepareService(owner localToken, input serviceProposalInput) (gin.H, error) {
-	runtime := hub.runtime
 	credential := input.Credential
 	input.Credential = ""
 	proposal, err := hub.prepare(owner, input)
@@ -159,7 +160,7 @@ func (hub *serviceWorkspace) prepareService(owner localToken, input servicePropo
 	auto := gin.H{"applied": false, "credential": stored}
 	if blocker := hub.autoApplyBlocker(owner, proposal); blocker != "" {
 		auto["reason"] = blocker
-		runtime.humanEvent(serviceProposalEvent(owner, proposal, blocker))
+		hub.requestDecision(owner, proposal, blocker)
 	} else {
 		applied, err := hub.decideAs(proposal.ID, proposal.Digest, "approve", "", 0, "auto:"+owner.AgentCode)
 		if err != nil {
@@ -202,6 +203,54 @@ func serviceProposalEvent(owner localToken, proposal serviceProposal, why string
 		"title": "LocalRouter · " + owner.AgentName + " 申请接入 " + proposalService(proposal), "body": body}
 }
 
+// desktopApprovable mirrors the console's batch rule: a plain HTTPS connection
+// that grants and delegates nothing may be approved from the notification.
+func desktopApprovable(proposal serviceProposal) bool {
+	return proposal.Kind == "connection" && proposal.Connection != nil && proposal.Bundle == nil && proposal.GrantTokenID == 0 &&
+		proposal.MaintainerID == 0 && proposal.Connection.Definition.Enabled && proposalReviewBlocker(proposal) == "" &&
+		strings.HasPrefix(proposal.Connection.Definition.BaseURL, "https://")
+}
+
+// requestDecision mirrors a proposal that waits for the human into the hook
+// and, when enabled, an actionable desktop notification.
+func (hub *serviceWorkspace) requestDecision(owner localToken, proposal serviceProposal, why string) {
+	runtime := hub.runtime
+	event := serviceProposalEvent(owner, proposal, why)
+	event["console_url"] = consoleURL(runtime, "setup/"+proposal.ID)
+	runtime.humanEvent(event)
+	if runtime.policies == nil || runtime.policies.budgets == nil {
+		return
+	}
+	actions := [][2]string{{"open", "查看"}}
+	if desktopApprovable(proposal) {
+		actions = [][2]string{{"approve", "批准"}, {"open", "查看"}}
+	}
+	slots := runtime.policies.budgets.notifySlots
+	desktopNotify(runtime, slots, "normal", event["title"].(string), event["body"].(string), actions, func(action string) {
+		switch action {
+		case "approve":
+			item, err := hub.decideAs(proposal.ID, proposal.Digest, "approve", "", 0, "desktop")
+			title, body := "LocalRouter · 已接入 "+proposalService(proposal), approvedSummary(item)
+			if err != nil {
+				title, body = "LocalRouter · 没能接入 "+proposalService(proposal), err.Error()
+			}
+			desktopNotify(runtime, slots, "normal", title, body, [][2]string{{"open", "查看"}}, func(string) { openConsole(runtime, "setup/"+proposal.ID) })
+		case "open":
+			openConsole(runtime, "setup/"+proposal.ID)
+		}
+	})
+}
+
+func approvedSummary(proposal serviceProposal) string {
+	if status, failed := strings.CutPrefix(proposal.Verification, "live-failed:"); failed {
+		return "上游检查未通过（" + status + "），Agent 会收到修正提示。"
+	}
+	if proposal.Verification == "live-ok" {
+		return "上游已连通。"
+	}
+	return "已生效，还没有真实调用验证。"
+}
+
 func (hub *serviceWorkspace) announceAppliedService(owner localToken, proposal serviceProposal) {
 	runtime := hub.runtime
 	service, host := "", ""
@@ -218,6 +267,10 @@ func (hub *serviceWorkspace) announceAppliedService(owner localToken, proposal s
 	if host != "" {
 		body = "目标：" + host + "\n" + body
 	}
+	if status, failed := strings.CutPrefix(proposal.Verification, "live-failed:"); failed {
+		title = fmt.Sprintf("LocalRouter · %s 接入了 %s，但连不通", owner.AgentName, service)
+		body += "\n上游检查未通过（" + status + "），Agent 会收到修正提示。"
+	}
 	runtime.humanEvent(gin.H{"event": "service_applied", "id": proposal.ID, "agent_code": owner.AgentCode, "agent_name": owner.AgentName, "service": service, "host": host, "title": title, "body": body})
 	if runtime.policies == nil || runtime.policies.budgets == nil {
 		return
@@ -227,7 +280,7 @@ func (hub *serviceWorkspace) announceAppliedService(owner localToken, proposal s
 		case "undo":
 			_, _ = hub.undoApplied(proposal.ID, "desktop", 0)
 		case "open":
-			openConsole(runtime, "setup")
+			openConsole(runtime, "setup/"+proposal.ID)
 		}
 	})
 }
@@ -366,15 +419,38 @@ func (runtime localRuntime) humanEvent(event gin.H) {
 	if hook == "" {
 		return
 	}
-	event["console_url"] = consoleURL(runtime, "")
+	if _, exists := event["console_url"]; !exists {
+		event["console_url"] = consoleURL(runtime, "")
+	}
 	raw, _ := json.Marshal(event)
-	go func() {
+	humanHookOnce.Do(func() { go runHumanHooks() })
+	select {
+	case humanHookQueue <- humanHookJob{hook: hook, event: raw}:
+	default:
+		log.Printf("human request hook queue full; dropped %s event", event["event"])
+	}
+}
+
+type humanHookJob struct {
+	hook  string
+	event []byte
+}
+
+// One worker delivers events in order, so a hook never sees a decision before
+// the request it closes and never races itself on its own state.
+var (
+	humanHookQueue = make(chan humanHookJob, 256)
+	humanHookOnce  sync.Once
+)
+
+func runHumanHooks() {
+	for job := range humanHookQueue {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		command := exec.CommandContext(ctx, hook)
-		command.Stdin = bytes.NewReader(raw)
+		command := exec.CommandContext(ctx, job.hook)
+		command.Stdin = bytes.NewReader(job.event)
 		_ = command.Run()
-	}()
+		cancel()
+	}
 }
 
 func consoleURL(runtime localRuntime, page string) string {

@@ -29,7 +29,7 @@ const validSections = new Set<SectionId>([
 ])
 
 function currentSection(): SectionId {
-  const raw = window.location.hash.slice(1)
+  const raw = window.location.hash.slice(1).split('/')[0]
   const section = (raw === 'channels' || raw === 'control' ? 'protocols' : raw) as SectionId
   return validSections.has(section) ? section : 'overview'
 }
@@ -218,7 +218,7 @@ export default function App() {
     const data = consoleData.data
     switch (activeSection) {
       case 'setup':
-        content = <SetupPage adminToken={requestAdminToken} tokens={data.tokens} />
+        content = <SetupPage focus={activeHash.startsWith('#setup/') ? decodeURIComponent(activeHash.slice(7)) : undefined} adminToken={requestAdminToken} tokens={data.tokens} />
         break
       case 'protocols':
         content = (
