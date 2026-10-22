@@ -6,6 +6,13 @@ published.
 
 ## Unreleased
 
+- `lr describe` and preflight include model-scoped prices for operations that
+  take a model, so a Pack priced per model (for example per video second) no
+  longer reports `pricing: []` and "operation price is unknown"; preflight names
+  the price of the selected model.
+- `lr tree` marks operations whose published availability is `blocked` or
+  `deprecated`, so a ready Pack no longer hides an unusable operation.
+
 ## 0.4.1 - 2026-10-22
 
 - Built with Go 1.26.10 (toolchain and Docker build image), resolving the

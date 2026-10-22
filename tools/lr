@@ -608,7 +608,8 @@ command_tree() {
                 + (if (.key == ((($node.routes // []) | length) - 1)) and (($node.workflows // []) | length) == 0 then "└─ " else "├─ " end)
                 + "op " + (.value.operation_key // ($node.id + "." + .value.operation_id))
                 + "  " + ((.value.methods // []) | join("/")) + " " + (.value.call_url // .value.path)
-                + (if (.value.transport // "http") != "http" then " [" + .value.transport + "]" else "" end)),
+                + (if (.value.transport // "http") != "http" then " [" + .value.transport + "]" else "" end)
+                + (if (.value.availability.status // "") == "blocked" or (.value.availability.status // "") == "deprecated" then " [" + .value.availability.status + "]" else "" end)),
             (($node.workflows // []) | to_entries[]
               | $indent
                 + (if .key == ((($node.workflows // []) | length) - 1) then "└─ " else "├─ " end)

@@ -572,8 +572,14 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		}
 		if len(descriptor.Pricing) == 0 {
 			addCheck("pricing", "warn", "operation price is unknown", false)
+		} else if price, ok := preflightPrice(descriptor.Pricing, input); ok {
+			detail := "pricing status: " + price.Status
+			if price.Amount != nil {
+				detail += fmt.Sprintf(" (%s: %g %s per %s)", price.ID, *price.Amount, price.Currency, price.Unit)
+			}
+			addCheck("pricing", "pass", detail, false)
 		} else {
-			addCheck("pricing", "pass", "pricing status: "+descriptor.Pricing[0].Status, false)
+			addCheck("pricing", "warn", "no published price matches the selected model", false)
 		}
 		if descriptor.SideEffecting {
 			addCheck("side_effects", "warn", "the selected method may create or modify provider state; preserve any returned resource or Job ID", false)
@@ -698,6 +704,7 @@ func (registry *protocolRegistry) describeOperationFromView(view protocolView, r
 	sort.Strings(capabilities)
 	pricing := operationPricing(view.Pricing, route.OperationID)
 	aliases := operationAliases(pricing, capabilities)
+	pricing = append(pricing, operationModelPricing(view.Pricing, route)...)
 	transport := route.Transport
 	if transport == "" {
 		transport = "http"
@@ -871,6 +878,48 @@ func operationPricing(pricing *protocolPricing, operationID string) []protocolPr
 	}
 	for _, entry := range pricing.Entries {
 		if entry.Scope == "operation" && entry.ID == operationID {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+// operationModelPricing returns the model-scoped prices that apply to an
+// operation taking a model input: the schema-declared models when the route
+// lists them, otherwise every model-scoped entry of the Pack.
+// preflightPrice picks the operation price, or the price of the model the
+// input selects.
+func preflightPrice(pricing []protocolPricingEntry, input any) (protocolPricingEntry, bool) {
+	model := ""
+	if object, ok := input.(map[string]any); ok {
+		model, _ = object["model"].(string)
+	}
+	for _, entry := range pricing {
+		if entry.Scope != "model" {
+			return entry, true
+		}
+	}
+	for _, entry := range pricing {
+		if entry.ID == model {
+			return entry, true
+		}
+	}
+	return protocolPricingEntry{}, false
+}
+
+func operationModelPricing(pricing *protocolPricing, route protocolRoute) []protocolPricingEntry {
+	result := make([]protocolPricingEntry, 0)
+	if pricing == nil {
+		return result
+	}
+	var example map[string]any
+	_ = json.Unmarshal(route.RequestBody, &example)
+	declared := protocolSchemaStringEnum(route.RequestSchema, "model")
+	if _, takesModel := example["model"]; !takesModel && len(declared) == 0 {
+		return result
+	}
+	for _, entry := range pricing.Entries {
+		if entry.Scope == "model" && (len(declared) == 0 || containsString(declared, entry.ID)) {
 			result = append(result, entry)
 		}
 	}
