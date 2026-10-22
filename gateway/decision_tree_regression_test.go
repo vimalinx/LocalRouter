@@ -33,8 +33,7 @@ func treeEnroll(t *testing.T, rt localRuntime, s *httptest.Server, p localTokenP
 		Data identityRequest `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &e))
-	code, raw = setupHTTP(t, s, localToken{}, "POST", "/local/api/identity-requests/"+e.Data.ID+"/decision", map[string]any{"digest": e.Data.Digest, "approve": true})
-	require.Equal(t, 200, code, string(raw))
+	require.Equal(t, "approved", e.Data.State)
 	req, _, err := loadIdentityRequest(rt.store, e.Data.ID)
 	require.NoError(t, err)
 	token, err := rt.store.tokenByID(rt.rootUser.ID, req.TokenID, true)
@@ -208,9 +207,12 @@ func TestDecisionTreeA07RejectedEnrollmentCanRecover(t *testing.T) {
 	require.Contains(t, string(out), `"withdrawn": true`)
 	out, err = treeCLI(t, s, localToken{}, dir, "identity", "request", "tree-agent", good)
 	require.NoError(t, err, string(out))
+	require.Contains(t, string(out), `"ready": true`)
 	var n int
-	require.NoError(t, rt.store.db.QueryRow(`SELECT count(*) FROM identity_requests WHERE state='pending'`).Scan(&n))
+	require.NoError(t, rt.store.db.QueryRow(`SELECT count(*) FROM identity_requests WHERE state='approved'`).Scan(&n))
 	require.Equal(t, 1, n)
+	require.NoError(t, rt.store.db.QueryRow(`SELECT count(*) FROM identity_requests WHERE state='pending'`).Scan(&n))
+	require.Zero(t, n)
 }
 
 func TestDecisionTreeA08QuotaAllowsJobRecovery(t *testing.T) {

@@ -1,4 +1,4 @@
-import { Bot, RadioTower, ServerCog, ShieldCheck } from 'lucide-react'
+import { Bot, RadioTower, ServerCog, ShieldCheck, Sparkles } from 'lucide-react'
 import { lazy, Suspense, useEffect, useId, useState } from 'react'
 
 import { LoadingState } from '@/components/loading-state'
@@ -12,12 +12,14 @@ import { cn } from '@/lib/utils'
 
 const ChannelsPage = lazy(() => import('@/features/channels/channels-page').then(module => ({ default: module.ChannelsPage })))
 const ServiceAllowances = lazy(() => import('@/features/services/service-allowances').then(module => ({ default: module.ServiceAllowances })))
+const ModelPreferences = lazy(() => import('@/features/services/model-preferences').then(module => ({ default: module.ModelPreferences })))
 const ControlPlanePage = lazy(() => import('@/features/control/control-plane-page').then(module => ({ default: module.ControlPlanePage })))
 
-type WorkspaceTab = 'services' | 'models' | 'allowances'
+type WorkspaceTab = 'services' | 'models' | 'defaults' | 'allowances'
 const tabs = [
   ['services', '服务号池', ServerCog],
   ['models', '模型渠道', RadioTower],
+  ['defaults', '默认模型', Sparkles],
   ['allowances', '自主额度', ShieldCheck],
 ] as const
 
@@ -63,7 +65,7 @@ export function ServicesPage(props: {
       <div id={`${tabsId}-panel`} role='tabpanel' aria-labelledby={`${tabsId}-${activeTab}`} tabIndex={0} className={cn('min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', activeTab === 'models' ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden')}>
         <ErrorBoundary key={activeTab}>
         <Suspense fallback={<LoadingState label='正在打开服务页面…' />}>
-        {activeTab === 'allowances' ? <ServiceAllowances adminToken={props.adminToken} /> : activeTab === 'services' ? (
+        {activeTab === 'allowances' ? <ServiceAllowances adminToken={props.adminToken} /> : activeTab === 'defaults' ? <ModelPreferences adminToken={props.adminToken} protocols={props.protocols} /> : activeTab === 'services' ? (
           <ProtocolsPage embedded protocols={props.protocols} adminToken={props.adminToken} onChanged={props.onChanged} onOpenEditor={() => setEditorOpen(true)} />
         ) : (
           <ChannelsPage embedded adminToken={props.adminToken} channels={props.channels} providers={props.providers} onChanged={props.onChanged} />

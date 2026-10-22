@@ -6,6 +6,81 @@ published.
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-22
+
+- Updated the console build to Vite 7.3.7 and Vitest 4.1.12, resolving
+  GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-9jrq-w75r-8gcw,
+  GHSA-r825-w8mm-5pxw, GHSA-rq7h-c2jc-7f22, GHSA-qxg6-89mg-rqv8 and
+  GHSA-xp26-3454-mjgp.
+- Preflight now enforces `minLength`, `maxLength`, `pattern`, `minimum`,
+  `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `minItems` and
+  `maxItems` from explicit request schemas, so an out-of-range paid request is
+  blocked before `lr exec` sends it.
+- An upstream 429 settles its budget reservation at zero, so a `/v1` failover
+  past a rate-limited Pack no longer consumes the trial. All Pack attempts of
+  one `/v1` request share a trace ID in `/agent/traces`.
+- `/v1` answers an unknown model name with 404 `model_not_found` and a next
+  step, instead of 503 `channel_not_ready`.
+- Published `call.cli` uses `lr exec`; `lr result <id> --show` prints the saved
+  response; `lr budget request --wait` prints the request ID before waiting;
+  `lr init` omits `registration_url` once the Token is ready; a rejected
+  schema-enum model names the allowed values; trial-exhausted errors explain
+  the reservation and how a program asks for budget.
+- The live guide adds a runnable `/v1` call, states that `/v1` needs no
+  preflight, when to use `lr exec`, `lr call` or `lr run`, how `lr resolve`
+  selects candidates, that `ready` does not check provider balance, how
+  reservations block a trial early, and how to act as a connected program.
+  These gaps were found by Agents that completed real tasks using only the
+  guide.
+- `/v1` is the shortest path for programs: a Service Token and a model name.
+  A request without `model` uses the operator's default model, and models of
+  full Packs that the operator puts on `/v1` are answered there and listed by
+  `GET /v1/models`. When no Channel serves the model, the request runs through
+  the same `/p/<pack>` pipeline (auth, policy, budget, trace) for each listed
+  Pack in order, moving on only when nothing was sent upstream or the provider
+  answered 429. `X-LocalRouter-Pack` and `X-LocalRouter-Default-Model` report
+  the choice. Contract schema 19.
+- Model preferences live in `$XDG_CONFIG_HOME/localrouter/models.json` and the
+  console tab 服务与渠道 → 默认模型: the default model, each service's
+  `preferred_model`, which Packs answer on `/v1`, and `/v1` name aliases. Hand
+  edits apply without a restart. Discovery publishes `models` and per-service
+  `preferred_model`; `lr tree` shows them, `lr runtime-openai <pack>` defaults
+  to the preferred model, and `lr connect` writes the default model into
+  `localrouter.toml`.
+- Model search runs on the gateway (`GET /agent/models`). `lr find model` only
+  forwards the query, catalogues are read concurrently, and matches mark
+  `preferred` and `default`. The output shape is unchanged.
+- The installed global Agent contract and `docs/AGENT-USAGE.md` keep only the
+  fixed boundaries and point to the live guide (`lr guide`), which is now the
+  single usage contract.
+- Agent identity review is gone. `lr identity request`, `lr identity prepare`
+  and `lr identity access` take effect at once; a new identity starts on the
+  trial budget, and money stays the only human decision. A policy of `{}` means
+  every service. The console's identity request list, the auto-approve setting
+  and `/local/api/identity-requests` are removed. The former strict-mode switch
+  now only turns on per-service allowance checks and no longer requires an
+  independent identity; `whoami` drops `strict_mode`, `identity_required` and
+  `auto_enrollment`. Contract schema 18.
+- `lr connect <program>` gives a program its own identity at once, saves the
+  Token to `$XDG_DATA_HOME/localrouter/programs/<program>/service-token`
+  (mode 0600) and writes `$XDG_CONFIG_HOME/<program>/localrouter.toml` with the
+  loopback base URLs, Token path and agent code. Rerunning reuses a working
+  Token and replaces a revoked one.
+- `lr status`, `lr find model`, `lr find pool` and other commands no longer fail
+  with `jq: Argument list too long` on large discovery documents or catalogues;
+  large JSON reaches jq through a file descriptor.
+- `lr find model` searches standard compatibility Packs such as
+  `openai-compatible` through their live `GET .../models` listing, so
+  `lr find model --exact openai-compatible:<model>` resolves instead of
+  reporting `pack_not_found`.
+
+- The gateway opens a second loopback listener on `127.0.0.1:29317`
+  (`LOCAL_GATEWAY_ALIAS_PORT`, `LOCAL_GATEWAY_ALIAS_ENABLED`) serving the
+  identical operator engine, so local programs can keep one LocalRouter-owned
+  port as a stable alternative to the configured primary port. The port is
+  unassigned by IANA and below the Linux ephemeral range. A bind failure is
+  logged and reported as `loopback_alias.error` in `/local/status`, the
+  console summary and discovery; the primary listener is unaffected.
 - Approving one service no longer makes every other pending proposal stale.
   A proposal records the live bytes of its own Pack files; while they are
   unchanged, approval rebuilds the identical change on the current live Packs.

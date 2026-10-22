@@ -13,16 +13,16 @@ func TestAgentIdentityEntryAndCompactTemplateDiscovery(t *testing.T) {
 	status, raw := setupHTTP(t, server, owner, http.MethodGet, "/agent/whoami", nil)
 	require.Equal(t, 200, status)
 	require.Contains(t, string(raw), `"identity_ready":true`)
-	require.Contains(t, string(raw), `"strict_mode":false`)
-	require.Contains(t, string(raw), `"identity_required":false`)
+	// Identity review is gone: allowance checks never make an identity required.
 	require.NoError(t, rt.policies.allowances.transaction(true, func(doc *serviceAllowanceDocument) error {
 		doc.Settings.Enabled = true
 		return nil
 	}))
 	status, raw = setupHTTP(t, server, owner, http.MethodGet, "/agent/whoami", nil)
 	require.Equal(t, 200, status)
-	require.Contains(t, string(raw), `"strict_mode":true`)
-	require.Contains(t, string(raw), `"identity_required":true`)
+	require.NotContains(t, string(raw), `"strict_mode"`)
+	require.NotContains(t, string(raw), `"identity_required"`)
+	require.Contains(t, string(raw), `"service_access":true`)
 	owner.AgentCode = "localrouter-system"
 	_, err := rt.workspace.prepare(owner, serviceProposalInput{Kind: "bundle", Reason: "should require independent identity", Bundle: &serviceBundle{ID: "empty", Name: "Empty"}})
 	require.ErrorContains(t, err, "agent_identity_required")
@@ -48,7 +48,7 @@ func TestPublishedLegacyGuidanceUsesFileLocatorWithoutChangingOtherExamples(t *t
 	require.NotRegexp(t, legacyTokenValueExample, got)
 	route := protocolRoute{OperationID: "crawl.status", Path: "/jobs/{jobId}", Methods: []string{http.MethodGet}, QueryParameters: []string{"format"}}
 	call := publishProtocolRoute("fixture", "/p/fixture", []protocolRoute{route}, route).Call.CLI
-	require.True(t, strings.HasPrefix(call, "lr call fixture crawl.status '{}'"))
+	require.True(t, strings.HasPrefix(call, "lr exec fixture crawl.status '{}'"))
 	require.Contains(t, call, `'{"jobId":"actual-jobId"}'`)
 	require.Contains(t, call, `'{"format":"actual-format"}'`)
 }

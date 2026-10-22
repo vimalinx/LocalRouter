@@ -77,6 +77,8 @@ type localCompatibilityPackView struct {
 	StatusLabel string                        `json:"status_label"`
 	Pool        localCompatibilityPoolView    `json:"pool"`
 	Routes      []localCompatibilityRouteView `json:"routes"`
+	// PreferredModel is the operator's model choice from models.json.
+	PreferredModel string `json:"preferred_model,omitempty"`
 }
 
 type localCompatibilityPoolView struct {

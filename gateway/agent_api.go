@@ -7,15 +7,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
 
-const agentContractSchemaVersion = "17"
+const agentContractSchemaVersion = "19"
 
 type agentOperationRef struct {
 	OperationKey string   `json:"operation_key"`
@@ -133,10 +135,10 @@ func (registry *protocolRegistry) handleAgentDocs(c *gin.Context) {
 		"contract_digest": registry.currentDigest(),
 		"authentication":  gin.H{"type": "bearer", "header": "Authorization", "token_purpose": "service-calls-and-proposal-preparation"},
 		"identity": gin.H{
-			"binding": "service-token", "registration": "operator-issued", "console": console,
+			"binding": "service-token", "registration": "self-service-or-operator-issued", "console": console,
 			"required_fields": []string{"agent_code", "agent_name", "workspace"},
 			"whoami":          "/agent/whoami", "secret_values_returned": false, "start_command": "lr init", "getting_started": "/docs/agent-start.md",
-			"enrollment":    gin.H{"available": requestServerScope(c) != lanServiceScope, "request": "/agent/identity-requests", "cli": "lr identity request <agent-code> <policy-json>", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "setup_rule": setupIdentityAction, "schema": "/docs/identity-request.schema.json", "claim_cli": "lr identity claim", "approval": "automatic on the trial budget in ordinary mode; human-reviewed exact scope in strict mode", "budget": gin.H{"status_cli": "lr budget", "request_cli": "lr budget request formal --monthly <usd> [--daily <usd>] --reason <why> | lr budget request trial --reason <why>", "request": "/agent/budget-requests", "rule": "new identities start on a small trial; the human approves any further money once"}, "delivery": "private claim; CLI saves mode-600 credential without displaying it", "scope_changes": "/agent/access-requests", "scope_change_cli": "lr identity access <complete-policy-json>"},
+			"enrollment":    gin.H{"available": requestServerScope(c) != lanServiceScope, "request": "/agent/identity-requests", "cli": "lr identity request <agent-code> <policy-json>", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "setup_rule": setupIdentityAction, "schema": "/docs/identity-request.schema.json", "claim_cli": "lr identity claim", "approval": "immediate on the trial budget; no identity review", "program_cli": "lr connect <program>", "budget": gin.H{"status_cli": "lr budget", "request_cli": "lr budget request formal --monthly <usd> [--daily <usd>] --reason <why> | lr budget request trial --reason <why>", "request": "/agent/budget-requests", "rule": "new identities start on a small trial; the human approves any further money once"}, "delivery": "private claim; CLI saves mode-600 credential without displaying it", "scope_changes": "/agent/access-requests", "scope_change_cli": "lr identity access <complete-policy-json>"},
 			"reuse_command": "lr identity bind <agent-code> <token-file>", "reuse_scope": "Agent session, workspace and service origin; locator only",
 		},
 		"flow":       []string{"catalog-or-resolve", "compare-optional", "agent-chooses-operation-key", "describe", "preflight", "run", "watch-or-read-result"},
@@ -244,15 +246,6 @@ func handleAgentWhoAmI(runtime localRuntime) gin.HandlerFunc {
 			"maintenance_access": false, "contract_digest": runtime.protocols.currentDigest(),
 			"contract_schema_version": agentContractSchemaVersion,
 		}
-		strictMode, err := runtime.strictMode()
-		if err != nil {
-			writeAgentError(c, http.StatusServiceUnavailable, "strict_mode_unavailable", "cannot read strict mode settings", "local settings unavailable", false, "localrouter", "restore readable service allowance settings, then retry the identity check", nil, nil, nil)
-			return
-		}
-		response["strict_mode"] = strictMode
-		response["identity_required"] = strictMode
-		response["auto_enrollment"] = runtime.autoApproveIdentities()
-
 		if runtime.store != nil && tokenID > 0 {
 			if token, err := runtime.store.tokenByID(runtime.rootUser.ID, tokenID, false); err == nil {
 				response["token_name"] = token.Name
@@ -725,7 +718,7 @@ func (registry *protocolRegistry) describeOperationFromView(view protocolView, r
 		call["required_query"] = append([]string(nil), route.QueryParameters...)
 	}
 	if len(parameters) == 0 {
-		call["cli"] = "lr call " + view.ID + " " + route.OperationID + " '<json>'"
+		call["cli"] = "lr exec " + view.ID + " " + route.OperationID + " '<json>'"
 	}
 	return agentOperationDescriptor{
 		ContractDigest: registry.currentDigest(), ContractSchemaVersion: agentContractSchemaVersion,
@@ -1110,6 +1103,7 @@ func validateAgentSchemaValue(schema any, value any, path string) []string {
 	if typeName, ok := object["type"].(string); ok && !agentJSONTypeMatches(typeName, value) {
 		return append(violations, path+" must be "+typeName)
 	}
+	violations = append(violations, agentSchemaBounds(object, value, path)...)
 	properties, hasProperties := object["properties"].(map[string]any)
 	if hasProperties {
 		mapped, mappedOK := value.(map[string]any)
@@ -1145,6 +1139,70 @@ func validateAgentSchemaValue(schema any, value any, path string) []string {
 		}
 	}
 	return violations
+}
+
+// agentSchemaBounds checks the length, range and size keywords that decide
+// whether a provider will accept the value; a preflight that ignores them
+// would approve a paid request the provider rejects.
+func agentSchemaBounds(object map[string]any, value any, path string) []string {
+	violations := []string{}
+	limit := func(name string) (float64, bool) { return agentSchemaNumber(object[name]) }
+	switch typed := value.(type) {
+	case string:
+		length := float64(utf8.RuneCountInString(typed))
+		if minimum, ok := limit("minLength"); ok && length < minimum {
+			violations = append(violations, fmt.Sprintf("%s must have at least %g characters", path, minimum))
+		}
+		if maximum, ok := limit("maxLength"); ok && length > maximum {
+			violations = append(violations, fmt.Sprintf("%s must have at most %g characters", path, maximum))
+		}
+		if pattern, ok := object["pattern"].(string); ok {
+			if expression, err := regexp.Compile(pattern); err == nil && !expression.MatchString(typed) {
+				violations = append(violations, path+" does not match the required pattern")
+			}
+		}
+	case []any:
+		count := float64(len(typed))
+		if minimum, ok := limit("minItems"); ok && count < minimum {
+			violations = append(violations, fmt.Sprintf("%s must have at least %g items", path, minimum))
+		}
+		if maximum, ok := limit("maxItems"); ok && count > maximum {
+			violations = append(violations, fmt.Sprintf("%s must have at most %g items", path, maximum))
+		}
+	default:
+		number, isNumber := agentSchemaNumber(value)
+		if !isNumber {
+			break
+		}
+		if minimum, ok := limit("minimum"); ok && number < minimum {
+			violations = append(violations, fmt.Sprintf("%s must be >= %g", path, minimum))
+		}
+		if maximum, ok := limit("maximum"); ok && number > maximum {
+			violations = append(violations, fmt.Sprintf("%s must be <= %g", path, maximum))
+		}
+		if minimum, ok := limit("exclusiveMinimum"); ok && number <= minimum {
+			violations = append(violations, fmt.Sprintf("%s must be > %g", path, minimum))
+		}
+		if maximum, ok := limit("exclusiveMaximum"); ok && number >= maximum {
+			violations = append(violations, fmt.Sprintf("%s must be < %g", path, maximum))
+		}
+	}
+	return violations
+}
+
+func agentSchemaNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		number, err := typed.Float64()
+		return number, err == nil
+	}
+	return 0, false
 }
 
 func agentJSONTypeMatches(typeName string, value any) bool {

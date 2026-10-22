@@ -69,9 +69,9 @@ requires human approval. Read `lr guide` and the published `/docs/agent.json` fo
 ## First service, input schemas, and replacement reviews
 
 For an unpublished service with no independent identity, use `lr identity prepare
-<agent-code>` (policy `{"setup_only":true}`). Ordinary mode issues it at once on the
-trial budget; strict mode needs human approval, then `lr identity claim`. This identity cannot call services. Never request an unrelated published
-Pack merely to unlock proposal preparation. A rejected enrollment can be cancelled
+<agent-code>` (policy `{"setup_only":true}`). It is issued at once on the trial
+budget with no identity review. This identity cannot call services. Never request an unrelated published
+Pack merely to unlock proposal preparation. An enrollment whose issuance failed can be cancelled
 with `lr identity cancel` before resubmitting; never delete shared binding folders.
 
 `lr identity schema` publishes enrollment field types. `lr setup schema` returns

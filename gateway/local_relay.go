@@ -143,6 +143,7 @@ func registerRelayRoutesWithRuntime(engine *gin.Engine, runtime localRuntime) {
 	geminiModels.GET("/:model", handleRelayModel(runtime))
 
 	relayV1 := engine.Group("/v1")
+	relayV1.Use(v1PackRelay(engine, runtime))
 	relayV1.Use(auth)
 	relayV1.Use(serviceTraceMiddleware(runtime, "v1"))
 	if runtime.policies != nil {
@@ -196,6 +197,22 @@ func handleRelayModels(runtime localRuntime) gin.HandlerFunc {
 				data = append(data, gin.H{"id": model, "object": "model", "created": channel.CreatedTime, "owned_by": channel.Name})
 			}
 		}
+		if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
+			tokenID := c.GetInt(tokenPolicyContextID)
+			for _, target := range runtime.v1PackModels("/v1/chat/completions") {
+				if seen[target.Model] {
+					continue
+				}
+				if allowed, _, _ := runtime.policies.previewScope(tokenID, "p", target.Pack, "", ""); !allowed {
+					continue
+				}
+				if policy, exists := runtime.policies.policyFor(tokenID); exists && !containsPolicyValue(policy.Models, target.Model) {
+					continue
+				}
+				seen[target.Model] = true
+				data = append(data, gin.H{"id": target.Model, "object": "model", "created": 0, "owned_by": target.Pack})
+			}
+		}
 		if strings.HasPrefix(c.Request.URL.Path, "/v1beta/") {
 			models := make([]gin.H, 0, len(data))
 			for _, entry := range data {
@@ -222,6 +239,12 @@ func handleRelayModel(runtime localRuntime) gin.HandlerFunc {
 			return
 		}
 		if len(channels) == 0 {
+			if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
+				if targets := runtime.v1PackTargets("/v1/chat/completions", model); len(targets) > 0 {
+					c.JSON(http.StatusOK, gin.H{"id": model, "object": "model", "created": 0, "owned_by": targets[0].Pack})
+					return
+				}
+			}
 			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "model not found", "type": "invalid_request_error"}})
 			return
 		}
@@ -256,6 +279,17 @@ func handleRelayRequest(runtime localRuntime) gin.HandlerFunc {
 			return
 		}
 		if len(channels) == 0 {
+			if counts, countErr := runtime.store.enabledChannelCountsByType(); countErr == nil && (counts[profile.ID] > 0 || len(runtime.v1PackModels(c.Request.URL.Path)) > 0) {
+				// Channels for this protocol are up; the model name itself is unknown.
+				c.JSON(http.StatusNotFound, gin.H{
+					"success": false, "code": "model_not_found", "message": "no Channel or /v1 Pack serves this model: " + model,
+					"reason": "the model name is not served on this protocol", "retryable": false, "owner": "agent", "retry_after": nil,
+					"next_action":  "pick an exact name from GET /v1/models, or omit model to use the default; lr find model <text> searches every service",
+					"alternatives": []agentOperationRef{}, "upstream_called": false,
+					"error": gin.H{"message": "model not found: " + model, "type": "invalid_request_error", "code": "model_not_found"},
+				})
+				return
+			}
 			writeCompatibilityRelayError(c, runtime, http.StatusServiceUnavailable, "channel_not_ready", "no enabled channel supports this model and protocol", false)
 			return
 		}

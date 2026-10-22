@@ -45,7 +45,7 @@
 ./tools/install-localrouter.sh install
 ```
 
-安装完成后打开 [本机控制台](http://127.0.0.1:8317/)。默认仅本机免密访问；安装器会将程序和 `lr` 放入 `~/.local/bin`，并启动 `localrouter.service`。
+安装完成后打开 [本机控制台](http://127.0.0.1:8317/)。默认仅本机免密访问；安装器会将程序和 `lr` 放入 `~/.local/bin`，并启动 `localrouter.service`。同一进程还默认在 `127.0.0.1:29317` 提供一个完全等价的备用端口，本机程序可把它作为 LocalRouter 专属的候选入口。
 
 ```bash
 systemctl --user status localrouter.service --no-pager
@@ -97,9 +97,9 @@ cd LocalRouter
 |---|---|
 | Base URL | `http://127.0.0.1:8317/v1` |
 | API Key | 上一步签发的调用 Token |
-| Model | 渠道中已配置、上游实际可用的精确模型 ID |
+| Model | `GET /v1/models` 列出的模型名；留空的请求使用默认模型 |
 
-这里的 Base URL 适用于标准模型渠道。完整 Protocol Pack 的地址从发现文档获取，符合聊天契约的 Pack 可用 `lr runtime-openai` 查询，见 [Agent 接入指南](docs/AGENT-USAGE.md#接入模型客户端)。
+`/v1` 按模型名选路：先找支持该模型的渠道，没有时交给在“服务与渠道 → 默认模型”里放进 `/v1` 的 Protocol Pack。其他完整 Pack 的地址从发现文档获取，符合聊天契约的 Pack 可用 `lr runtime-openai` 查询，见 [Agent 发现与调用](docs/AGENT-USAGE.md)。
 
 **4. 发一条消息并查看记录。** 确认计费后发送一次“请只回复 OK”。收到模型回复后，打开“请求日志”核对模型、渠道及耗时，再到“Token 管理”查看对应身份的调用量。调用失败时先看错误和日志，按[常见问题](#常见问题)排查。
 
@@ -153,7 +153,7 @@ lr tree
 
 用 `lr find operation` 查操作、`lr find model` 查模型、`lr find pool` 查账号池。先明确选择服务，确认就绪状态和精确模型，再按公布的契约调用。付费或会改变上游状态的 Protocol Pack 操作需要授权及预检；预检失败时停止，已提交请求的结果不确定时先查状态。
 
-[完整 Agent 指南](docs/AGENT-USAGE.md) 提供搜索、精确匹配、预检、单次请求与响应保存模板，以及长任务恢复和客户端配置。
+完整使用契约由网关提供，`lr guide` 读取；[Agent 发现与调用](docs/AGENT-USAGE.md) 说明各入口适合什么。
 
 ## 控制台、调用和维护权限
 
@@ -196,7 +196,7 @@ lr tree
 
 **终端提示找不到 `lr`？**
 
-确认 `~/.local/bin` 已加入 `PATH`，也可以先用 `~/.local/bin/lr status` 验证。CLI 依赖 Bash、curl 和 jq；Token 文件的路径与权限配置见 [Agent 指南](docs/AGENT-USAGE.md#准备调用身份)。
+确认 `~/.local/bin` 已加入 `PATH`，也可以先用 `~/.local/bin/lr status` 验证。CLI 依赖 Bash、curl 和 jq；Token 文件的路径与权限配置见 [配置和数据放在哪里](docs/OPERATIONS.md#配置和数据放在哪里)。
 
 ## 开发与验证
 
@@ -211,7 +211,7 @@ make build
 
 | 文档 | 内容 |
 |---|---|
-| [Agent 使用](docs/AGENT-USAGE.md) | 发现、预检、调用、长任务与恢复 |
+| [Agent 使用](docs/AGENT-USAGE.md) | 三种接入入口；具体用法见 `lr guide` |
 | [Agent 接入与恢复决策树](docs/AGENT-DECISION-FLOW.md) | 身份、审批生效、请求额度与未知任务恢复 |
 | [Agent 预算与账单](docs/AGENT-BILLING.md) | 独立金额预算、消费明细、未知费用核对与撤销历史 |
 | [配置与维护](docs/OPERATIONS.md) | 权限、安装副作用、更新、LAN、目录与迁移 |

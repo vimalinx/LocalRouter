@@ -313,6 +313,11 @@ export function OverviewPage(props: {
                 <Button size='icon' variant='ghost' className='size-7' aria-label='复制网关地址' onClick={copyBaseUrl}><Copy aria-hidden='true' /></Button>
               </div>
               <div className='flex items-center justify-between gap-3 py-2'><dt className='text-muted-foreground'>监听</dt><dd className='font-mono'>{props.summary.listen}</dd></div>
+              {props.summary.loopback_alias?.enabled && props.summary.loopback_alias.listen ? (
+                <div className='flex items-center justify-between gap-3 py-2'><dt className='text-muted-foreground'>备用监听</dt><dd className='font-mono'>{props.summary.loopback_alias.listen}</dd></div>
+              ) : props.summary.loopback_alias?.error ? (
+                <div className='flex items-center justify-between gap-3 py-2'><dt className='text-muted-foreground'>备用监听</dt><dd className='text-right text-amber-600 dark:text-amber-400'>未绑定</dd></div>
+              ) : null}
               <div className='flex items-center justify-between gap-3 py-2'><dt className='text-muted-foreground'>本机 API Token</dt><dd className='tabular-nums'>{props.summary.tokens}</dd></div>
               <div className='flex items-center justify-between gap-3 py-2'>
                 <dt className='text-muted-foreground'>版本</dt>

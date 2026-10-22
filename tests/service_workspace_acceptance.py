@@ -156,17 +156,15 @@ try:
         # The existing bootstrap credential works by default, including streaming.
         env['LOCALROUTER_API_TOKEN_FILE'] = str(root/'data/api-token')
         ordinary = cli('init')
-        assert ordinary['ready'] and not ordinary['identity_ready'] and not ordinary['identity_required'] and not ordinary['strict_mode']
+        assert ordinary['ready'] and not ordinary['identity_ready'] and 'identity_required' not in ordinary and 'strict_mode' not in ordinary
         before_generations = Provider.generation_calls
         response = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10,"stream":true}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
         assert response.returncode == 0 and response.stdout.endswith('data: [DONE]\n\n'), (response.stdout, response.stderr)
         assert Provider.generation_calls == before_generations+1
         settings = api('/local/api/service-allowance-settings')['data']
         settings = api('/local/api/service-allowance-settings','PUT',{'enabled':True,'revision':settings['revision']})['data']
-        strict = subprocess.run([str(project/'tools/lr'),'init'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
-        assert strict.returncode != 0 and json.loads(strict.stdout)['identity_required']
-        blocked = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[]}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
-        assert blocked.returncode != 0 and Provider.generation_calls == before_generations+1
+        # Allowance checks never make an independent identity required.
+        assert cli('init')['ready']
         api('/local/api/service-allowance-settings','PUT',{'enabled':False,'revision':settings['revision']})
         assert cli('init')['ready']
         env['LOCALROUTER_API_TOKEN_FILE'] = str(token_path)
@@ -218,22 +216,15 @@ try:
         Provider.fail_generation = True
         result = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
         assert result.returncode != 0 and Provider.generation_calls == before_generations+2
-        # One human scope approval replaces manual Token transfer. The CLI owns
-        # its private claim and credential, and resumes without printing either.
+        # Enrollment issues at once with no human review. The CLI owns its
+        # private claim and credential, and resumes without printing either.
         original_session = env['LOCALROUTER_AGENT_SESSION']
         env['LOCALROUTER_AGENT_SESSION'] = 'enrollment-session'
         requested_policy = {'packs':['demo-search'],'operations':['demo-search.models','demo-search.generate'],'models':['fixture-model'],'daily_request_limit':20}
-        # Automatic enrollment is the default; this section covers human review.
-        budget_settings = api('/local/api/agent-budget-settings')['data']
-        api('/local/api/agent-budget-settings','PUT',{**budget_settings,'auto_approve_identities':False})
         enrolled = cli('identity','request','enrolled-fixture',json.dumps(requested_policy))
-        assert enrolled['state'] == 'pending' and not enrolled['ready']
+        assert enrolled['ready'] and enrolled['agent_code'] == 'enrolled-fixture'
         assert 'token' not in enrolled and Provider.generation_calls == before_generations+2
-        pending_claim = subprocess.run([str(project/'tools/lr'),'identity','claim'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
-        assert pending_claim.returncode != 0 and not json.loads(pending_claim.stdout)['ready']
-        assert cli('identity','request','enrolled-fixture',json.dumps(requested_policy))['id'] == enrolled['id']
-        approval = api('/local/api/identity-requests/'+enrolled['id']+'/decision','POST',{'digest':enrolled['digest'],'approve':True})['data']
-        assert approval['state'] == 'approved' and 'key' not in approval
+        assert cli('identity','request','enrolled-fixture',json.dumps(requested_policy))['agent_code'] == 'enrolled-fixture'
         Provider.fail_generation = False
         auto_claim = subprocess.run([str(project/'tools/lr'),'exec','demo-search','generate','{"model":"fixture-model","messages":[],"max_tokens":10,"stream":true}'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
         assert auto_claim.returncode == 0 and auto_claim.stdout.endswith('data: [DONE]\n\n'), (auto_claim.stdout,auto_claim.stderr)
@@ -253,8 +244,7 @@ try:
         assert denied.returncode != 0 and json.loads(denied.stdout)['code'] == 'token_policy_denied'
         expanded = dict(requested_policy,operations=['demo-search.models','demo-search.generate','demo-search.search'])
         scope_request = cli('identity','access',json.dumps(expanded))
-        assert scope_request['state'] == 'pending' and scope_request['owner_token_id'] == issued_id
-        api('/local/api/identity-requests/'+scope_request['id']+'/decision','POST',{'digest':scope_request['digest'],'approve':True})
+        assert scope_request['state'] == 'approved' and scope_request['owner_token_id'] == issued_id
         assert cli('identity','access-status',scope_request['id'])['state'] == 'approved'
         assert cli('init')['token_id'] == issued_id
         assert cli('call','demo-search','search','{}','{}','{"q":"now within approved scope"}')['state'] == 'succeeded'
@@ -274,9 +264,6 @@ try:
         pending = payload(cli('setup','prepare','@'+str(input_path)))['proposal']
         env.update(XDG_DATA_HOME=str(root/'client-data'),LOCALROUTER_AGENT_SESSION='browser-enrollment')
         env.pop('LOCALROUTER_API_TOKEN_FILE',None)
-        # The demo shows requests awaiting review, so turn automatic enrollment off.
-        budget_settings = api('/local/api/agent-budget-settings')['data']
-        api('/local/api/agent-budget-settings','PUT',{**budget_settings,'auto_approve_identities':False})
         identity_request=cli('identity','request','browser-agent',json.dumps({'packs':['demo-search'],'operations':['demo-search.models','demo-search.generate'],'models':['fixture-model'],'daily_request_limit':50,'max_in_flight':2}))
         env['LOCALROUTER_AGENT_SESSION']='browser-setup-only'
         setup_request=cli('identity','prepare','setup-agent')
@@ -293,7 +280,7 @@ try:
                 if api('/healthz')['ok']: break
             except OSError: time.sleep(.1)
         else: raise RuntimeError('legacy demo did not restart')
-        (root/'demo.json').write_text(json.dumps({'url':base+'/#tokens','pending_id':pending['id'],'identity_request':identity_request['id'],'gateway_pid':process.pid,'token_id':token_id}))
+        (root/'demo.json').write_text(json.dumps({'url':base+'/#tokens','pending_id':pending['id'],'identity_request':identity_request['agent_code'],'gateway_pid':process.pid,'token_id':token_id}))
         print(json.dumps({'url':base+'/#setup','directory':str(root),'gateway_pid':process.pid}),flush=True)
         while process.poll() is None: time.sleep(1)
 finally:

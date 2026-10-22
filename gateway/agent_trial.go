@@ -1,8 +1,7 @@
 package main
 
-// Trial budgets replace per-identity human review in ordinary mode. Every new
-// identity starts with a small lifetime allowance drawn from a shared monthly
-// pool; money above that needs one human decision on an Agent-written budget
+// Trial budgets replace per-identity human review. Every new identity starts
+// with a small lifetime allowance drawn from a shared monthly pool; money above that needs one human decision on an Agent-written budget
 // request. The human sets every amount. Agents can never raise their own budget.
 import (
 	"database/sql"
@@ -17,16 +16,15 @@ import (
 )
 
 type agentBudgetSettings struct {
-	AutoApproveIdentities bool  `json:"auto_approve_identities"`
-	AutoApplyServices     bool  `json:"auto_apply_services"`
-	TrialPerAgent         int64 `json:"trial_per_agent_usd_micros"`
-	TrialPoolMonthly      int64 `json:"trial_pool_monthly_usd_micros"`
-	TrialRequestReserve   int64 `json:"trial_request_reserve_usd_micros"`
-	Revision              int64 `json:"revision"`
+	AutoApplyServices   bool  `json:"auto_apply_services"`
+	TrialPerAgent       int64 `json:"trial_per_agent_usd_micros"`
+	TrialPoolMonthly    int64 `json:"trial_pool_monthly_usd_micros"`
+	TrialRequestReserve int64 `json:"trial_request_reserve_usd_micros"`
+	Revision            int64 `json:"revision"`
 }
 
 func defaultBudgetSettings() agentBudgetSettings {
-	return agentBudgetSettings{AutoApproveIdentities: true, AutoApplyServices: true, TrialPerAgent: 2_000_000, TrialPoolMonthly: 5_000_000, TrialRequestReserve: 20_000}
+	return agentBudgetSettings{AutoApplyServices: true, TrialPerAgent: 2_000_000, TrialPoolMonthly: 5_000_000, TrialRequestReserve: 20_000}
 }
 
 func readBudgetSettings(q budgetQuerier) (agentBudgetSettings, error) {
@@ -98,35 +96,13 @@ func copyBudgetFields(target *localTokenPolicy, source localTokenPolicy) {
 	target.RequestReserveUSDMicros = source.RequestReserveUSDMicros
 }
 
-func (runtime localRuntime) strictMode() (bool, error) {
-	strict := false
-	if runtime.policies == nil || runtime.policies.allowances == nil {
-		return false, nil
-	}
-	err := runtime.policies.allowances.transaction(false, func(doc *serviceAllowanceDocument) error {
-		strict = allowanceSettings(doc).Enabled
-		return nil
-	})
-	return strict, err
-}
-
-// Automatic enrollment needs the ledger that enforces the trial; without it
-// every request falls back to human review.
+// budgetSettings reports false when no ledger can enforce the trial budget.
 func (runtime localRuntime) budgetSettings() (agentBudgetSettings, bool) {
 	if runtime.policies == nil || runtime.policies.budgets == nil {
 		return agentBudgetSettings{}, false
 	}
 	settings, err := runtime.policies.budgets.settings()
 	return settings, err == nil
-}
-
-func (runtime localRuntime) autoApproveIdentities() bool {
-	settings, ok := runtime.budgetSettings()
-	if !ok || !settings.AutoApproveIdentities {
-		return false
-	}
-	strict, err := runtime.strictMode()
-	return err == nil && !strict
 }
 
 type agentBudgetRequest struct {

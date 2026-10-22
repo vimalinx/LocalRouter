@@ -49,7 +49,7 @@ func proposalReviewDigest(proposal serviceProposal) string {
 
 func (hub *serviceWorkspace) prepare(owner localToken, input serviceProposalInput) (serviceProposal, error) {
 	if owner.AgentCode == "localrouter-system" || owner.Name == localTokenName {
-		return serviceProposal{}, errors.New("agent_identity_required: run lr identity prepare <agent-code>, obtain human approval and lr identity claim before preparing a new service; an existing independent identity can prepare directly")
+		return serviceProposal{}, errors.New("agent_identity_required: run lr identity prepare <agent-code> before preparing a new service; it is issued at once, and an existing independent identity can prepare directly")
 	}
 	if owner.ID <= 0 || len(input.Reason) == 0 || len(input.Reason) > 2000 {
 		return serviceProposal{}, errors.New("a registered identity and a short reason are required")

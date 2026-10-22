@@ -7,7 +7,6 @@ import { TokensPage } from '../tokens-page'
 import { adminRequest } from '@/lib/api'
 import type { AgentBudget, AgentUsage } from '@/lib/types'
 
-vi.mock('@/features/tokens/identity-requests', () => ({ IdentityRequests: () => null }))
 vi.mock('@/lib/api', () => ({ adminRequest: vi.fn(), formatTimestamp: () => '09/23' }))
 
 const budget: AgentBudget = { daily_limit_usd_micros: 1000000, monthly_limit_usd_micros: 20000000, request_reserve_usd_micros: 250000, daily_spent_usd_micros: 500000, monthly_spent_usd_micros: 500000, held_usd_micros: 250000, pending_requests: 1, unpriced_requests: 0, unreconciled_overruns: 0, daily_remaining_usd_micros: 250000, monthly_remaining_usd_micros: 19250000, period_timezone: 'UTC' }

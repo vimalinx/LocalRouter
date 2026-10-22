@@ -1,10 +1,10 @@
 # LocalRouter Agent instructions
 
-For Pack, auth, pool, workflow, adapter, guide, release or rollback changes, read `.agents/skills/localrouter-protocol-pack/SKILL.md`. Consumers use the live port contract through `lr init`, `lr guide`, and scoped discovery; they must not require repository access. Ordinary mode accepts an existing protected mode-600 Service Token; require independent Agent registration only when `lr init` reports `identity_required=true` or when preparing setup proposals. Maintenance authority remains separate.
+For Pack, auth, pool, workflow, adapter, guide, release or rollback changes, read `.agents/skills/localrouter-protocol-pack/SKILL.md`. Consumers use the live port contract through `lr init`, `lr guide`, and scoped discovery; they must not require repository access. Any existing protected mode-600 Service Token can call; there is no identity review. Independent identities (`lr identity request`, `lr connect <program>`) are issued at once on the trial budget and are needed only for separate billing, limits or setup proposals. Maintenance authority remains separate.
 
 ## Runtime and authority boundaries
 
-- Loopback port 8317 is authoritative. An operator-approved LAN endpoint is consumer-only: require `LOCALROUTER_ALLOW_LAN=true`, `scope=lan-service`, and `maintenance.available=false` before reading or sending a Service Token. No LAN maintenance.
+- Loopback port 8317 is authoritative; loopback port 29317 is the same listener under an alias and carries identical authority. An operator-approved LAN endpoint is consumer-only: require `LOCALROUTER_ALLOW_LAN=true`, `scope=lan-service`, and `maintenance.available=false` before reading or sending a Service Token. No LAN maintenance.
 - Agents do not self-register or mutate through `/local/api`, even when the human console is password-free. Use the explicitly authorized maintenance lane; never request or read administrator credentials.
 - Store secrets under `$XDG_DATA_HOME/localrouter/` with mode `0600`; isolated tests may set `LOCAL_GATEWAY_DATA_DIR`. Credentials, cookies, pool contents and private upstream addresses must not enter source, guides, logs, test output or `.ai` notes.
 - `operation_key` / `operation_id` are semantic selectors. Use published call URLs or `lr call`; external OpenAI runtimes keep the Base URL returned by `lr runtime-openai` unchanged.
@@ -17,6 +17,7 @@ For Pack, auth, pool, workflow, adapter, guide, release or rollback changes, rea
 - Keep provider policy out of the Go core. Standard API routing uses Channel Profiles and Channels; isolated paths, transformations, special authentication, dedicated pools and workflows use Protocol Packs. Non-standard transports use independently supervised fixed-loopback `http-envelope` adapters referenced by their Pack.
 - External gateways retain credential-pool ownership unless `pool.mode=local` is explicit. Registration, CAPTCHA, human OAuth consent, payments and anti-bot challenges remain outside the request path.
 - Use the semantic draft lifecycle. Review `impact.files`, `impact.protocols` and `impact.pool_ids` before planning; `pool_ids` describes runtime exposure, while `protocols[].sections` identifies configuration changes. Apply the reviewed exact digest, inspect verification and rollback results, and preserve concurrent human draft edits.
+- The default model, each service's `preferred_model` and which Packs answer on `/v1` are operator choices in `$XDG_CONFIG_HOME/localrouter/models.json`, not Pack contract; change them through the console or that file, never by editing a Pack.
 - LocalRouter owns paths, formatting, atomic writes and digest calculation. Follow the skill and live guide for concrete commands rather than duplicating their tutorials here.
 
 <!-- VIMALINXOS:BEGIN managed-block project-agent-responsibility version=1 project=localrouter -->

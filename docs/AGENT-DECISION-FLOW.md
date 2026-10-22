@@ -1,6 +1,6 @@
 # Agent 接入、授权与任务恢复
 
-契约版本 **17**。普通模式继续接受已有 Service Token；独立身份用于分别授权、计费和准备新服务。普通模式下身份申请自动批准并从试用额度开始，人只审批金额（见 [预算与账单](AGENT-BILLING.md#试用档与正式档)）；以下“人审批身份”的步骤只适用于严格模式或关闭了自动批准时。以下流程通过隔离网关与本机上游模拟测试，不能代替真实供应商验收。
+契约版本 **18**。已有 Service Token 可直接调用；独立身份用于分别授权、计费和准备新服务。身份和范围调整都立即生效，没有身份审查，从试用额度开始，人只审批金额（见 [预算与账单](AGENT-BILLING.md#试用档与正式档)）和新服务接入。以下流程通过隔离网关与本机上游模拟测试，不能代替真实供应商验收。
 
 ## 接入决策树
 
@@ -9,31 +9,29 @@ flowchart TD
     Start[lr init / lr guide] --> Existing{已有适用身份和权限?}
     Existing -->|是| Discover[查精确服务、操作和模型]
     Existing -->|否| Published{所需服务已经发布?}
-    Published -->|是| Request[请求明确权限及必要依赖]
-    Published -->|否| Setup[lr identity prepare: 仅准备身份]
-    Setup --> IdentityApproval[人审批身份 / lr identity claim]
-    IdentityApproval --> Prepare[准备新连接和明确的能力包]
+    Published -->|是| Request[lr identity request: 立即签发并绑定]
+    Published -->|否| Setup[lr identity prepare: 立即签发仅准备身份]
+    Setup --> Prepare[准备新连接和明确的能力包]
     Prepare --> Review[核对目标、依赖、旧权限和最终 Token 策略]
-    Request --> ReviewIdentity[人审批完整范围 / 领取或继续使用身份]
     Review --> Match{审批摘要与当前策略仍匹配?}
     Match -->|否| Refresh[保留现状，重新准备审批]
     Match -->|是| Apply[保存应用记录，写入策略和授权]
     Apply --> Committed{两份状态都已提交?}
     Committed -->|否| Block[阻断调用，核对原申请后恢复]
     Committed -->|是| Discover
-    ReviewIdentity --> Discover
+    Request --> Discover
     Discover --> Preflight{预检通过?}
     Preflight -->|否| Advice[按首个阻断原因处理，再预检]
     Preflight -->|是且已获授权| Call[发送一次，保存原始响应和退出状态]
 ```
 
-- `setup_only=true` 是明确的禁止调用状态，不能用空白策略代替。它不依赖任何已发布服务；仍须人批准身份。
-- 审批展示模型目录、工作流操作及恢复入口等必要依赖。兼容接口的精确选择器由发现文档发布，并由实际路由使用同一映射校验。
+- `setup_only=true` 是明确的禁止调用状态，不能用空白策略代替。它不依赖任何已发布服务，立即签发。
+- 身份范围会展开模型目录、工作流操作及恢复入口等必要依赖。兼容接口的精确选择器由发现文档发布，并由实际路由使用同一映射校验。
 - 新连接审批会保存完整前后策略，保留金额、模型、次数、并发和有效期限制。第一次增加能力包时，原来可用的服务会作为单独的已审阅快照保留。替换已有能力包须显式提交 `bundle` 方案。
 - 并发修改策略后，旧申请不得覆盖新策略。应用记录未完成时拒绝调用；恢复只接受原策略或已审阅的目标策略，不重复安装或调用供应商。无法继续的中断申请可由人在控制台“撤销未完成授权”：只有仍等于这次写入的策略才恢复为原策略；后续人工编辑、已安装服务和上游任务均保留。
-- 机器契约同时发布调用身份与仅准备身份；`identity_scope_unpublished` 明确给出取消旧申请、申请仅准备身份、人工批准和领取的恢复路径。`lr identity schema` 与 `lr setup schema [proposal|pack]` 均只依赖当前端口。
+- 机器契约同时发布调用身份与仅准备身份；`identity_scope_unpublished` 明确给出申请仅准备身份的恢复路径。`lr identity schema` 与 `lr setup schema [proposal|pack]` 均只依赖当前端口。
 - 旧提案使用 `lr setup reprepare <id> <digest> [--enable]` 或控制台生成新的待审阅方案。保留旧记录和关联，重新计算权限，不继承批准或重复调用；禁用连接必须明确请求启用。
-- 无效身份申请可用 `lr identity cancel` 清理，服务端会撤销对应领取凭据，防止延迟到达的请求重新创建申请。已批准身份必须撤销身份，不能伪装成“取消待申请”。
+- 签发失败的身份申请可用 `lr identity cancel` 清理，服务端会撤销对应领取凭据，防止延迟到达的请求重新创建申请。已签发身份必须在控制台撤销。
 
 ## 调用与恢复决策树
 

@@ -6,7 +6,7 @@ registers only Service-Token-authenticated consumer routes plus sanitized
 discovery and documentation. It never registers the console, `/local/status`,
 `/local/api`, or `/manage/mcp`.
 
-Do not expose port 8317, the operator listener, token files, pool sources, or
+Do not expose port 8317 or its loopback alias 29317, the operator listener, token files, pool sources, or
 provider credentials to a network. Restrict the LAN service port to the intended
 private subnet. Plain LAN HTTP is not suitable across an untrusted network; use
 a reviewed TLS reverse proxy or private overlay without forwarding the operator

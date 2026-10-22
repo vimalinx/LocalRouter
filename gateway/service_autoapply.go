@@ -26,11 +26,7 @@ import (
 
 func (runtime localRuntime) autoApplyServices() bool {
 	settings, ok := runtime.budgetSettings()
-	if !ok || !settings.AutoApplyServices {
-		return false
-	}
-	strict, err := runtime.strictMode()
-	return err == nil && !strict
+	return ok && settings.AutoApplyServices
 }
 
 func publicHTTPSTarget(raw string) bool {
@@ -52,7 +48,7 @@ func publicHTTPSTarget(raw string) bool {
 
 func (hub *serviceWorkspace) autoApplyBlocker(owner localToken, proposal serviceProposal) string {
 	if !hub.runtime.autoApplyServices() {
-		return "automatic service connection is off or strict mode is on"
+		return "automatic service connection is off"
 	}
 	if policy, exists := hub.policies.policyFor(owner.ID); !exists || !budgetEnabled(policy) {
 		return "only an Agent identity with a trial or formal budget can connect services automatically"

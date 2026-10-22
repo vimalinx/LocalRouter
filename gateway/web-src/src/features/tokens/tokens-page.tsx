@@ -4,7 +4,6 @@ import { toast } from 'sonner'
 
 import { AgentBillingDialog, BudgetSummary, usdInputMicros } from './agent-billing'
 import { BudgetRequests } from './budget-requests'
-import { IdentityRequests } from './identity-requests'
 import { EmptyState } from '@/components/empty-state'
 import { SectionHeader } from '@/components/section-header'
 import { Badge } from '@/components/ui/badge'
@@ -421,7 +420,6 @@ export function TokensPage(props: {
       {billingTarget ? <AgentBillingDialog key={billingTarget.id} agent={billingTarget} adminToken={props.adminToken} onClose={() => setBillingTarget(null)} onChanged={props.onChanged} /> : null}
 
       <BudgetRequests adminToken={props.adminToken} onChanged={props.onChanged} />
-      <IdentityRequests adminToken={props.adminToken} onChanged={props.onChanged} />
 
       <details className='group border-y py-3'>
         <summary className='flex min-h-9 cursor-pointer list-none flex-wrap items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden'>

@@ -31,6 +31,11 @@ make -C gateway web
 `$XDG_CONFIG_HOME/localrouter/config.env`；源码开发仍可用 `.env`。
 `LOCAL_GATEWAY_HOST` 如果不是回环 IP，程序会拒绝启动。
 
+同一进程默认还在 `http://127.0.0.1:29317` 开一个备用回环监听器（`LOCAL_GATEWAY_ALIAS_PORT`），
+与主端口共用同一个引擎、路由与鉴权，供本机程序作为固定候选入口。该端口在 IANA 未分配、
+低于 Linux 临时端口范围；绑定失败只在日志中告警，`/local/status` 的 `loopback_alias.error`
+会说明原因，主端口不受影响。`LOCAL_GATEWAY_ALIAS_ENABLED=false` 关闭它。
+
 网关默认在启动后及每 6 小时匿名查询公开 GitHub Releases API，并在“运行概览”提示新版本；它不会读取 GitHub 凭据、下载或安装更新，失败也不会阻塞网关。设置 `LOCAL_GATEWAY_UPDATE_CHECK_ENABLED=false` 可完全关闭。loopback 控制台还可通过 `POST /local/api/update/check` 手动刷新，LAN 服务面不注册该入口。
 
 可选 LAN 服务面使用独立配置，默认完全关闭：

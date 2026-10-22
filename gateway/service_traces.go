@@ -226,6 +226,7 @@ func serviceCallRuntime(runtime localRuntime, c *gin.Context) localRuntime {
 }
 
 func (registry *protocolRegistry) startServiceAttempt(c *gin.Context, attempt int) (func(int, bool, error), error) {
+	markPackDispatch(c)
 	trace := serviceTraceContext(c)
 	if trace == nil || registry.workspace == nil {
 		c.Set("localrouter_allowance_dispatch", "unknown")

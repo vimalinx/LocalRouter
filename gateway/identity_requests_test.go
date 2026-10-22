@@ -9,12 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
-func TestIdentityEnrollmentApprovalScopeRecoveryAndRevocation(t *testing.T) {
-	rt, owner, _, _, server := serviceWorkspaceFixture(t)
+func TestIdentityEnrollmentIssuesAtOnceWithScopeRecoveryAndRevocation(t *testing.T) {
+	rt, _, _, _, server := serviceWorkspaceFixture(t)
 	_, registry := agentAPIFixture(t)
 	// The real fixture server holds this registry pointer; install fixture-only
 	// operation definitions without touching any real provider.
@@ -41,24 +40,20 @@ func TestIdentityEnrollmentApprovalScopeRecoveryAndRevocation(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(prepared.Body.Bytes(), &envelope))
 	pending := envelope.Data
-	require.Equal(t, "pending", pending.State)
+	// No human review: the identity exists as soon as the request returns.
+	require.Equal(t, "approved", pending.State)
+	require.NotContains(t, prepared.Body.String(), `"key":`)
 	count, err := rt.store.count("tokens", "agent_code = ?", "enrolled-agent")
 	require.NoError(t, err)
-	require.Zero(t, count)
-	// Idempotent submission and possession checks, without authority or secrets.
+	require.EqualValues(t, 1, count)
+	// Idempotent submission and possession checks, without secrets.
 	again := post("/agent/identity-requests", body, claim)
 	require.Equal(t, prepared.Body.String(), again.Body.String())
 	wrong := post("/agent/identity-requests/"+pending.ID+"/claim", map[string]any{}, strings.Repeat("cd", 32))
 	require.Equal(t, 404, wrong.Code)
-	before := post("/agent/identity-requests/"+pending.ID+"/claim", map[string]any{}, claim)
-	require.NotContains(t, before.Body.String(), `"token":`)
-	status, _ := setupHTTP(t, server, owner, "POST", "/local/api/identity-requests/"+pending.ID+"/decision", map[string]any{"digest": pending.Digest, "approve": true})
-	require.Equal(t, 403, status)
-	status, _ = setupHTTP(t, server, localToken{}, "POST", "/local/api/identity-requests/"+pending.ID+"/decision", map[string]any{"digest": "stale", "approve": true})
-	require.Equal(t, 409, status)
-	status, raw := setupHTTP(t, server, localToken{}, "POST", "/local/api/identity-requests/"+pending.ID+"/decision", map[string]any{"digest": pending.Digest, "approve": true})
-	require.Equal(t, 200, status, string(raw))
-	require.NotContains(t, string(raw), `"key":`)
+	// The human review endpoints no longer exist.
+	status, _ := setupHTTP(t, server, localToken{}, "POST", "/local/api/identity-requests/"+pending.ID+"/decision", map[string]any{"digest": pending.Digest, "approve": true})
+	require.Equal(t, 404, status)
 	issued := post("/agent/identity-requests/"+pending.ID+"/claim", map[string]any{}, claim)
 	require.Equal(t, 200, issued.Code)
 	var delivery struct {
@@ -85,10 +80,6 @@ func TestIdentityEnrollmentApprovalScopeRecoveryAndRevocation(t *testing.T) {
 	policy, exists := reloaded.policyFor(token.ID)
 	require.True(t, exists)
 	require.Equal(t, 3, policy.DailyRequestLimit)
-	status, raw = setupHTTP(t, server, localToken{}, "GET", "/local/api/identity-requests", nil)
-	require.Equal(t, 200, status)
-	require.NotContains(t, string(raw), delivery.Data.Token)
-	require.NotContains(t, string(raw), claim)
 	// Neither the LAN listener nor a hostile browser Origin may enroll.
 	request := httptest.NewRequest("POST", "/agent/identity-requests", strings.NewReader(`{}`))
 	request.Header.Set("Authorization", "Bearer "+claim)
@@ -113,7 +104,7 @@ func TestIdentityEnrollmentApprovalScopeRecoveryAndRevocation(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestIdentityEnrollmentExpiryAndFailedPersistenceStayUnapproved(t *testing.T) {
+func TestIdentityEnrollmentFailedPersistenceStaysPendingAndExpires(t *testing.T) {
 	rt, _, _, _, _ := serviceWorkspaceFixture(t)
 	_, registry := agentAPIFixture(t)
 	rt.protocols = registry
@@ -125,13 +116,10 @@ func TestIdentityEnrollmentExpiryAndFailedPersistenceStayUnapproved(t *testing.T
 	require.NoError(t, err)
 	// Failed policy persistence must not leave an active/unrestricted identity.
 	rt.policies.path = t.TempDir() + "/missing/policies.json"
-	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"digest":"fixture-digest","approve":true}`))
-	out := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(out)
-	c.Request = req
-	c.Params = gin.Params{{Key: "id", Value: request.ID}}
-	handleIdentityDecision(rt)(c)
-	require.Equal(t, 500, out.Code)
+	rt.store.identityMu.Lock()
+	_, status, _ := issueIdentityLocked(rt, request)
+	rt.store.identityMu.Unlock()
+	require.Equal(t, 500, status)
 	count, err := rt.store.count("tokens", "agent_code = ?", request.AgentCode)
 	require.NoError(t, err)
 	require.Zero(t, count)
@@ -147,7 +135,7 @@ func TestIdentityEnrollmentExpiryAndFailedPersistenceStayUnapproved(t *testing.T
 	require.Equal(t, "expired", stored.State)
 }
 
-func TestIdentityAccessChangesNeedFreshHumanApprovalAndPreserveUsage(t *testing.T) {
+func TestIdentityAccessChangesApplyAtOnceAndPreserveUsage(t *testing.T) {
 	rt, owner, other, _, server := serviceWorkspaceFixture(t)
 	_, registry := agentAPIFixture(t)
 	def, _ := registry.get("readysearch")
@@ -160,35 +148,19 @@ func TestIdentityAccessChangesNeedFreshHumanApprovalAndPreserveUsage(t *testing.
 	requested := localTokenPolicy{Surfaces: []string{"p"}, Packs: []string{"readysearch"}, Operations: []string{"readysearch.models", "readysearch.search"}, DailyRequestLimit: 8}
 	status, raw := setupHTTP(t, server, owner, "POST", "/agent/access-requests", map[string]any{"policy": requested})
 	require.Equal(t, 200, status, string(raw))
-	var pending struct {
+	var applied struct {
 		Data identityRequest `json:"data"`
 	}
-	require.NoError(t, json.Unmarshal(raw, &pending))
+	require.NoError(t, json.Unmarshal(raw, &applied))
+	require.Equal(t, "approved", applied.Data.State)
 	allowed, _, _ := rt.policies.preview(owner.ID, "p", "readysearch", "search", "")
-	require.False(t, allowed)
-	status, _ = setupHTTP(t, server, other, "GET", "/agent/access-requests/"+pending.Data.ID, nil)
-	require.Equal(t, 404, status)
-	status, _ = setupHTTP(t, server, owner, "POST", "/local/api/identity-requests/"+pending.Data.ID+"/decision", map[string]any{"digest": pending.Data.Digest, "approve": true})
-	require.Equal(t, 403, status)
-	status, raw = setupHTTP(t, server, localToken{}, "POST", "/local/api/identity-requests/"+pending.Data.ID+"/decision", map[string]any{"digest": pending.Data.Digest, "approve": true})
-	require.Equal(t, 200, status, string(raw))
-	allowed, _, _ = rt.policies.preview(owner.ID, "p", "readysearch", "search", "")
 	require.True(t, allowed)
 	require.Equal(t, 1, rt.policies.usage[owner.ID].DayCount)
-	// A separately edited limit invalidates pending authorization instead of
-	// letting an old approval silently restore a wider scope or higher limit.
-	requested.DailyRequestLimit = 10
-	status, raw = setupHTTP(t, server, owner, "POST", "/agent/access-requests", map[string]any{"policy": requested})
-	require.Equal(t, 200, status)
-	require.NoError(t, json.Unmarshal(raw, &pending))
-	policy := rt.policies.policies[owner.ID]
-	policy.DailyRequestLimit = 2
-	rt.policies.policies[owner.ID] = policy
-	status, _ = setupHTTP(t, server, localToken{}, "POST", "/local/api/identity-requests/"+pending.Data.ID+"/decision", map[string]any{"digest": pending.Data.Digest, "approve": true})
-	require.Equal(t, 409, status)
-	require.Equal(t, 2, rt.policies.policies[owner.ID].DailyRequestLimit)
+	require.Equal(t, 8, rt.policies.policies[owner.ID].DailyRequestLimit)
+	status, _ = setupHTTP(t, server, other, "GET", "/agent/access-requests/"+applied.Data.ID, nil)
+	require.Equal(t, 404, status)
 	// All human console APIs reject service credentials, even in loopback
-	// password-free mode. The dedicated request endpoint grants no authority.
+	// password-free mode. The dedicated request endpoint grants no maintenance.
 	status, _ = setupHTTP(t, server, owner, "POST", "/local/api/tokens", map[string]any{})
 	require.Equal(t, 403, status)
 }

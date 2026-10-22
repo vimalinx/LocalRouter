@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const setupIdentityAction = "For a new unpublished service, run lr identity cancel if a rejected request is retained, then lr identity prepare <agent-code>; have the human approve the setup-only identity and run lr identity claim. Existing independent identities can prepare directly. Never borrow unrelated service scope."
+const setupIdentityAction = "For a new unpublished service, run lr identity prepare <agent-code>; the setup-only identity is issued at once. Existing independent identities can prepare directly. Never borrow unrelated service scope."
 
 type unpublishedIdentityScope struct{ Pack, Operation string }
 

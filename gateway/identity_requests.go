@@ -12,10 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Enrollment proves possession of a private claim, not authority. In ordinary
-// mode with a budget ledger the request activates immediately on the trial
-// tier, so money rather than scope is the human's decision. Otherwise only the
-// loopback human decision endpoint activates a service identity.
+// Enrollment proves possession of a private claim on the loopback listener and
+// issues the identity at once. There is no human identity review: money is the
+// only human decision, so a new identity starts on the trial budget and scope
+// changes apply immediately while keeping the current budget.
 type identityRequest struct {
 	ID               string           `json:"id"`
 	AgentCode        string           `json:"agent_code"`
@@ -91,13 +91,6 @@ func handleIdentityWithdraw(runtime localRuntime) gin.HandlerFunc {
 	}
 }
 
-func registerIdentityAdminRoutes(admin *gin.RouterGroup, runtime localRuntime) {
-	human := admin.Group("/identity-requests")
-	human.Use(humanAllowanceAccess)
-	human.GET("", handleIdentityList(runtime))
-	human.POST("/:id/decision", handleIdentityDecision(runtime))
-}
-
 func identityPolicyDigest(store *tokenPolicyStore, id int) string {
 	policy, exists := store.policyFor(id)
 	data, _ := json.Marshal(struct {
@@ -107,8 +100,8 @@ func identityPolicyDigest(store *tokenPolicyStore, id int) string {
 	return identityHash(string(data))
 }
 
-// Existing Agents may request a replacement scope, but never apply it. The
-// current policy remains in force until the human reviews the complete scope.
+// Existing Agents replace their own scope; it applies at once. Budget fields
+// always keep their current values because only the human changes money.
 func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		value, _ := c.Get("local_token")
@@ -141,17 +134,19 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 		// Money only changes through budget requests; scope changes keep it.
 		current, _ := runtime.policies.policyFor(token.ID)
 		copyBudgetFields(&request.Policy, current)
-		auto := runtime.autoApproveIdentities()
 		data, _ := json.Marshal(request)
 		request.Digest = identityHash(string(data))
 		request.ID = "access-" + request.Digest[:24]
 		runtime.store.identityMu.Lock()
 		defer runtime.store.identityMu.Unlock()
 		if previous, _, err := loadIdentityRequest(runtime.store, request.ID); err == nil {
-			if auto && previous.State == "pending" {
-				if approved, status, _ := applyAccessLocked(runtime, previous); status == 0 {
-					previous = approved
+			if previous.State == "pending" {
+				approved, status, message := applyAccessLocked(runtime, previous)
+				if status != 0 {
+					identityFailure(c, status, message)
+					return
 				}
+				previous = approved
 			}
 			localSuccess(c, previous)
 			return
@@ -175,12 +170,12 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 			identityFailure(c, 500, "cannot save access request")
 			return
 		}
-		if auto {
-			if approved, status, _ := applyAccessLocked(runtime, request); status == 0 {
-				request = approved
-			}
+		approved, status, message := applyAccessLocked(runtime, request)
+		if status != 0 {
+			identityFailure(c, status, message)
+			return
 		}
-		localSuccess(c, request)
+		localSuccess(c, approved)
 	}
 }
 
@@ -202,8 +197,12 @@ func validateIdentityRequest(runtime localRuntime, request *identityRequest) err
 			return errors.New("setup-only identity cannot request service selectors")
 		}
 	} else {
-		if len(policy.Packs) == 0 || len(policy.Packs) > 50 || len(policy.Operations) == 0 || len(policy.Operations) > 200 || len(policy.Models) > 200 {
-			return errors.New("select explicit Packs and Pack-qualified operations, or request setup_only")
+		// Empty selectors mean every service; the budget still applies.
+		if len(policy.Packs) > 50 || len(policy.Operations) > 200 || len(policy.Models) > 200 {
+			return errors.New("too many Pack, operation or model selectors")
+		}
+		if len(policy.Operations) > 0 && len(policy.Packs) == 0 {
+			return errors.New("operations must belong to selected Packs")
 		}
 		for _, pack := range policy.Packs {
 			if pack == "*" || !protocolIDPattern.MatchString(pack) {
@@ -233,6 +232,10 @@ func loadIdentityRequest(store *localStore, id string) (identityRequest, string,
 	state, tokenID := request.State, request.TokenID
 	err = json.Unmarshal([]byte(document), &request)
 	request.State, request.TokenID = state, tokenID
+	if tokenID > 0 {
+		// The stored document predates issuance; report the issued Token like the first response.
+		request.Policy.TokenID = tokenID
+	}
 	if request.State == "pending" && request.ExpiresAt <= time.Now().Unix() {
 		request.State = "expired"
 	}
@@ -261,7 +264,6 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 			identityValidationError(c, err)
 			return
 		}
-		auto := runtime.autoApproveIdentities()
 		if settings, ok := runtime.budgetSettings(); ok {
 			applyTrialBudget(&request.Policy, settings)
 		}
@@ -275,10 +277,14 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 				identityFailure(c, 409, "this claim is already bound to a different request")
 				return
 			}
-			if auto && previous.State == "pending" {
-				if approved, status, _ := issueIdentityLocked(runtime, previous); status == 0 {
-					previous = approved
+			// A pending row is an issuance that did not complete; retry it.
+			if previous.State == "pending" {
+				approved, status, message := issueIdentityLocked(runtime, previous)
+				if status != 0 {
+					identityFailure(c, status, message)
+					return
 				}
+				previous = approved
 			}
 			localSuccess(c, previous)
 			return
@@ -303,13 +309,13 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 			identityFailure(c, 500, "cannot save identity request")
 			return
 		}
-		// A failed automatic approval leaves the request pending for the human.
-		if auto {
-			if approved, status, _ := issueIdentityLocked(runtime, request); status == 0 {
-				request = approved
-			}
+		// A failed issuance stays pending so resubmitting the same claim retries it.
+		approved, status, message := issueIdentityLocked(runtime, request)
+		if status != 0 {
+			identityFailure(c, status, message)
+			return
 		}
-		localSuccess(c, request)
+		localSuccess(c, approved)
 	}
 }
 
@@ -326,7 +332,7 @@ func handleIdentityClaim(runtime localRuntime) gin.HandlerFunc {
 			identityFailure(c, 404, "identity request not found")
 			return
 		}
-		result := gin.H{"request": request, "ready": false, "registration_url": "/#tokens", "next_action": "review this exact request in Agent Workbench, then resume lr identity claim"}
+		result := gin.H{"request": request, "ready": false, "next_action": "issuance did not complete; resubmit the same lr identity request to retry"}
 		if request.State == "approved" {
 			if request.ExpiresAt <= time.Now().Unix() {
 				identityFailure(c, 410, "credential delivery window expired; ask the operator to revoke the unclaimed identity")
@@ -356,102 +362,7 @@ func handleIdentityClaim(runtime localRuntime) gin.HandlerFunc {
 	}
 }
 
-func handleIdentityList(runtime localRuntime) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		rows, err := runtime.store.db.Query(`SELECT id FROM identity_requests ORDER BY created_at DESC LIMIT 100`)
-		if err != nil {
-			identityFailure(c, 500, "cannot list identity requests")
-			return
-		}
-		ids := []string{}
-		for rows.Next() {
-			var id string
-			if err = rows.Scan(&id); err != nil {
-				break
-			}
-			ids = append(ids, id)
-		}
-		if err == nil {
-			err = rows.Err()
-		}
-		rows.Close()
-		if err != nil {
-			identityFailure(c, 500, "cannot read identity requests")
-			return
-		}
-		requests := []identityRequest{}
-		for _, id := range ids {
-			request, _, err := loadIdentityRequest(runtime.store, id)
-			if err != nil {
-				identityFailure(c, 500, "cannot read identity request")
-				return
-			}
-			requests = append(requests, request)
-		}
-		localSuccess(c, requests)
-	}
-}
-
-func handleIdentityDecision(runtime localRuntime) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var input struct {
-			Digest  string `json:"digest"`
-			Approve *bool  `json:"approve"`
-		}
-		if err := decodeAgentRequest(c, &input); err != nil || input.Approve == nil {
-			identityFailure(c, 400, "digest and explicit approve are required")
-			return
-		}
-		runtime.store.identityMu.Lock()
-		defer runtime.store.identityMu.Unlock()
-		request, _, err := loadIdentityRequest(runtime.store, c.Param("id"))
-		if err != nil {
-			identityFailure(c, 404, "identity request not found")
-			return
-		}
-		if input.Digest != request.Digest {
-			identityFailure(c, 409, "request changed; review the current digest")
-			return
-		}
-		if request.State != "pending" {
-			identityFailure(c, 409, "request is no longer pending")
-			return
-		}
-		if !*input.Approve {
-			_, err = runtime.store.db.Exec(`UPDATE identity_requests SET state='denied' WHERE id=? AND state='pending'`, request.ID)
-			if err != nil {
-				identityFailure(c, 500, "cannot reject request")
-				return
-			}
-			request.State = "denied"
-			localSuccess(c, request)
-			return
-		}
-		reviewedPolicy := serviceDigest(request.Policy)
-		if err := validateIdentityRequest(runtime, &request); err != nil {
-			identityFailure(c, 409, err.Error())
-			return
-		}
-		if reviewedPolicy != serviceDigest(request.Policy) {
-			identityFailure(c, 409, "scope dependencies changed; prepare and review a new request")
-			return
-		}
-		var status int
-		var message string
-		if request.OwnerTokenID > 0 {
-			request, status, message = applyAccessLocked(runtime, request)
-		} else {
-			request, status, message = issueIdentityLocked(runtime, request)
-		}
-		if status != 0 {
-			identityFailure(c, status, message)
-			return
-		}
-		localSuccess(c, request)
-	}
-}
-
-// issueIdentityLocked activates a pending enrollment. Callers hold identityMu.
+// issueIdentityLocked activates an enrollment. Callers hold identityMu.
 func issueIdentityLocked(runtime localRuntime, request identityRequest) (identityRequest, int, string) {
 	secret, err := randomSecret(32, "")
 	if err != nil {
@@ -496,7 +407,7 @@ func issueIdentityLocked(runtime localRuntime, request identityRequest) (identit
 	return request, 0, ""
 }
 
-// applyAccessLocked activates a pending scope change. Callers hold identityMu.
+// applyAccessLocked activates a scope change. Callers hold identityMu.
 func applyAccessLocked(runtime localRuntime, request identityRequest) (identityRequest, int, string) {
 	token, err := runtime.store.tokenByID(runtime.rootUser.ID, request.OwnerTokenID, false)
 	if err != nil || (token.ExpiredTime >= 0 && token.ExpiredTime <= time.Now().Unix()) || token.Status != localStatusEnabled || token.AgentCode != request.AgentCode || token.Workspace != request.Workspace {

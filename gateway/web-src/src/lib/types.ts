@@ -1,5 +1,8 @@
+export type LoopbackAlias = { enabled: boolean; listen?: string; scope: string; equivalent_to_primary: boolean; error?: string }
+
 export type PublicStatus = {
   lan_service?: { enabled: boolean; listen?: string; management_exposed: boolean }
+  loopback_alias?: LoopbackAlias
   success: boolean
   mode: string
   listen: string
@@ -20,6 +23,7 @@ export type Summary = {
   channels: number
   tokens: number
   listen: string
+  loopback_alias?: LoopbackAlias
   admin_auth_enabled: boolean
   admin_token_file: string
   api_token_file: string
@@ -546,7 +550,6 @@ export type AgentBudget = {
 }
 
 export type AgentBudgetSettings = {
-  auto_approve_identities: boolean
   auto_apply_services: boolean
   trial_per_agent_usd_micros: number
   trial_pool_monthly_usd_micros: number
@@ -566,3 +569,16 @@ export type AgentBillingEntry = {
   usage: { input_tokens?: number; output_tokens?: number; total_tokens?: number }
 }
 export type AgentBillingPage = { items: AgentBillingEntry[]; total: number; budget: AgentBudget }
+
+export interface ModelServicePreference {
+  pack: string
+  preferred_model?: string
+  v1?: boolean
+  v1_aliases?: Record<string, string>
+}
+
+export interface ModelPreferences {
+  schema_version: string
+  default_model: string
+  services: ModelServicePreference[]
+}

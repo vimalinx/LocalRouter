@@ -29,10 +29,15 @@ import (
 )
 
 const (
-	defaultHost       = "127.0.0.1"
-	defaultPort       = 8317
-	defaultLANHost    = "0.0.0.0"
-	defaultLANPort    = 8318
+	defaultHost    = "127.0.0.1"
+	defaultPort    = 8317
+	defaultLANHost = "0.0.0.0"
+	defaultLANPort = 8318
+	// The loopback alias is a second, LocalRouter-owned loopback port serving
+	// the identical operator listener. 29317 sits in an unassigned IANA range
+	// below the Linux ephemeral range, so client programs can keep it as a
+	// stable alternative to the configured primary port.
+	defaultAliasPort  = 29317
 	localTokenName    = "LocalRouter default"
 	adminTokenHeader  = "X-Local-Admin"
 	credentialDirMode = 0o700
@@ -48,24 +53,30 @@ const (
 var webFiles embed.FS
 
 type runtimeConfig struct {
-	Host                string
-	Port                int
-	LANEnabled          bool
-	LANHost             string
-	LANPort             int
-	LANAllowedOrigins   []string
-	LANPublicBaseURL    string
-	ConfigDir           string
-	DataDir             string
-	StateDir            string
-	CacheDir            string
-	ProtocolDir         string
-	ChannelProfilesPath string
-	DatabasePath        string
-	AdminAuthFile       string
-	AdminTokenFile      string
-	APITokenFile        string
-	UpdateCheckEnabled  bool
+	Host              string
+	Port              int
+	LANEnabled        bool
+	LANHost           string
+	LANPort           int
+	LANAllowedOrigins []string
+	LANPublicBaseURL  string
+	// AliasEnabled adds a second loopback listener on AliasPort that serves
+	// the same operator engine. AliasError records why it could not bind.
+	AliasEnabled         bool
+	AliasPort            int
+	AliasError           string
+	ConfigDir            string
+	DataDir              string
+	StateDir             string
+	CacheDir             string
+	ProtocolDir          string
+	ChannelProfilesPath  string
+	ModelPreferencesPath string
+	DatabasePath         string
+	AdminAuthFile        string
+	AdminTokenFile       string
+	APITokenFile         string
+	UpdateCheckEnabled   bool
 	// Desktop notifications let the human decide budget requests in place.
 	DesktopNotifications bool
 	// Optional absolute command that receives human-facing events as JSON.
@@ -92,6 +103,7 @@ type localRuntime struct {
 	policies        *tokenPolicyStore
 	events          *protocolEventStore
 	channelProfiles *localChannelProfileRegistry
+	models          *modelPreferenceStore
 	updates         *updateChecker
 	workspace       *serviceWorkspace
 }
@@ -209,8 +221,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	var aliasListener net.Listener
+	if config.AliasEnabled {
+		aliasListener, err = net.Listen("tcp", net.JoinHostPort(config.Host, strconv.Itoa(config.AliasPort)))
+		if err != nil {
+			// The alias is a convenience; the primary listener remains the authority.
+			fmt.Fprintf(os.Stderr, "LocalRouter loopback alias listener unavailable: %v\n", err)
+			config.AliasEnabled = false
+			config.AliasError = err.Error()
+		}
+	}
+
 	runtime, err := initializeRuntime(config)
 	if err != nil {
+		if aliasListener != nil {
+			_ = aliasListener.Close()
+		}
 		fmt.Fprintln(os.Stderr, "LocalRouter initialization error:", err)
 		os.Exit(1)
 	}
@@ -223,7 +249,13 @@ func main() {
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	servers := []namedHTTPServer{newHTTPServer("local", config.Host, config.Port, buildServer(runtime))}
+	localEngine := buildServer(runtime)
+	servers := []namedHTTPServer{newHTTPServer("local", config.Host, config.Port, localEngine)}
+	if aliasListener != nil {
+		alias := newHTTPServer("local-alias", config.Host, config.AliasPort, localEngine)
+		alias.listener = aliasListener
+		servers = append(servers, alias)
+	}
 	if config.LANEnabled {
 		servers = append(servers, newHTTPServer("lan-service", config.LANHost, config.LANPort, buildLANServer(runtime)))
 	}
@@ -232,7 +264,7 @@ func main() {
 		configured := configured
 		go func() {
 			fmt.Fprintf(os.Stderr, "LocalRouter %s listener on http://%s\n", configured.name, configured.server.Addr)
-			serverErrors <- namedServerError{name: configured.name, err: configured.server.ListenAndServe()}
+			serverErrors <- namedServerError{name: configured.name, err: configured.serve()}
 		}()
 	}
 	runtime.protocols.startWorkflowScheduler(runtime)
@@ -260,8 +292,18 @@ func main() {
 }
 
 type namedHTTPServer struct {
-	name   string
-	server *http.Server
+	name     string
+	server   *http.Server
+	listener net.Listener
+}
+
+// serve uses a listener bound ahead of time when one exists so bind failures
+// surface before the runtime starts; otherwise it binds the configured address.
+func (configured namedHTTPServer) serve() error {
+	if configured.listener != nil {
+		return configured.server.Serve(configured.listener)
+	}
+	return configured.server.ListenAndServe()
 }
 
 type namedServerError struct {
@@ -304,6 +346,23 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 			return runtimeConfig{}, fmt.Errorf("LOCAL_GATEWAY_PORT must be between 1 and 65535")
 		}
 	}
+	aliasEnabled, err := parseEnvironmentBooleanDefault("LOCAL_GATEWAY_ALIAS_ENABLED", true)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
+	aliasPort := 0
+	if aliasEnabled {
+		aliasPort = defaultAliasPort
+		if rawAliasPort := strings.TrimSpace(os.Getenv("LOCAL_GATEWAY_ALIAS_PORT")); rawAliasPort != "" {
+			aliasPort, err = strconv.Atoi(rawAliasPort)
+			if err != nil || aliasPort < 1 || aliasPort > 65535 {
+				return runtimeConfig{}, errors.New("LOCAL_GATEWAY_ALIAS_PORT must be between 1 and 65535")
+			}
+		}
+		if aliasPort == port {
+			return runtimeConfig{}, errors.New("LOCAL_GATEWAY_ALIAS_PORT must differ from LOCAL_GATEWAY_PORT")
+		}
+	}
 	lanEnabled, err := parseEnvironmentBoolean("LOCAL_GATEWAY_LAN_ENABLED")
 	if err != nil {
 		return runtimeConfig{}, err
@@ -339,6 +398,9 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		}
 		if lanPort == port {
 			return runtimeConfig{}, errors.New("LOCAL_GATEWAY_LAN_PORT must differ from LOCAL_GATEWAY_PORT")
+		}
+		if aliasEnabled && lanPort == aliasPort {
+			return runtimeConfig{}, errors.New("LOCAL_GATEWAY_LAN_PORT must differ from LOCAL_GATEWAY_ALIAS_PORT")
 		}
 		lanAllowedOrigins, err = parseAllowedOrigins(os.Getenv("LOCAL_GATEWAY_LAN_ALLOWED_ORIGINS"))
 		if err != nil {
@@ -411,12 +473,15 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		LANPort:              lanPort,
 		LANAllowedOrigins:    lanAllowedOrigins,
 		LANPublicBaseURL:     lanPublicBaseURL,
+		AliasEnabled:         aliasEnabled,
+		AliasPort:            aliasPort,
 		ConfigDir:            configDir,
 		DataDir:              dataDir,
 		StateDir:             stateDir,
 		CacheDir:             cacheDir,
 		ProtocolDir:          protocolDir,
 		ChannelProfilesPath:  channelProfilesPath,
+		ModelPreferencesPath: filepath.Join(configDir, "models.json"),
 		DatabasePath:         filepath.Join(dataDir, "localrouter.db"),
 		AdminAuthFile:        filepath.Join(dataDir, "admin-auth.json"),
 		AdminTokenFile:       filepath.Join(dataDir, "admin-token"),
@@ -545,6 +610,10 @@ func initializeRuntime(config runtimeConfig) (localRuntime, error) {
 	if err != nil {
 		return localRuntime{}, fmt.Errorf("load channel protocol profiles: %w", err)
 	}
+	models, err := newModelPreferenceStore(config.ModelPreferencesPath)
+	if err != nil {
+		return localRuntime{}, err
+	}
 	policies, err := newTokenPolicyStore(config.DataDir)
 	if err != nil {
 		return localRuntime{}, fmt.Errorf("load token policies: %w", err)
@@ -568,7 +637,7 @@ func initializeRuntime(config runtimeConfig) (localRuntime, error) {
 	runtime := localRuntime{
 		config: config, adminAuth: adminAuth, adminToken: newAdminTokenStore(adminToken), apiToken: apiToken,
 		rootUser: rootUser, store: store, relayClient: &http.Client{Transport: transport, CheckRedirect: rejectUpstreamRedirect},
-		balancer: newLocalRelayBalancer(), protocols: protocols, policies: policies, events: events, channelProfiles: channelProfiles,
+		balancer: newLocalRelayBalancer(), protocols: protocols, policies: policies, events: events, channelProfiles: channelProfiles, models: models,
 		updates: newUpdateChecker(config.UpdateCheckEnabled, buildVersion, nil, ""),
 	}
 	policies.budgets, err = initializeAgentBudgets(runtime)
@@ -845,6 +914,7 @@ func registerConsoleRoutes(engine *gin.Engine, runtime localRuntime) {
 			"path_layout":        "xdg-v1",
 			"engine":             "localrouter-native",
 			"oauth":              "external-maintainer",
+			"loopback_alias":     loopbackAliasStatus(runtime.config),
 			"lan_service":        lanServiceStatus(runtime.config),
 		})
 	})
@@ -852,6 +922,17 @@ func registerConsoleRoutes(engine *gin.Engine, runtime localRuntime) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexPage)
 	})
 	engine.GET("/assets/*filepath", gin.WrapH(assetServer))
+}
+
+func loopbackAliasStatus(config runtimeConfig) gin.H {
+	status := gin.H{"enabled": config.AliasEnabled, "scope": loopbackScope, "equivalent_to_primary": true}
+	if config.AliasEnabled {
+		status["listen"] = net.JoinHostPort(config.Host, strconv.Itoa(config.AliasPort))
+	}
+	if config.AliasError != "" {
+		status["error"] = config.AliasError
+	}
+	return status
 }
 
 func lanServiceStatus(config runtimeConfig) gin.H {
@@ -878,8 +959,8 @@ func registerLocalAdminRoutes(engine *gin.Engine, runtime localRuntime) {
 	admin := engine.Group("/local/api")
 	admin.Use(localAdminAuth(runtime.adminAuth, runtime.adminToken, runtime.rootUser))
 	registerServiceAdminRoutes(admin, runtime)
-	registerIdentityAdminRoutes(admin, runtime)
 	registerBudgetAdminRoutes(admin, runtime)
+	registerModelPreferenceAdminRoutes(admin, runtime)
 	{
 		admin.GET("/summary", localSummary(runtime))
 		admin.POST("/update/check", handleUpdateCheck(runtime))
@@ -1063,6 +1144,7 @@ func localSummary(runtime localRuntime) gin.HandlerFunc {
 				"channels":           channelCount,
 				"tokens":             tokenCount,
 				"listen":             net.JoinHostPort(runtime.config.Host, strconv.Itoa(runtime.config.Port)),
+				"loopback_alias":     loopbackAliasStatus(runtime.config),
 				"admin_auth_enabled": runtime.adminAuth.isEnabled(),
 				"admin_token_file":   runtime.config.AdminTokenFile,
 				"api_token_file":     runtime.config.APITokenFile,
@@ -1072,6 +1154,7 @@ func localSummary(runtime localRuntime) gin.HandlerFunc {
 				"cache_dir":          runtime.config.CacheDir,
 				"protocol_dir":       runtime.config.ProtocolDir,
 				"channel_profiles":   runtime.config.ChannelProfilesPath,
+				"model_preferences":  runtime.config.ModelPreferencesPath,
 				"engine":             "localrouter-native",
 				"protocols":          protocolTotal,
 				"protocols_ready":    protocolReady,

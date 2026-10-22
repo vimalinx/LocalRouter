@@ -90,7 +90,7 @@ LAN 监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent` 及公�
 
 | 默认目录 | 保存内容 |
 |---|---|
-| `~/.config/localrouter` | `config.env`、Channel Profiles 和 Protocol Packs |
+| `~/.config/localrouter` | `config.env`、Channel Profiles、Protocol Packs 和模型偏好 `models.json` |
 | `~/.local/share/localrouter` | SQLite 数据库、Token、供应商凭据、池配置和限额计数 |
 | `~/.local/state/localrouter` | 调用事件、工作流状态、草稿与发布历史 |
 | `~/.cache/localrouter` | 可以重建的缓存 |
@@ -103,6 +103,8 @@ LAN 监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent` 及公�
 |---|---|
 | `LOCAL_GATEWAY_HOST` | `127.0.0.1`，仅接受回环地址 |
 | `LOCAL_GATEWAY_PORT` | `8317` |
+| `LOCAL_GATEWAY_ALIAS_ENABLED` | `true`，在同一回环地址再开一个与主端口完全等价的备用监听器；绑定失败只记录警告，主端口照常服务 |
+| `LOCAL_GATEWAY_ALIAS_PORT` | `29317`，LocalRouter 独占的备用端口，IANA 未分配且低于 Linux 临时端口范围；本机程序可将 `http://127.0.0.1:29317` 作为与 `8317` 等价的候选入口 |
 | `LOCAL_GATEWAY_UPDATE_CHECK_ENABLED` | `true`，启动后及每六小时检查公开 GitHub Release |
 | `LOCAL_GATEWAY_CONFIG_DIR` | 覆盖配置目录 |
 | `LOCAL_GATEWAY_DATA_DIR` | 覆盖私有数据目录 |
@@ -115,7 +117,7 @@ LAN 监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent` 及公�
 
 版本检查只显示更新提示，不下载或安装程序，也不读取 GitHub Token。正式版本只跟踪正式发行，预发布版本同时跟踪预发布与正式发行；请求失败不影响转发。离线运行可关闭 `LOCAL_GATEWAY_UPDATE_CHECK_ENABLED`。
 
-`lr` 的客户端配置使用 `LOCALROUTER_BASE_URL` 指定入口，默认是 `http://127.0.0.1:8317`。`LOCALROUTER_API_TOKEN_FILE` 指向权限为 `0600` 的 Token 文件，默认读取 XDG 数据目录中的 `api-token`。这个变量保存文件路径，不能填入密钥本身。
+`lr` 的客户端配置使用 `LOCALROUTER_BASE_URL` 指定入口，默认是 `http://127.0.0.1:8317`；`http://127.0.0.1:29317` 是同一进程的备用入口，`/local/status` 与发现文档中的 `loopback_alias` 会报告它是否已绑定。`LOCALROUTER_API_TOKEN_FILE` 指向权限为 `0600` 的 Token 文件，默认读取 XDG 数据目录中的 `api-token`。这个变量保存文件路径，不能填入密钥本身。
 
 显式授权的维护 Agent 使用 `LOCALROUTER_MAINTAINER_TOKEN_FILE` 指定维护 Token 文件，该变量没有默认值。`LOCALROUTER_ADMIN_TOKEN_FILE` 留给人工管理使用。凭据、Cookie 和池内容应保存在私有数据目录或外部维护者管理的位置，不写入源码、文档或日志。
 
@@ -124,6 +126,31 @@ LAN 监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent` 及公�
 ```bash
 ./tools/install-localrouter.sh install --migrate-from ./gateway/data
 ```
+
+## 默认模型与首选模型
+
+`~/.config/localrouter/models.json` 保存三项操作者选择，控制台“服务与渠道 → 默认模型”可直接编辑，手动修改文件后无需重启即生效（格式错误时保留上一份有效配置并记录日志）。
+
+```json
+{
+  "schema_version": "1",
+  "default_model": "deepseek-v4.1-flash",
+  "services": [
+    {"pack": "opencode-go", "preferred_model": "deepseek-v4.1-flash", "v1": true},
+    {"pack": "commandcode", "preferred_model": "deepseek/deepseek-v4.1-flash", "v1": true,
+     "v1_aliases": {"deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash"}}
+  ]
+}
+```
+
+| 字段 | 作用 |
+|---|---|
+| `default_model` | `/v1` 请求不带 `model` 时使用；`lr connect` 写进程序的 `localrouter.toml` |
+| `services[].preferred_model` | 该服务的首选模型，发现文档与 `lr tree` 公布，`lr runtime-openai <pack>` 省略模型时使用 |
+| `services[].v1` | 把完整 Pack 的模型放进 `/v1`：Pack 请求 schema 枚举的模型名可直接用 `/v1` 调用，并出现在 `GET /v1/models` |
+| `services[].v1_aliases` | `/v1` 名称到该 Pack 模型 ID 的映射，让不同服务的同一模型共用一个名字 |
+
+`/v1` 先选支持该模型的渠道；没有时按 `services` 顺序交给已就绪的 Pack，走与 `/p/<pack>` 相同的认证、权限、预算和追踪。请求未发出或被上游 429 拒绝时换下一个 Pack；已经发出后的失败不换，避免重复执行。修改这份文件不改变 Pack 契约摘要，但会改变发现文档的 `topology.digest`。
 
 ## 常用本机地址
 

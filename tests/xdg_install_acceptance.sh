@@ -47,7 +47,7 @@ GOCACHE="$go_build_cache" \
 
 test -x "$prefix/bin/localrouter"
 test -x "$prefix/bin/lr"
-"$prefix/bin/lr" help all | grep -Fq 'runtime-openai <pack> <model>'
+"$prefix/bin/lr" help all | grep -Fq 'runtime-openai <pack> [model]'
 test -f "$test_home/.agents/skills/localrouter-protocol-pack/SKILL.md"
 test -f "$test_home/.omp/agent/skills/localrouter-protocol-pack/SKILL.md"
 test -f "$test_home/.agents/skills/localrouter-protocol-pack/.localrouter-managed"

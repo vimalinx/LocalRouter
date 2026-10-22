@@ -353,6 +353,11 @@ func (s *agentBudgetStore) finish(id string, cost *usageCost, metrics usageMetri
 	if notSent {
 		e.State = "settled"
 		e.Source = "not-sent"
+	} else if status == http.StatusTooManyRequests && (cost == nil || cost.AmountUSD == 0) {
+		// 429 is an authoritative refusal: the provider did no billable work,
+		// so a refused /v1 failover attempt must not keep its reserve.
+		e.State = "settled"
+		e.Source = "provider-refused"
 	} else if cost != nil && (cost.Status == "reported" || cost.Status == "confirmed") {
 		if amount, ok := usdMicros(cost.AmountUSD); ok {
 			e.Charged = amount
@@ -435,14 +440,14 @@ var agentBudgetMessages = map[string]string{
 	"agent_daily_budget_exceeded":          "Agent daily USD budget has insufficient remaining funds",
 	"agent_monthly_budget_exceeded":        "Agent monthly USD budget has insufficient remaining funds",
 	"agent_budget_unavailable":             "cannot safely read or persist Agent budget; no upstream call was made",
-	"agent_trial_exhausted":                "this Agent's trial budget is used up; no upstream call was made",
-	"agent_trial_pool_exhausted":           "the shared monthly trial pool is used up; no upstream call was made",
+	"agent_trial_exhausted":                "this Agent's remaining trial budget cannot cover this request's reservation; no upstream call was made",
+	"agent_trial_pool_exhausted":           "the shared monthly trial pool cannot cover this request's reservation; no upstream call was made",
 }
 
 func agentBudgetNextAction(code string) string {
 	switch code {
 	case "agent_trial_exhausted", "agent_trial_pool_exhausted", "agent_daily_budget_exceeded", "agent_monthly_budget_exceeded":
-		return "run lr budget request formal --monthly <usd> [--daily <usd>] --reason <why>, or lr budget request trial --reason <why>; the human approves once, then preflight again"
+		return "lr budget shows remaining and held amounts; run lr budget request formal --monthly <usd> [--daily <usd>] --reason <why>, or lr budget request trial --reason <why> (a program uses LOCALROUTER_API_TOKEN_FILE=<its token_file>); the human approves once, then retry"
 	}
 	return "ask the human to review the Agent budget, reservation or unsettled charges; preflight again after reconciliation"
 }

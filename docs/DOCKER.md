@@ -10,6 +10,7 @@ consumer routes to a private LAN.
 | Listener | Default | Routes |
 |---|---:|---|
 | Local operator | `127.0.0.1:8317` | console, `/local/api`, `/manage/mcp`, and all consumer routes |
+| Loopback alias | `127.0.0.1:29317` | identical to the local operator listener; disable with `LOCAL_GATEWAY_ALIAS_ENABLED=false` |
 | LAN service | operator-selected private IP on port `8318` | `/v1`, `/v1beta`, `/p`, `/w`, `/mcp`, `/agent`, discovery and sanitized docs |
 
 The LAN listener never registers the console, `/local/status`, `/local/api`, or

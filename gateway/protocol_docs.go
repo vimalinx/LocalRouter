@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -234,6 +236,17 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 		agentMaintenanceEnabled := registry.policies != nil && registry.policies.isAgentMaintenanceEnabled()
 		compatibilityPacks := runtime.channelProfiles.compatibilityViews(runtime.store)
 		topologyDigest := localServiceTopologyDigest(registry.currentDigest(), runtime.channelProfiles)
+		protocolViews := registry.views()
+		if runtime.models != nil {
+			sum := sha256.Sum256([]byte(topologyDigest + "\n" + runtime.models.digest()))
+			topologyDigest = hex.EncodeToString(sum[:])
+			for index := range protocolViews {
+				protocolViews[index].PreferredModel = runtime.models.preferredModel(protocolViews[index].ID)
+			}
+			for index := range compatibilityPacks {
+				compatibilityPacks[index].PreferredModel = runtime.models.preferredModel(compatibilityPacks[index].ID)
+			}
+		}
 		scope := requestServerScope(c)
 		console := any("/#tokens")
 		maintenance := gin.H{
@@ -265,10 +278,15 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"reason": "the LAN listener exposes service calls only; use the loopback listener for console and maintenance",
 			}
 		}
+		listeners := gin.H{"primary": "loopback"}
+		if scope == loopbackScope {
+			listeners["loopback_alias"] = loopbackAliasStatus(runtime.config)
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"schema_version": "1",
 			"name":           "LocalRouter",
 			"scope":          scope,
+			"listeners":      listeners,
 			"contract": gin.H{
 				"digest": registry.currentDigest(), "schema_version": agentContractSchemaVersion,
 				"cache": "reuse cached operation contracts until the digest or schema_version changes",
@@ -280,14 +298,14 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 			"agent": gin.H{
 				"service_templates": "/agent/service-templates", "onboarding": "/agent/onboarding", "bundles": "/agent/bundles", "traces": "/agent/traces",
 				"catalog": "/agent/operations", "resolve": "/agent/resolve", "describe": "/agent/operations/{pack}/{operation}",
-				"compare": "/agent/compare", "preflight": "/agent/preflight", "whoami": "/agent/whoami",
-				"identity_enrollment": gin.H{"available": scope == loopbackScope, "scope": loopbackScope, "request": "/agent/identity-requests", "approval": "human-console", "claim": "private proof, no Service Token required", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "schema": "/docs/identity-request.schema.json"},
+				"compare": "/agent/compare", "preflight": "/agent/preflight", "whoami": "/agent/whoami", "models": "/agent/models",
+				"identity_enrollment": gin.H{"available": scope == loopbackScope, "scope": loopbackScope, "request": "/agent/identity-requests", "approval": "immediate", "program_cli": "lr connect <program>", "claim": "private proof, no Service Token required", "setup_cli": "lr identity prepare <agent-code>", "setup_policy": gin.H{"setup_only": true}, "schema": "/docs/identity-request.schema.json"},
 				"access_requests":     "/agent/access-requests",
 				"workflow":            "/w/{pack}/{workflow}", "docs": "/docs/agent.json", "getting_started": "/docs/agent-start.md", "start_command": "lr init",
 				"selection_mode": "agent", "merged": false,
 			},
 			"agent_identity": gin.H{
-				"binding": "service-token", "registration": "operator-issued", "console": console,
+				"binding": "service-token", "registration": "self-service-or-operator-issued", "console": console,
 				"required_fields": []string{"agent_code", "agent_name", "workspace"},
 				"rule":            "every non-system service Token is bound to one registered Agent identity; usage and quotas are attributed by Token ID",
 			},
@@ -296,7 +314,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 				"operation_id":        "semantic selector for Agent APIs, lr and MCP; never an HTTP path",
 				"operation_id_is_url": false,
 				"http":                "use each route.call_url with one of route.call.methods",
-				"cli":                 "prefer route.call.cli; lr call accepts body JSON, path-params JSON and query-params JSON in that order",
+				"cli":                 "prefer route.call.cli (lr exec = preflight + one call); lr exec and lr call accept body JSON, path-params JSON and query-params JSON in that order",
 			},
 			"pack_model": gin.H{
 				"unit": "service-pack",
@@ -320,10 +338,11 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 			},
 			"maintenance":         maintenance,
 			"compatibility_packs": compatibilityPacks,
-			"protocols":           registry.views(),
+			"protocols":           protocolViews,
+			"models":              discoveryModels(runtime),
 			"authentication": gin.H{
 				"type": "bearer", "header": "Authorization", "applies_to": []string{"/agent/*", "/p/*", "/w/*", "/mcp", "/v1/*", "/v1beta/*"},
-				"exceptions": gin.H{"/agent/identity-requests": "loopback-only private enrollment proof; no service authority before human approval"},
+				"exceptions": gin.H{"/agent/identity-requests": "loopback-only private enrollment proof; issues a trial-budget identity at once"},
 			},
 			"protocol_pack_versions": []string{"1", "2", "3"},
 		})

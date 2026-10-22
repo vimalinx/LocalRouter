@@ -79,7 +79,7 @@ amd64_root="$(inspect_archive "$amd64_archive" 'x86-64')"
 inspect_archive "$arm64_archive" 'ARM aarch64' >/dev/null
 
 "$amd64_root/localrouter" version | grep -Fq 'localrouter '
-"$amd64_root/tools/lr" help all | grep -Fq 'lr runtime-openai <pack> <model>'
+"$amd64_root/tools/lr" help all | grep -Fq 'lr runtime-openai <pack> [model]'
 
 test_home="$acceptance_root/home"
 install -d -m 0700 "$test_home"

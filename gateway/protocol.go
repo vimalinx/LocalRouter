@@ -191,6 +191,9 @@ type protocolView struct {
 	Pool          protocolPoolView       `json:"pool"`
 	Workflows     []protocolWorkflow     `json:"workflows"`
 	Pricing       *protocolPricing       `json:"pricing,omitempty"`
+	// PreferredModel is the operator's model choice for this service, from
+	// models.json; it is not part of the Pack contract digest.
+	PreferredModel string `json:"preferred_model,omitempty"`
 }
 
 func protocolOpenAIBaseURL(packID string, routes []protocolRoute) string {
@@ -229,7 +232,7 @@ func publishProtocolRoute(packID, mount string, routes []protocolRoute, route pr
 	if len(route.Methods) > 0 {
 		call.DefaultMethod = route.Methods[0]
 	}
-	call.CLI = "lr call " + packID + " " + route.OperationID + " '<json>'"
+	call.CLI = "lr exec " + packID + " " + route.OperationID + " '<json>'"
 	paths := map[string]string{}
 	queries := map[string]string{}
 	for name := range protocolPathParameterNames(route.Path) {
@@ -245,7 +248,7 @@ func publishProtocolRoute(packID, mount string, routes []protocolRoute, route pr
 		if call.DefaultMethod == http.MethodGet || call.DefaultMethod == http.MethodHead {
 			body = "{}"
 		}
-		call.CLI = "lr call " + packID + " " + route.OperationID + " '" + body + "' '" + string(pathJSON) + "' '" + string(queryJSON) + "'"
+		call.CLI = "lr exec " + packID + " " + route.OperationID + " '" + body + "' '" + string(pathJSON) + "' '" + string(queryJSON) + "'"
 	}
 	published := protocolPublicRoute{
 		protocolRoute:    route,
@@ -990,6 +993,7 @@ func registerProtocolConsumerRoutes(engine *gin.Engine, runtime localRuntime) {
 	agent.GET("/operations", runtime.protocols.handleAgentCatalog(runtime))
 	agent.GET("/operations/:protocol/:operation", runtime.protocols.handleAgentDescribe(runtime))
 	agent.POST("/preflight", runtime.protocols.handleAgentPreflight(runtime))
+	agent.GET("/models", handleAgentModelSearch(engine, runtime))
 	registerServiceAgentRoutes(agent, runtime)
 	mcp := engine.Group("/mcp")
 	mcp.Use(localAPITokenAuth(runtime))
