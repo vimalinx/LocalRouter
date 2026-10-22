@@ -4,7 +4,7 @@ All notable LocalRouter changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once a stable `1.0.0` contract is
 published.
 
-## Unreleased
+## 0.4.2 - 2026-10-23
 
 - Agent maintenance is on by default. `lr manage-token [agent-code]` issues a
   distinct maintenance-only Token at once through the loopback identity
