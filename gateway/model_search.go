@@ -336,9 +336,19 @@ func compatibleModelOperations(protocols []protocolView, compatibility []localCo
 		if view.ID != row.Pack || !view.Ready {
 			continue
 		}
+		// An operation that declares allowed models claims them, so operations
+		// without a declared list (for example chat) no longer offer them.
+		claimed := false
 		for _, route := range view.PublicRoutes {
 			for _, input := range route.DynamicInputs {
-				if (input.SourceKind == "catalog-operation" && row.OperationKey != "" && input.SourceOperationKey == row.OperationKey) ||
+				claimed = claimed || containsString(input.AllowedValues, row.ID)
+			}
+		}
+		for _, route := range view.PublicRoutes {
+			for _, input := range route.DynamicInputs {
+				declared := len(input.AllowedValues) > 0
+				if (input.SourceKind == "catalog-operation" && row.OperationKey != "" && input.SourceOperationKey == row.OperationKey &&
+					((declared && containsString(input.AllowedValues, row.ID)) || (!declared && !claimed))) ||
 					(input.SourceKind == "request-schema-enum" && containsString(input.AllowedValues, row.ID)) {
 					operations = append(operations, gin.H{"operation_key": route.OperationKey, "operation_id": route.OperationID, "methods": route.Methods, "call_url": route.CallURL, "summary": route.Summary})
 					break

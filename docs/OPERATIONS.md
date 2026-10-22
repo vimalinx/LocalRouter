@@ -147,7 +147,7 @@ LAN 监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent` 及公�
 |---|---|
 | `default_model` | `/v1` 请求不带 `model` 时使用；`lr connect` 写进程序的 `localrouter.toml` |
 | `services[].preferred_model` | 该服务的首选模型，发现文档与 `lr tree` 公布，`lr runtime-openai <pack>` 省略模型时使用 |
-| `services[].v1` | 把完整 Pack 的模型放进 `/v1`：Pack 请求 schema 枚举的模型名可直接用 `/v1` 调用，并出现在 `GET /v1/models` |
+| `services[].v1` | 把完整 Pack 的模型放进 `/v1`：Pack 各操作请求 schema 枚举的模型名可直接用对应的 `/v1` 路径调用（如嵌入模型走 `/v1/embeddings`），并出现在 `GET /v1/models`；没有枚举的操作不暴露模型 |
 | `services[].v1_aliases` | `/v1` 名称到该 Pack 模型 ID 的映射，让不同服务的同一模型共用一个名字 |
 
 `/v1` 先选支持该模型的渠道；没有时按 `services` 顺序交给已就绪的 Pack，走与 `/p/<pack>` 相同的认证、权限、预算和追踪。请求未发出或被上游 429 拒绝时换下一个 Pack；已经发出后的失败不换，避免重复执行。修改这份文件不改变 Pack 契约摘要，但会改变发现文档的 `topology.digest`。

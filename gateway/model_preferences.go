@@ -52,6 +52,8 @@ type modelPreferenceStore struct {
 type packModelTarget struct {
 	Pack  string
 	Model string
+	// Path is the /v1 path that serves the model; set only by v1PackModelsAll.
+	Path string
 }
 
 var modelPreferencePackPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -247,6 +249,42 @@ func (runtime localRuntime) v1PackModels(requestPath string) []packModelTarget {
 	return result
 }
 
+// v1PackModelsAll lists every Pack model on /v1 with the path that serves it,
+// for example chat models on /v1/chat/completions and embedding models on
+// /v1/embeddings. Aliases are listed on /v1/chat/completions.
+func (runtime localRuntime) v1PackModelsAll() []packModelTarget {
+	if runtime.models == nil || runtime.protocols == nil {
+		return nil
+	}
+	result := []packModelTarget{}
+	for _, service := range runtime.models.snapshot().Services {
+		if !service.V1 {
+			continue
+		}
+		definition, ok := runtime.protocols.get(service.Pack)
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, route := range definition.Routes {
+			if seen[route.Path] {
+				continue
+			}
+			seen[route.Path] = true
+			if _, ok := runtime.v1PackRoute(service.Pack, route.Path); !ok {
+				continue
+			}
+			for _, model := range protocolSchemaStringEnum(route.RequestSchema, "model") {
+				result = append(result, packModelTarget{Pack: service.Pack, Model: model, Path: "/v1" + route.Path})
+			}
+		}
+		for alias := range service.V1Aliases {
+			result = append(result, packModelTarget{Pack: service.Pack, Model: alias, Path: "/v1/chat/completions"})
+		}
+	}
+	return result
+}
+
 // v1PackTargets resolves one public /v1 model name to the Packs that serve it,
 // rewriting aliases to the Pack's own model ID.
 func (runtime localRuntime) v1PackTargets(requestPath, model string) []packModelTarget {
@@ -427,8 +465,8 @@ func (writer *packFailoverWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) 
 // default LLM, the /v1 names answered by Packs, and where to search.
 func discoveryModels(runtime localRuntime) gin.H {
 	v1 := []gin.H{}
-	for _, target := range runtime.v1PackModels("/v1/chat/completions") {
-		v1 = append(v1, gin.H{"id": target.Model, "pack": target.Pack})
+	for _, target := range runtime.v1PackModelsAll() {
+		v1 = append(v1, gin.H{"id": target.Model, "pack": target.Pack, "path": target.Path})
 	}
 	return gin.H{
 		"default":        runtime.models.defaultModel(),

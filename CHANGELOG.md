@@ -17,6 +17,15 @@ published.
   load as on.
 - `lr manage-list` and `lr manage-call` print the gateway's structured error
   instead of failing silently.
+- A Pack operation that declares a model enum now claims those models even when
+  the Pack also has a model catalogue: model search lists embedding models only
+  under the embeddings operation and chat models only under chat, and `lr exec`
+  rejects the mismatch before dispatch.
+- `/v1` serves every model-declaring operation of a Pack the operator puts on
+  `/v1`, not only chat: discovery `models.v1_pack_models[]` gains `path`, and
+  `GET /v1/models` lists embedding models served on `/v1/embeddings`.
+- Preflight no longer prints "per per-…" for units that already start with
+  "per".
 
 - `lr describe` and preflight include model-scoped prices for operations that
   take a model, so a Pack priced per model (for example per video second) no

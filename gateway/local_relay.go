@@ -199,7 +199,7 @@ func handleRelayModels(runtime localRuntime) gin.HandlerFunc {
 		}
 		if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
 			tokenID := c.GetInt(tokenPolicyContextID)
-			for _, target := range runtime.v1PackModels("/v1/chat/completions") {
+			for _, target := range runtime.v1PackModelsAll() {
 				if seen[target.Model] {
 					continue
 				}
@@ -240,9 +240,11 @@ func handleRelayModel(runtime localRuntime) gin.HandlerFunc {
 		}
 		if len(channels) == 0 {
 			if strings.HasPrefix(c.Request.URL.Path, "/v1/") {
-				if targets := runtime.v1PackTargets("/v1/chat/completions", model); len(targets) > 0 {
-					c.JSON(http.StatusOK, gin.H{"id": model, "object": "model", "created": 0, "owned_by": targets[0].Pack})
-					return
+				for _, target := range runtime.v1PackModelsAll() {
+					if target.Model == model {
+						c.JSON(http.StatusOK, gin.H{"id": model, "object": "model", "created": 0, "owned_by": target.Pack})
+						return
+					}
 				}
 			}
 			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "model not found", "type": "invalid_request_error"}})

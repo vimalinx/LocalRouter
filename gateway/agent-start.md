@@ -33,7 +33,7 @@ curl http://127.0.0.1:8317/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"你好"}]}'
 ```
 
-`/v1` 不需要 `lr preflight`：权限、预算和额度在发往上游前检查，被拦下时返回结构化错误且 `upstream_called=false`。`POST /v1/chat/completions` 等标准接口按模型名选路，`GET /v1/models` 列出可用名称。请求不带 `model` 时使用 LocalRouter 默认模型（发现文档 `models.default`，响应头 `X-LocalRouter-Default-Model`）。没有 Channel 支持的模型会交给操作者放进 `/v1` 的 Pack（`models.v1_pack_models`），响应头 `X-LocalRouter-Pack` 标出实际服务；未发出或被 429 拒绝时按顺序换下一个 Pack，已发出后的失败不换。每个服务可公布 `preferred_model`（`lr tree` 显示），未指定模型时优先用它。模型名不存在时返回 404 `model_not_found`。`/v1/embeddings` 等接口只接受 `GET /v1/models` 里有、且对应渠道支持该接口的模型；完整 Pack 的模型目录里出现嵌入模型，不代表它公布了嵌入操作，以 `compatible_operations` 为准。
+`/v1` 不需要 `lr preflight`：权限、预算和额度在发往上游前检查，被拦下时返回结构化错误且 `upstream_called=false`。`POST /v1/chat/completions` 等标准接口按模型名选路，`GET /v1/models` 列出可用名称。请求不带 `model` 时使用 LocalRouter 默认模型（发现文档 `models.default`，响应头 `X-LocalRouter-Default-Model`）。没有 Channel 支持的模型会交给操作者放进 `/v1` 的 Pack（`models.v1_pack_models`），响应头 `X-LocalRouter-Pack` 标出实际服务；未发出或被 429 拒绝时按顺序换下一个 Pack，已发出后的失败不换。每个服务可公布 `preferred_model`（`lr tree` 显示），未指定模型时优先用它。模型名不存在时返回 404 `model_not_found`。`/v1/embeddings` 等接口只接受 `GET /v1/models` 里有、且对应渠道或 Pack 支持该接口的模型；发现文档 `models.v1_pack_models[].path` 标出每个 Pack 模型走哪个 `/v1` 路径（例如嵌入模型走 `/v1/embeddings`）。完整 Pack 的模型目录里出现嵌入模型，不代表它公布了嵌入操作，以 `compatible_operations` 为准。
 
 模型从当前目录选择；`request_example` 仅展示形状。`lr exec` 自动对 `model`、`model_cls` 等动态输入做精确检查。需要自行准备外部客户端时，运行 `lr find model --exact <pack>:<model-id>`，要求一个匹配且操作兼容；上游没有目录时只接受当前已审阅 schema 的显式枚举。
 

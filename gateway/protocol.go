@@ -293,8 +293,13 @@ func publishProtocolRoute(packID, mount string, routes []protocolRoute, route pr
 		input.SourceKind = "catalog-operation"
 		break
 	}
+	input.AllowedValues = protocolSchemaStringEnum(route.RequestSchema, dynamicField)
+	if input.SourceOperationKey != "" && len(input.AllowedValues) > 0 {
+		// The catalogue says what is live; the declared enum says which of
+		// those models this operation accepts (for example embedding models).
+		input.Rule = "choose a currently advertised model ID that is also in allowed_values; request_example." + dynamicField + " is not availability evidence"
+	}
 	if input.SourceOperationKey == "" {
-		input.AllowedValues = protocolSchemaStringEnum(route.RequestSchema, dynamicField)
 		if len(input.AllowedValues) > 0 {
 			input.SourceKind = "request-schema-enum"
 			input.Extract = "request_schema.properties." + dynamicField + ".enum[]"

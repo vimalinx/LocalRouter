@@ -575,7 +575,11 @@ func (registry *protocolRegistry) handleAgentPreflight(runtime localRuntime) gin
 		} else if price, ok := preflightPrice(descriptor.Pricing, input); ok {
 			detail := "pricing status: " + price.Status
 			if price.Amount != nil {
-				detail += fmt.Sprintf(" (%s: %g %s per %s)", price.ID, *price.Amount, price.Currency, price.Unit)
+				unit := price.Unit
+				if !strings.HasPrefix(unit, "per") {
+					unit = "per " + unit
+				}
+				detail += fmt.Sprintf(" (%s: %g %s %s)", price.ID, *price.Amount, price.Currency, unit)
 			}
 			addCheck("pricing", "pass", detail, false)
 		} else {
