@@ -127,6 +127,10 @@ func handleIdentityAccessRequest(runtime localRuntime) gin.HandlerFunc {
 			return
 		}
 		request := identityRequest{AgentCode: token.AgentCode, AgentName: token.AgentName, Workspace: token.Workspace, Runtime: token.Runtime, Policy: input.Policy, OwnerTokenID: token.ID, BasePolicyDigest: identityPolicyDigest(runtime.policies, token.ID)}
+		if len(request.Policy.Capabilities) != 0 {
+			identityValidationError(c, errors.New("maintenance needs its own identity; run lr manage-token"))
+			return
+		}
 		if err := validateIdentityRequest(runtime, &request); err != nil {
 			identityValidationError(c, err)
 			return
@@ -186,13 +190,21 @@ func validateIdentityRequest(runtime localRuntime, request *identityRequest) err
 	}
 	request.AgentCode, request.AgentName, request.Workspace, request.Runtime = token.AgentCode, token.AgentName, token.Workspace, token.Runtime
 	policy := &request.Policy
-	if policy.TokenID != 0 || len(policy.Capabilities) != 0 {
-		return errors.New("enrollment grants service access only")
+	if policy.TokenID != 0 {
+		return errors.New("enrollment cannot name a Token ID")
 	}
 	if err := validateLocalTokenPolicy(policy); err != nil {
 		return err
 	}
-	if policy.SetupOnly {
+	if len(policy.Capabilities) != 0 {
+		// A maintenance identity maintains Packs only; it never calls services.
+		if runtime.policies == nil || !runtime.policies.isAgentMaintenanceEnabled() {
+			return errors.New("Agent maintenance is turned off on the console Tokens page")
+		}
+		if policy.SetupOnly || len(policy.Packs)+len(policy.Operations)+len(policy.Models)+len(policy.Surfaces) != 0 || policy.BudgetTier != "" || policy.DailyBudgetUSDMicros+policy.MonthlyBudgetUSDMicros+policy.TrialBudgetUSDMicros+policy.RequestReserveUSDMicros != 0 {
+			return errors.New("a maintenance identity takes only capabilities and an optional expiry")
+		}
+	} else if policy.SetupOnly {
 		if len(policy.Packs)+len(policy.Operations)+len(policy.Models)+len(policy.Surfaces) != 0 {
 			return errors.New("setup-only identity cannot request service selectors")
 		}
@@ -264,7 +276,7 @@ func handleIdentityRequest(runtime localRuntime) gin.HandlerFunc {
 			identityValidationError(c, err)
 			return
 		}
-		if settings, ok := runtime.budgetSettings(); ok {
+		if settings, ok := runtime.budgetSettings(); ok && len(request.Policy.Capabilities) == 0 {
 			applyTrialBudget(&request.Policy, settings)
 		}
 		canonical, _ := json.Marshal(request)
@@ -349,8 +361,8 @@ func handleIdentityClaim(runtime localRuntime) gin.HandlerFunc {
 				return
 			}
 			policy, exists := runtime.policies.policyFor(token.ID)
-			if !exists || (policy.ExpiresAt > 0 && policy.ExpiresAt <= time.Now().Unix()) || policyHasCapability(policy, localRouterMaintainCapability) {
-				identityFailure(c, 409, "approved service policy is no longer available")
+			if !exists || (policy.ExpiresAt > 0 && policy.ExpiresAt <= time.Now().Unix()) || policyHasCapability(policy, localRouterMaintainCapability) != policyHasCapability(request.Policy, localRouterMaintainCapability) {
+				identityFailure(c, 409, "approved policy is no longer available")
 				return
 			}
 			// Re-delivery within the window returns the SAME credential. A lost

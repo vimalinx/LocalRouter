@@ -162,7 +162,7 @@ lr tree
 | 应用与消费型 Agent | 各自的调用 Token，用于调用服务 |
 | 人工控制台 | 默认本机免密，可在运行概览开启密码保护 |
 | 人工维护 MCP | 管理员凭据，始终需要鉴权 |
-| 维护 Agent | 人工明确授予的独立维护 Token，默认关闭 |
+| 维护 Agent | `lr manage-token` 立即领取的独立维护 Token；默认开启，可在 Token 管理关闭 |
 
 调用 Token 与维护 Token 用途隔离。免密控制台不构成 Agent 修改配置的授权。完整密码规则、维护流程和安装器改动见[配置与权限说明](docs/OPERATIONS.md)。
 

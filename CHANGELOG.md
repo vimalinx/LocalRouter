@@ -6,6 +6,18 @@ published.
 
 ## Unreleased
 
+- Agent maintenance is on by default. `lr manage-token [agent-code]` issues a
+  distinct maintenance-only Token at once through the loopback identity
+  handshake (no console step), saves it mode 0600, and `lr manage-*` then uses
+  it automatically. The Token can maintain Packs through the reviewed draft
+  lifecycle but cannot call services, and a service identity cannot widen
+  itself into one. Turning the switch off on the console Tokens page rejects
+  every maintenance Token at once and is remembered. Policy files written
+  before this release did not record the switch when it was off, so they now
+  load as on.
+- `lr manage-list` and `lr manage-call` print the gateway's structured error
+  instead of failing silently.
+
 - `lr describe` and preflight include model-scoped prices for operations that
   take a model, so a Pack priced per model (for example per video second) no
   longer reports `pricing: []` and "operation price is unknown"; preflight names

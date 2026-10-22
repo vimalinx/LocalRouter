@@ -16,6 +16,11 @@ default_admin_token_file="$xdg_data_home/localrouter/admin-token"
 api_token_file="${LOCALROUTER_API_TOKEN_FILE:-$default_api_token_file}"
 admin_token_file="${LOCALROUTER_ADMIN_TOKEN_FILE:-$default_admin_token_file}"
 maintainer_token_file="${LOCALROUTER_MAINTAINER_TOKEN_FILE:-}"
+# lr manage-token writes here; manage commands use it when no locator is set.
+default_maintainer_token_file="$xdg_data_home/localrouter/maintainers/maintainer/maintenance-token"
+if [[ -z "$maintainer_token_file" && -f "$default_maintainer_token_file" ]]; then
+  maintainer_token_file="$default_maintainer_token_file"
+fi
 
 # Recover only the retired repository-local locators used before the XDG install.
 # Other explicit locator failures remain authoritative instead of silently falling back.
@@ -157,16 +162,18 @@ labels do not affect identity or permissions. Provider calls are never part of
 setup preparation, approval, reconciliation or evidence inspection.
 
 Maintain (Agent lane requires a separate maintenance-only Token)
+  lr manage-token [agent-code]      Get a maintenance-only Token at once (loopback, switch on)
   lr manage-status                  Show the selected maintenance lane and its prerequisites
   lr manage-list [text]             Inspect semantic maintenance tools; listing grants no authority
   lr manage-call <tool> [json]      Call one semantic draft tool in the selected maintenance lane
 
 JSON may be an inline object or @/path/to/body.json. Service calls read the API
-Token. With LOCALROUTER_MAINTAINER_TOKEN_FILE, an Agent must first confirm
-maintenance.auth.agent_token.enabled=true in discovery and use a distinct
-localrouter.maintain Token. Without that locator, manage commands use the
-administrator-backed human operator lane. Agents must not use that fallback or
-read the administrator credential; request a distinct maintenance-only Token.
+Token. Agent maintenance is on by default (the operator can turn it off on the
+console Tokens page). lr manage-token issues a distinct localrouter.maintain
+Token at once and manage commands then use it automatically; another locator
+can be named with LOCALROUTER_MAINTAINER_TOKEN_FILE. Without any maintenance
+Token, manage commands use the administrator-backed human operator lane.
+Agents must not use that fallback or read the administrator credential.
 Neither lane permits credential values in output. Do not replace
 either lane by editing files, SQLite, live Packs, or restarting the service.
 
@@ -1605,7 +1612,7 @@ command_mcp_call() {
 command_manage_list() {
   local search_text="${1:-}"
   local response
-  response="$(maintenance_request POST "$maintenance_mcp_url" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')"
+  response="$(maintenance_request POST "$maintenance_mcp_url" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')" || { printf '%s\n' "$response" >&2; return 1; }
   local matches
   matches="$(jq -r --arg query "${search_text,,}" '
     if .error then error(.error.message) else .result.tools[] end
@@ -1615,6 +1622,72 @@ command_manage_list() {
   ' <<<"$response")"
   [[ -n "$matches" ]] || fail "no maintenance tool matched: $search_text"
   printf '%s\n' "$matches"
+}
+
+# A maintenance identity is issued at once on loopback while the operator
+# switch is on. It maintains Packs only and can never call services.
+command_manage_token() {
+  local code="${1:-maintainer}"
+  [[ $# -le 1 ]] || fail "use lr manage-token [agent-code]"
+  [[ "$code" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{1,47}$ && "$code" != localrouter-system ]] ||
+    fail "agent code must be 2-48 letters, numbers, dot, underscore or hyphen"
+  [[ "$base_url" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$ ]] || fail "maintenance identities are issued only on the loopback listener"
+  discovery | jq -e '.maintenance.auth.agent_token.enabled == true' >/dev/null ||
+    json_fail "agent_maintenance_disabled" "Agent maintenance is turned off" "ask the human to turn on Agent maintenance on the console Tokens page; never read the administrator credential" || return 1
+
+  local maintainers_dir="$xdg_data_home/localrouter/maintainers" dir token_file claim_file
+  dir="$maintainers_dir/$code"
+  token_file="$dir/maintenance-token"
+  claim_file="$dir/claim"
+  (umask 077; mkdir -p "$dir")
+  [[ ! -L "$maintainers_dir" && ! -L "$dir" && "$(stat -c '%u:%a' "$dir")" = "$EUID:700" ]] ||
+    fail "maintainer directory must be private and owned by the current user: $dir"
+  local token_lock
+  exec {token_lock}<"$dir"
+  flock -x "$token_lock"
+
+  local reused=false listing='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+  if [[ -f "$token_file" && ! -L "$token_file" ]] &&
+     bearer_request "$token_file" POST "$maintenance_mcp_url" "$listing" 30 2>/dev/null | jq -e '.result.tools | length > 0' >/dev/null 2>&1; then
+    reused=true
+  else
+    rm -f -- "$token_file" "$claim_file"
+    local temporary response request_id claim_hash body
+    temporary="$(mktemp "$dir/.claim.XXXXXX")"
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' >"$temporary"
+    printf '\n' >>"$temporary"
+    mv -- "$temporary" "$claim_file"
+    body="$(jq -cn --arg code "$code" --arg workspace "$PWD" --arg capability localrouter.maintain '{agent_code:$code,agent_name:$code,workspace:$workspace,runtime:"lr",policy:{capabilities:[$capability]}}')"
+    if ! response="$(bearer_request "$claim_file" POST "$base_url/agent/identity-requests" "$body" 30)"; then
+      jq --arg code "$code" '{success:false,code:(.code // "maintenance_identity_failed"),message:(.message // "maintenance identity was not issued"),next_action:("If an identity named " + $code + " already exists, revoke it on the console Agents page or run lr manage-token <another-code>.")}' <<<"$response" 2>/dev/null ||
+        printf '%s\n' "$response"
+      return 1
+    fi
+    jq -e '.data.state == "approved"' >/dev/null <<<"$response" || { jq '.data' <<<"$response"; return 1; }
+    read_bearer_token "$claim_file"
+    claim_hash="$(printf '%s' "$bearer_token" | sha256sum)"
+    request_id="identity-${claim_hash:0:24}"
+    # Keep the credential response in process memory only.
+    response="$(bearer_request "$claim_file" POST "$base_url/agent/identity-requests/$request_id/claim" '{}' 30)" ||
+      fail "maintenance identity was issued but delivery failed; rerun lr manage-token $code"
+    jq -e --arg code "$code" '.data.ready == true and .data.request.agent_code == $code and (.data.token | test("^sk-[A-Za-z0-9_-]+$"))' >/dev/null <<<"$response" ||
+      fail "credential response does not match maintenance identity $code"
+    temporary="$(mktemp "$dir/.token.XXXXXX")"
+    jq -r '.data.token' <<<"$response" >"$temporary"
+    mv -f -- "$temporary" "$token_file"
+  fi
+  jq -n --arg code "$code" --arg token_file "$token_file" --argjson reused "$reused" \
+    --argjson default "$([[ "$token_file" == "$default_maintainer_token_file" ]] && echo true || echo false)" '{
+      object: "localrouter.maintainer",
+      agent_code: $code,
+      token_file: $token_file,
+      identity_reused: $reused,
+      service_access: false,
+      token_value_exported: false,
+      next_action: (if $default
+        then "lr manage-* now uses this Token automatically. Read the localrouter-protocol-pack Skill, then lr manage-list."
+        else "Set LOCALROUTER_MAINTAINER_TOKEN_FILE=" + $token_file + " for lr manage-*; read the localrouter-protocol-pack Skill first." end)
+    }'
 }
 
 command_manage_status() {
@@ -1630,10 +1703,12 @@ command_manage_status() {
         agent_maintenance_enabled: ($contract.maintenance.auth.agent_token.enabled // false),
         prerequisite: (if $lane == "agent-token"
           then "discovery must enable maintenance.auth.agent_token and the supplied locator must contain a distinct localrouter.maintain Token"
-          else "human operator only; Agents must request an enabled distinct maintenance-only Token and must not read administrator credentials"
+          else "human operator only; Agents run lr manage-token for a distinct maintenance-only Token and must not read administrator credentials"
           end),
         credential_value_exported: false,
-        next: "use lr manage-list, then open an isolated draft and apply only its reviewed exact digest"
+        next: (if $lane == "human-operator" and ($contract.maintenance.auth.agent_token.enabled // false)
+          then "Agents: run lr manage-token, then lr manage-list"
+          else "use lr manage-list, then open an isolated draft and apply only its reviewed exact digest" end)
       }'
 }
 
@@ -1645,7 +1720,7 @@ command_manage_call() {
   local arguments request response
   arguments="$(json_argument "$arguments_input")"
   request="$(jq -cn --arg name "$tool_name" --slurpfile arguments <(printf '%s' "$arguments") '($arguments[0]) as $arguments | {jsonrpc:"2.0",id:1,method:"tools/call",params:{name:$name,arguments:$arguments}}')"
-  response="$(maintenance_request POST "$maintenance_mcp_url" "$request")"
+  response="$(maintenance_request POST "$maintenance_mcp_url" "$request")" || { printf '%s\n' "$response" >&2; return 1; }
   if jq -e '.error != null' >/dev/null <<<"$response"; then
     jq -r '"lr: maintenance MCP error " + (.error.code | tostring) + ": " + .error.message' <<<"$response" >&2
     return 1
@@ -1715,6 +1790,7 @@ case "$command_name" in
   whoami) command_whoami "$@" ;;
   budget) command_budget "$@" ;;
   setup) command_setup "$@" ;;
+  manage-token) command_manage_token "$@" ;;
   manage-status) command_manage_status "$@" ;;
   manage-list) command_manage_list "$@" ;;
   manage-call) command_manage_call "$@" ;;

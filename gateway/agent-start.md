@@ -117,7 +117,7 @@ lr connect <program>
 
 明确公布的 GET/HEAD 模型目录读取不扣业务请求次数；读取已保存任务、推进既有任务的只读状态或取消步骤使用独立的每 Token 每分钟 120 次控制额度。模型目录不扣自主额度；任务推进和取消仍受金额预算、共享额度、账号池和操作权限约束，不能借此创建新任务。Token、能力包、有效期和显式禁止/批准规则始终有效。美元自动额度只适用于已确认的固定调用价格；费用不能确定时改用次数或单次批准。`service_approval_required` 交人批准一次或调整额度，`service_use_denied` 表示禁止，单次批准不能覆盖。批准绑定 Token、服务和操作，一小时内一次有效；`X-LocalRouter-Allowance-Receipt` 是占用记录，未知结果先核对，不能重试探测。
 
-维护独立授权：人开启 Agent 维护并签发仅维护 Token 后，通过 `LOCALROUTER_MAINTAINER_TOKEN_FILE` 和 `/manage/mcp` 维护。Service Token 无维护权限，免密控制台也不构成 Agent 授权；不读管理员凭据，不通过 `/local/api` 自行批准。已委托的兼容修复用维护 lane 准备提案，审阅后 `lr setup apply <id> <proposal.digest>`；扩大目标、认证或操作需新批准。高级 Pack 编辑仍走 draft → review → plan → exact-digest apply，保留他人的草稿修改。
+维护独立授权：Agent 维护默认开启（人可在控制台 Token 页关闭）。在回环端口运行 `lr manage-token` 立即领取独立的仅维护 Token（0600 文件），之后 `lr manage-*` 自动使用它经 `/manage/mcp` 维护；其他位置用 `LOCALROUTER_MAINTAINER_TOKEN_FILE` 指定。维护 Token 不能调用服务，Service Token 无维护权限，免密控制台也不构成 Agent 授权；不读管理员凭据，不通过 `/local/api` 自行批准。已委托的兼容修复用维护 lane 准备提案，审阅后 `lr setup apply <id> <proposal.digest>`；扩大目标、认证或操作需新批准。高级 Pack 编辑仍走 draft → review → plan → exact-digest apply，保留他人的草稿修改。
 
 LAN 地址须经操作者批准，设置 `LOCALROUTER_ALLOW_LAN=true` 后，`lr` 在读 Token 前核对 `scope=lan-service` 和 `maintenance.available=false`。LAN 只提供调用，身份领取和维护留在 loopback。Token locator 是私有文件路径，不是密钥值；不要把 Token 放进聊天、源码或日志。
 

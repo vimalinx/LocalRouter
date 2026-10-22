@@ -11,7 +11,7 @@
 | 应用与 Agent 调用服务 | 各自的调用 Token，默认长期有效且不限调用次数，可另配额度策略 |
 | 人工使用控制台 | 默认仅本机免密访问，也可启用自定义密码 |
 | 人工使用维护 MCP | 独立的管理员凭据，始终需要鉴权 |
-| Agent 修改 Pack | 人工明确授予的维护权限，默认关闭；使用带 `localrouter.maintain` 的独立维护 Token |
+| Agent 修改 Pack | 默认开启，可在“Token 管理”的“Agent 维护”关闭；Agent 在本机运行 `lr manage-token` 立即领取带 `localrouter.maintain` 的独立维护 Token |
 
 调用 Token 不授予管理权限，维护 Token 也不能拿来调用模型或工作流。调用 Token 自身不限量时，仍要遵守账号池的并发、冷却、租约与额度限制。
 
@@ -119,7 +119,7 @@ LAN 监听器提供 `/v1`、`/v1beta`、`/p`、`/w`、`/mcp`、`/agent` 及公�
 
 `lr` 的客户端配置使用 `LOCALROUTER_BASE_URL` 指定入口，默认是 `http://127.0.0.1:8317`；`http://127.0.0.1:29317` 是同一进程的备用入口，`/local/status` 与发现文档中的 `loopback_alias` 会报告它是否已绑定。`LOCALROUTER_API_TOKEN_FILE` 指向权限为 `0600` 的 Token 文件，默认读取 XDG 数据目录中的 `api-token`。这个变量保存文件路径，不能填入密钥本身。
 
-显式授权的维护 Agent 使用 `LOCALROUTER_MAINTAINER_TOKEN_FILE` 指定维护 Token 文件，该变量没有默认值。`LOCALROUTER_ADMIN_TOKEN_FILE` 留给人工管理使用。凭据、Cookie 和池内容应保存在私有数据目录或外部维护者管理的位置，不写入源码、文档或日志。
+维护 Agent 运行 `lr manage-token` 后，维护 Token 保存在 `$XDG_DATA_HOME/localrouter/maintainers/<agent-code>/maintenance-token`（0600）；默认代号 `maintainer` 的文件会被 `lr manage-*` 自动使用，其他位置用 `LOCALROUTER_MAINTAINER_TOKEN_FILE` 指定。关闭“Agent 维护”后所有维护 Token 立即失效。`LOCALROUTER_ADMIN_TOKEN_FILE` 留给人工管理使用。凭据、Cookie 和池内容应保存在私有数据目录或外部维护者管理的位置，不写入源码、文档或日志。
 
 如果仍使用旧版仓库内的数据目录，可以在安装时复制迁移。目标已有同名内容时安装器会停止，原目录会保留。
 

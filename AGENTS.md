@@ -5,7 +5,7 @@ For Pack, auth, pool, workflow, adapter, guide, release or rollback changes, rea
 ## Runtime and authority boundaries
 
 - Loopback port 8317 is authoritative; loopback port 29317 is the same listener under an alias and carries identical authority. An operator-approved LAN endpoint is consumer-only: require `LOCALROUTER_ALLOW_LAN=true`, `scope=lan-service`, and `maintenance.available=false` before reading or sending a Service Token. No LAN maintenance.
-- Agents do not self-register or mutate through `/local/api`, even when the human console is password-free. Use the explicitly authorized maintenance lane; never request or read administrator credentials.
+- Agents do not self-register or mutate through `/local/api`, even when the human console is password-free. Maintain through the Agent lane: `lr manage-token` issues a distinct maintenance-only Token while the operator switch is on (the default); never request or read administrator credentials.
 - Store secrets under `$XDG_DATA_HOME/localrouter/` with mode `0600`; isolated tests may set `LOCAL_GATEWAY_DATA_DIR`. Credentials, cookies, pool contents and private upstream addresses must not enter source, guides, logs, test output or `.ai` notes.
 - `operation_key` / `operation_id` are semantic selectors. Use published call URLs or `lr call`; external OpenAI runtimes keep the Base URL returned by `lr runtime-openai` unchanged.
 - Examples are shape-only. Resolve declared dynamic inputs; select one exact `lr find model --exact <pack>:<model-id>` result and a compatible operation. Use a current catalogue or a reviewed schema enum when no catalogue exists. Preflight does not refresh provider discovery.

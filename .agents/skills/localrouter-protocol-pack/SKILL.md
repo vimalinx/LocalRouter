@@ -10,7 +10,7 @@ Live discovery is authoritative. Readiness is not provider proof.
 ## Start from the live contract
 
 1. Request configured discovery, defaulting to `http://127.0.0.1:8317/.well-known/localrouter.json`. Before sending a Token to non-loopback, require `scope=lan-service` and `maintenance.available=false`.
-2. Run `lr init` and `lr guide`. Bootstrap identity is not an independent Agent; follow the returned registration steps. Agent maintenance requires an enabled, distinct maintenance-only Token. Never read the administrator credential or use its human fallback.
+2. Run `lr init` and `lr guide`. Bootstrap identity is not an independent Agent; follow the returned registration steps. For maintenance, `lr manage-token` issues a distinct maintenance-only Token that `lr manage-*` uses. Never read the administrator credential or use its human fallback.
 3. Classify the work before reading more detail:
    - **New service/template/bundle:** `lr setup templates` → `lr setup template <id> <version>` → `lr setup schema` → prepare → auto-apply or human approval → verify. Preparation grants no authority.
    - **Use only:** call the already documented operation and do not edit the Pack.
@@ -56,7 +56,7 @@ Use `lr setup schema [proposal|pack]` and `lr identity schema` for live schemas.
 ## Required lifecycle
 
 1. Discover the live Pack and ownership boundary.
-2. For advanced Pack authoring, confirm the enabled maintenance Token and scope. Open an isolated `/manage/mcp` draft; never request, print, copy, or edit credentials there.
+2. For advanced Pack authoring, confirm `lr manage-status` reports `selected_lane=agent-token`. Open an isolated `/manage/mcp` draft; never request, print, copy, or edit credentials there.
 3. Use the narrowest semantic tool for Pack core, operation, supplier profile, or guide. Lint content edits. Use merge patch only for advanced/removal fields outside those tools.
 4. Read the draft's `impact.files`, `impact.protocols`, and `impact.pool_ids`. Inspect every changed section and affected pool before planning.
 5. Run strict validation, focused mocks, relevant transport/workflow tests, and the Skill doctor.

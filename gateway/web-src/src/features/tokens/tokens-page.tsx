@@ -429,7 +429,7 @@ export function TokensPage(props: {
           <span className='text-xs text-muted-foreground'>需要 Agent 修改服务配置时使用</span>
         </summary>
         <div className='mt-3 flex flex-wrap items-center gap-3 border-t pt-3'>
-          <p className='min-w-0 flex-1 text-xs text-muted-foreground'>维护需要独立维护 Token。开启此入口不会增加普通调用 Token 的权限。</p>
+          <p className='min-w-0 flex-1 text-xs text-muted-foreground'>默认开启：本机 Agent 用 lr manage-token 立即领取独立维护 Token，不能调用服务，也不增加普通调用 Token 的权限。关闭后所有维护 Token 立即失效。</p>
           <Button type='button' variant='outline' size='sm' role='switch' aria-label='Agent 维护' aria-checked={props.maintenanceAccess.agent_tokens_enabled} disabled={savingMaintenanceAccess} onClick={toggleAgentMaintenance}>{savingMaintenanceAccess ? '保存中…' : props.maintenanceAccess.agent_tokens_enabled ? '关闭' : '开启'}</Button>
         </div>
         {props.maintenanceAccess.agent_tokens_enabled ? (

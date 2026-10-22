@@ -265,7 +265,7 @@ func (registry *protocolRegistry) handleDiscovery(runtime localRuntime) gin.Hand
 					"required_capability": localRouterMaintainCapability, "service_access": false,
 				},
 			},
-			"grant":        "Service Tokens can call services and prepare owned proposals, but cannot approve authority or maintain Packs. Agent maintenance requires a separate maintenance-only Token and the enabled operator switch.",
+			"grant":        "Service Tokens can call services and prepare owned proposals, but cannot approve authority or maintain Packs. Agent maintenance uses a separate maintenance-only Token: while the operator switch is on (the default), lr manage-token issues one at once on loopback.",
 			"lifecycle":    []string{"draft", "edit", "validate", "review-impact", "plan", "apply", "verify", "rollback"},
 			"editing":      "Semantic MCP tools own paths, JSON/YAML formatting, atomic writes and exact digests.",
 			"failure":      "Drafts are preserved and local post-apply verification failures automatically restore the previous revision.",

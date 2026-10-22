@@ -484,6 +484,7 @@ func TestMaintenanceUsesAdminByDefaultAndOptionalDedicatedAgentToken(t *testing.
 	engine.ServeHTTP(adminResponse, adminRequest)
 	assert.Equal(t, http.StatusNoContent, adminResponse.Code)
 
+	policyStore.agentMaintenanceEnabled = false
 	disabledRequest := httptest.NewRequest(http.MethodPost, "/manage", strings.NewReader(`{}`))
 	disabledRequest.Header.Set("Authorization", "Bearer sk-maintenance-key")
 	disabledResponse := httptest.NewRecorder()
@@ -507,21 +508,21 @@ func TestMaintenanceUsesAdminByDefaultAndOptionalDedicatedAgentToken(t *testing.
 	assert.Equal(t, http.StatusNoContent, allowedResponse.Code)
 }
 
-func TestMaintenanceAccessSettingDefaultsOffAndPersists(t *testing.T) {
+func TestMaintenanceAccessSettingDefaultsOnAndPersistsOff(t *testing.T) {
 	rootDir := t.TempDir()
 	store, err := newTokenPolicyStore(rootDir)
 	require.NoError(t, err)
-	assert.False(t, store.isAgentMaintenanceEnabled())
+	assert.True(t, store.isAgentMaintenanceEnabled())
 
 	engine := gin.New()
 	engine.PUT("/setting", store.handleMaintenanceAccessPut)
-	response := performJSON(engine, http.MethodPut, "/setting", `{"agent_tokens_enabled":true}`)
+	response := performJSON(engine, http.MethodPut, "/setting", `{"agent_tokens_enabled":false}`)
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-	assert.True(t, store.isAgentMaintenanceEnabled())
+	assert.False(t, store.isAgentMaintenanceEnabled())
 
 	reloaded, err := newTokenPolicyStore(rootDir)
 	require.NoError(t, err)
-	assert.True(t, reloaded.isAgentMaintenanceEnabled())
+	assert.False(t, reloaded.isAgentMaintenanceEnabled())
 }
 
 func TestMCPToolsAndTypedOpenAPI(t *testing.T) {

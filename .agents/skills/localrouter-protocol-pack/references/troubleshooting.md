@@ -7,8 +7,8 @@ Read this reference after a concrete failure. Preserve the layer where it failed
 | Discovery/docs unavailable | listener/runtime | `/local/status`, loopback port, binary/assets |
 | MCP `pack_invalid`, lint `valid=false`, or `draft_invalid` | authoring contract | follow structured `issues[].path`, `allowed`, and `suggested_action`; fix the retained semantic draft and lint again |
 | Maintenance 401 | LocalRouter authorization | selected administrator or Agent-maintenance locator and its expected header; do not inspect upstream accounts |
-| `agent_maintenance_disabled` | LocalRouter authorization | Agent lane is off; stop rather than reading the administrator credential |
-| Maintenance 403 capability error | LocalRouter authorization | human-selected maintenance-only Token and `localrouter.maintain`; do not request the administrator credential |
+| `agent_maintenance_disabled` | LocalRouter authorization | the operator turned the Agent lane off; stop and ask them, never read the administrator credential |
+| Maintenance 403 capability error | LocalRouter authorization | the locator is a Service Token; run `lr manage-token` for a maintenance-only Token; do not request the administrator credential |
 | `draft_changed_after_review` or `live_changed_after_plan` | lifecycle drift | re-read impact against live state and plan the reviewed digest again |
 | `verification_failed` | local installation | inspect structured automatic rollback result before retrying |
 | Public 401/403 | upstream credential/entitlement | sanitized pool state and direct read-only provider probe |

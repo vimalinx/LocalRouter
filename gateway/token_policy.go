@@ -43,7 +43,7 @@ type localTokenPolicy struct {
 
 type tokenPolicyDocument struct {
 	SchemaVersion           string                   `json:"schema_version"`
-	AgentMaintenanceEnabled bool                     `json:"agent_maintenance_enabled,omitempty"`
+	AgentMaintenanceEnabled *bool                    `json:"agent_maintenance_enabled,omitempty"`
 	Policies                map[int]localTokenPolicy `json:"policies"`
 }
 
@@ -74,6 +74,8 @@ func newTokenPolicyStore(dataDir string) (*tokenPolicyStore, error) {
 		path:       filepath.Join(dataDir, "token-policies.json"),
 		allowances: newServiceAllowanceStore(dataDir),
 		policies:   make(map[int]localTokenPolicy), usage: make(map[int]*tokenPolicyUsage),
+		// Agent maintenance is on unless the operator turned it off.
+		agentMaintenanceEnabled: true,
 	}
 	exists, err := inspectPrivateRegularFile(store.path, "token policy file")
 	if err != nil {
@@ -95,7 +97,9 @@ func newTokenPolicyStore(dataDir string) (*tokenPolicyStore, error) {
 	if document.Policies != nil {
 		store.policies = document.Policies
 	}
-	store.agentMaintenanceEnabled = document.AgentMaintenanceEnabled
+	if document.AgentMaintenanceEnabled != nil {
+		store.agentMaintenanceEnabled = *document.AgentMaintenanceEnabled
+	}
 	usagePath := store.usagePath()
 	exists, err = inspectPrivateRegularFile(usagePath, "token usage file")
 	if err != nil {
@@ -369,7 +373,7 @@ func (store *tokenPolicyStore) saveUsageLocked() error {
 func (store *tokenPolicyStore) saveLocked() error {
 	document := tokenPolicyDocument{
 		SchemaVersion:           "1",
-		AgentMaintenanceEnabled: store.agentMaintenanceEnabled,
+		AgentMaintenanceEnabled: &store.agentMaintenanceEnabled,
 		Policies:                store.policies,
 	}
 	data, err := json.MarshalIndent(document, "", "  ")

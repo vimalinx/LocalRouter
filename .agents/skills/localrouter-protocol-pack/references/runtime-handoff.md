@@ -23,4 +23,4 @@ Read this reference when a user asks to add a model, provider, or fixed local se
 
 ## Lane boundary
 
-An Agent uses semantic maintenance MCP only with the enabled, distinct maintenance-only Token. The administrator-backed fallback is for the human operator, not a substitute for Agent delegation. Never request or read the administrator credential. If the Agent lane is unavailable, finish the reviewable proposal and return the exact required authority to the human.
+An Agent uses semantic maintenance MCP only with a distinct maintenance-only Token from `lr manage-token`. The administrator-backed fallback is for the human operator, not a substitute for Agent delegation. Never request or read the administrator credential. If the operator turned the Agent lane off, finish the reviewable proposal and return the exact required authority to the human.

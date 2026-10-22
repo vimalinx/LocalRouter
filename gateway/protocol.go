@@ -1045,7 +1045,7 @@ func localMaintenanceAuth(runtime localRuntime) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"code":    "agent_maintenance_disabled",
-				"message": "Agent maintenance tokens are disabled; use the local administrator credential",
+				"message": "the operator turned Agent maintenance off on the console Tokens page; ask them, never read the administrator credential",
 			})
 			return
 		}

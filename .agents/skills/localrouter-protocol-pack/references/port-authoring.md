@@ -4,9 +4,9 @@ Read this reference when the Agent can reach port 8317 but cannot access the rep
 
 ## Authentication
 
-Discovery and documentation are public on loopback. Calls to `/agent/*`, `/p/*`, `/w/*`, `/mcp`, `/v1/*`, and `/v1beta/*` use `Authorization: Bearer <API token>`; these Tokens are service-call credentials only. `/manage/mcp` is a separate maintenance surface. Operators use `X-Local-Admin`. Agent access is disabled by default; when discovery reports `maintenance.auth.agent_token.enabled=true`, a separately issued maintenance-only Bearer Token with `localrouter.maintain` may use it.
+Discovery and documentation are public on loopback. Calls to `/agent/*`, `/p/*`, `/w/*`, `/mcp`, `/v1/*`, and `/v1beta/*` use `Authorization: Bearer <API token>`; these Tokens are service-call credentials only. `/manage/mcp` is a separate maintenance surface. Operators use `X-Local-Admin`. Agent access is enabled by default; while discovery reports `maintenance.auth.agent_token.enabled=true`, a separately issued maintenance-only Bearer Token with `localrouter.maintain` may use it.
 
-The human enables Agent maintenance and marks a distinct Token as maintenance-only in `/#tokens`. Do not ask for or use the console administrator credential. Never print a Token, include it in a guide, persist it in a draft, or copy it into an Agent-visible note. `agent_maintenance_disabled` means stop and ask the operator to use the console or explicitly enable the Agent lane. `maintenance_token_required` and `maintenance_capability_required` concern LocalRouter authorization, not an upstream provider.
+Run `lr manage-token` once: it issues a distinct maintenance-only Token on loopback, saves it mode 0600, and `lr manage-*` uses it automatically. Do not ask for or use the console administrator credential. Never print a Token, include it in a guide, persist it in a draft, or copy it into an Agent-visible note. `agent_maintenance_disabled` means the operator turned the lane off; stop and ask them. `maintenance_token_required` and `maintenance_capability_required` concern LocalRouter authorization, not an upstream provider.
 
 ## Draft lifecycle
 
@@ -37,8 +37,8 @@ Shell Agents may use `lr manage-list` and `lr manage-call` only when `LOCALROUTE
 | Status | Meaning | Action |
 |---|---|---|
 | HTTP 401 | missing/wrong LocalRouter maintenance credential | fix the selected maintenance lane; do not diagnose upstream |
-| `agent_maintenance_disabled` | optional Agent lane is off | stop; ask the operator to maintain or explicitly enable Agent access |
-| HTTP 403 capability error | maintenance Token lacks `localrouter.maintain` | ask the human to select a distinct maintenance-only Token |
+| `agent_maintenance_disabled` | optional Agent lane is off | the operator turned it off; stop and ask them |
+| HTTP 403 capability error | maintenance Token lacks `localrouter.maintain` | run `lr manage-token` and use its Token instead of a Service Token |
 | `invalid_arguments` | tool input did not match its schema | fix content, then call again |
 | `pack_invalid` or lint `valid=false` | one Pack field violates the runtime contract | follow `issues[].path`, `allowed`, and `suggested_action`; lint again |
 | `draft_invalid` | Pack or guide validation failed | fix the retained draft; never bypass review |
