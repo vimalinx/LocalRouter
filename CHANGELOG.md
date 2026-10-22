@@ -6,7 +6,14 @@ published.
 
 ## Unreleased
 
-## 0.4.0 - 2026-10-22
+## 0.4.1 - 2026-10-22
+
+- Built with Go 1.26.10 (toolchain and Docker build image), resolving the
+  reachable standard-library advisory GO-2026-6809 in `crypto/x509`.
+- The `v0.4.0` tag stopped at its release vulnerability check and published no
+  artifacts; 0.4.1 is the first release that contains every 0.4.0 change below.
+
+## 0.4.0 - 2026-10-22 (tagged, not published)
 
 - Updated the console build to Vite 7.3.7 and Vitest 4.1.12, resolving
   GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-9jrq-w75r-8gcw,
